@@ -1,0 +1,252 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AutoLibre — Design System (web)
+   ───────────────────────────────────────────────────────────────────────────
+   Ported 1:1 from the mobile source of truth:
+     autolibre-mobile/modules/shared/ui/theme/tokens.ts
+   (Figma "Foundations / Design System").
+
+   THREE THINGS THAT ARE NOT NEGOTIABLE, because they come from that file:
+
+   1. The system is LIGHT-ONLY. `Colors.dark` in mobile mirrors `light` and
+      exists purely as a typing fallback. The dark tokens below do the same —
+      they are NOT a real dark theme, and no screen should be designed against
+      them.
+
+   2. Green is an ACCENT, never the dominant colour. The visual base is white,
+      grey and "Action Dark" (#1C2B1C). Brand green is for active icons,
+      navigation and high-contrast CTAs only.
+
+   3. There are NO SHADOWS. `Shadows` in tokens.ts is `{ shadowOpacity: 0,
+      elevation: 0 }` across the board — the system separates surfaces with
+      borders, not elevation. Do not reach for `shadow-*`.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Brand ─────────────────────────────────────────────────────────────── */
+  --brand-500: #2a8c3a; /* active icon, brand accent */
+  --brand-200: #a8dfb0; /* on dark backgrounds */
+  --brand-50: #e8f5e8; /* soft active background */
+  --action-dark: #1c2b1c; /* high-contrast CTA, headers */
+  --action-foreground: #ffffff;
+
+  /* ── Neutrals ──────────────────────────────────────────────────────────── */
+  --canvas: #f1f2f0; /* app background */
+  --surface: #fefefd; /* cards, containers */
+  --surface-2: #f3f4f6; /* inputs, chips */
+  --border-neutral: #e4eae4;
+
+  /* ── Text ──────────────────────────────────────────────────────────────── */
+  --gray-900: #111827; /* titles, critical data */
+  --gray-700: #374151; /* body */
+  --gray-500: #6b7280; /* labels, help */
+  --gray-400: #9ca3af; /* disabled */
+  --gray-300: #d1d5db; /* placeholders */
+
+  /* ── Status (Vehicle Health) ───────────────────────────────────────────── */
+  --status-green: #1a7a4a;
+  --status-green-bg: #e0f5ec;
+  --status-yellow: #9f7401;
+  --status-yellow-text: #9a6b0f; /* legible amber for text/badges */
+  --status-yellow-bg: #fdf1d6;
+  --status-red: #a8231a;
+  --status-red-bg: #fdecea;
+  /* Figma's "Status/Orange" swatch is actually violet — ported faithfully.
+     It is the DTC catalog's 3rd severity tier (amarillo/violeta/rojo). */
+  --status-violet: #5b3f8c;
+  --status-violet-bg: #ede8f7;
+
+  /* ── Dark Gray (derived from Action Dark) ──────────────────────────────── */
+  --dark-gray-900: #1c2b1c;
+  --dark-gray-700: #3a4a3a;
+  --dark-gray-500: #5c6b5c;
+  --dark-gray-400: #8c968c;
+  --dark-gray-300: #b8bcb8;
+  --dark-gray-200: #dcdedc;
+  --dark-gray-100: #eff0ef;
+
+  /* ── Floating chrome ───────────────────────────────────────────────────────
+     Action Dark with alpha, NOT `opacity` on the element: `opacity` dims the
+     text inside too, and a label at 0.9 over an already-translucent surface
+     stops being legible. Alpha lives in the background; content stays opaque. */
+  --floating-scrim: rgb(28 43 28 / 0.92);
+  --floating-chip: rgb(28 43 28 / 0.55);
+
+  /* ── shadcn/ui contract ────────────────────────────────────────────────────
+     shadcn components read these names. Each one is mapped onto an AutoLibre
+     token above — never given an independent value, or the design system and
+     the component library drift apart. */
+  --radius: 0.5rem; /* 8px — ControlSize.button.borderRadius */
+
+  --background: var(--canvas);
+  --foreground: var(--gray-900);
+
+  --card: var(--surface);
+  --card-foreground: var(--gray-900);
+
+  --popover: var(--surface);
+  --popover-foreground: var(--gray-900);
+
+  /* Primary is Action Dark, NOT brand green — matches `LightPalette.primary`
+     and keeps green in its accent role. */
+  --primary: var(--action-dark);
+  --primary-foreground: var(--action-foreground);
+
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--gray-900);
+
+  --muted: var(--surface-2);
+  --muted-foreground: var(--gray-500);
+
+  /* The interactive brand accent (`LightPalette.secondary`). */
+  --accent: var(--brand-500);
+  --accent-foreground: var(--action-foreground);
+
+  --destructive: var(--status-red);
+  --destructive-foreground: #ffffff;
+
+  --border: var(--border-neutral);
+  --input: var(--border-neutral);
+  --ring: var(--brand-500);
+
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--gray-900);
+  --sidebar-primary: var(--action-dark);
+  --sidebar-primary-foreground: var(--action-foreground);
+  --sidebar-accent: var(--brand-50);
+  --sidebar-accent-foreground: var(--brand-500);
+  --sidebar-border: var(--border-neutral);
+  --sidebar-ring: var(--brand-500);
+
+  /* Charts: brand-first, then the status ramp. */
+  --chart-1: var(--brand-500);
+  --chart-2: var(--status-green);
+  --chart-3: var(--status-yellow);
+  --chart-4: var(--status-violet);
+  --chart-5: var(--status-red);
+}
+
+/* Light-only system: `.dark` mirrors `:root`, exactly as `Colors.dark` mirrors
+   `Colors.light` in tokens.ts. Present so third-party components that probe for
+   a dark class do not fall back to their own palette. */
+.dark {
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* AutoLibre tokens exposed directly, for the cases shadcn's vocabulary does
+     not cover (status badges, floating chrome, the Action Dark ramp). */
+  --color-brand: var(--brand-500);
+  --color-brand-muted: var(--brand-200);
+  --color-brand-soft: var(--brand-50);
+  --color-action: var(--action-dark);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-status-green: var(--status-green);
+  --color-status-green-bg: var(--status-green-bg);
+  --color-status-yellow: var(--status-yellow-text);
+  --color-status-yellow-bg: var(--status-yellow-bg);
+  --color-status-red: var(--status-red);
+  --color-status-red-bg: var(--status-red-bg);
+  --color-status-violet: var(--status-violet);
+  --color-status-violet-bg: var(--status-violet-bg);
+
+  /* ── Typography ──────────────────────────────────────────────────────────
+     Outfit = headings and data · DM Sans = body and UI.
+     On mobile each weight is a separate FILE, so weight is welded to family
+     and is not a free parameter. On web the variable font makes any weight
+     available, but the PAIRING is still the rule: never set a heading in
+     DM Sans or body copy in Outfit. */
+  --font-heading: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Menlo, Monaco, Consolas, monospace;
+
+  /* Spacing scale from tokens.ts (`Spacing`). Tailwind's default 4px step
+     already covers these; named aliases keep the vocabulary shared with the
+     app: xs 4 · sm 8 · md 12 · lg 16 · xl 20 · xxl 24 · xxxl 32. */
+
+  /* Radius scale from tokens.ts (`Radius`): 6 / 10 / 14 / 18 / 24 / full. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* The system defines no dark mode; declaring it prevents the browser from
+       auto-darkening form controls and scrollbars against a light palette. */
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-heading tracking-tight;
+  }
+
+  /* Tabular figures everywhere numbers are compared in a column. */
+  th, td {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :where(a, button, input, select, textarea):focus-visible {
+    @apply outline-ring outline-2 outline-offset-2;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

@@ -1,0 +1,170 @@
+import { z } from 'zod'
+
+/**
+ * Marketplace — contrato de la cola de solicitudes.
+ *
+ * Vocabulario (regla del backend, no negociable):
+ *  - `PartnerApplication` = el taller viniendo HACIA nosotros (se anota desde
+ *    la landing).
+ *  - `Lead` = el usuario yendo HACIA el taller (pide contacto).
+ *  - `Partner` = el taller ya publicado. Nunca "Provider": ese sufijo está
+ *    reservado para integraciones externas.
+ */
+
+/**
+ * Espeja el enum `partner_application_status` de Postgres.
+ *
+ * El orden es el del embudo, y se usa para renderizarlo — no lo reordenes por
+ * gusto alfabético.
+ */
+export const APPLICATION_STATUSES = [
+  'not_contacted',
+  'contacted',
+  'in_conversation',
+  'verbal_agreement',
+  'discarded',
+] as const
+
+export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number]
+
+/**
+ * Los estados que una persona PUEDE poner a mano desde el panel.
+ *
+ * `verbal_agreement` está deliberadamente afuera y no es un olvido:
+ * `approve_partner_application()` lleva `AND status <> 'verbal_agreement'` como
+ * lock optimista. Una solicitud marcada a mano con ese valor queda TRABADA —
+ * la función la rechaza para siempre con "inexistente o ya aprobada", y encima
+ * sin partner. Ya pasó una vez.
+ *
+ * El único camino legítimo a `verbal_agreement` es aprobar.
+ */
+export const MANUAL_STATUSES = [
+  'not_contacted',
+  'contacted',
+  'in_conversation',
+  'discarded',
+] as const satisfies ReadonlyArray<ApplicationStatus>
+
+export type ManualStatus = (typeof MANUAL_STATUSES)[number]
+
+export const STATUS_LABELS: Record<ApplicationStatus, string> = {
+  not_contacted: 'Sin contactar',
+  contacted: 'Contactado',
+  in_conversation: 'En conversación',
+  verbal_agreement: 'Acuerdo verbal',
+  discarded: 'Descartado',
+}
+
+/**
+ * Qué pasaría si se aprobara esta solicitud, resuelto ANTES de aprobar.
+ *
+ * Existe porque el flujo tiene un modo de falla silencioso: si lo declarado no
+ * resuelve a ningún rubro activo, la carga automática no inserta NADA — el
+ * partner queda activo, listado sin filtro, e invisible bajo todo chip de la
+ * app.
+ *
+ * Lo declarado puede ser un RUBRO (lo que manda el formulario hoy) o una
+ * FAMILIA (lo que mandó durante un tramo, y sigue escrito en filas reales). Las
+ * dos resuelven; ver `expandDeclaredSlugs` en `partners.repo.ts`.
+ *
+ * El runbook de DBeaver detecta eso DESPUÉS (consulta 6, con el partner ya
+ * creado). Acá se detecta antes, que es la razón de ser de esta pantalla.
+ */
+export interface ResolvedServices {
+  /**
+   * Las familias que se van a cargar, con CUÁNTOS de sus rubros.
+   *
+   * Ojo: `serviceCount` es cuántos rubros de esa familia entran, no cuántos
+   * tiene. Declarar la familia `motor` da los 10; declarar dos de sus rubros da
+   * 2. Antes las dos cosas coincidían siempre y el nombre no mentía.
+   */
+  matchedFamilies: Array<{ slug: string; name: string; serviceCount: number }>
+  /**
+   * Slugs declarados que no resuelven a ningún rubro activo: labels del
+   * formulario viejo ("Chapa y pintura"), o rubros y familias dados de baja
+   * después de ser declarados.
+   */
+  unknownSlugs: Array<string>
+  /** Total de rubros que la carga automática insertaría. */
+  totalServices: number
+}
+
+export interface ApplicationListItem {
+  id: string
+  businessName: string
+  email: string
+  whatsapp: string
+  address: string
+  status: ApplicationStatus
+  nextStep: string | null
+  followUpDate: string | null
+  declaredServices: Array<string>
+  howFound: string | null
+  createdAt: string
+  /** De la vista `v_partner_application_queue`. */
+  alreadyPublished: boolean
+  resolved: ResolvedServices
+}
+
+export interface ApplicationDetail extends ApplicationListItem {
+  brandSpecialized: boolean
+  declaredBrands: Array<string>
+  declaredFuelTypes: Array<string>
+  vehicleTypes: Array<string>
+  serviceOther: string | null
+  contactChannel: string | null
+  firstContactedAt: string | null
+  agreementType: string | null
+  agreementDetail: string | null
+  internalNotes: string | null
+  reviewNote: string | null
+  reviewedAt: string | null
+  /** Si ya se publicó, el partner resultante. */
+  partner: { id: string; name: string; coverageZone: string; serviceCount: number } | null
+}
+
+/**
+ * Los tres chequeos de salud del runbook, como indicador permanente.
+ *
+ * El del medio es el que importa: un panel existe para que ese modo de falla
+ * sea imposible de olvidar, no para que alguien se acuerde de correr una query.
+ */
+export interface PipelineHealth {
+  /** Consulta 5: `verbal_agreement` sin partner. La invariante está rota. */
+  stuckApplications: number
+  /** Consulta 6: partners activos sin un solo rubro. Invisibles en la app. */
+  invisiblePartners: number
+  /** Solicitudes pendientes que hoy producirían un partner invisible. */
+  wouldBeInvisible: number
+}
+
+// ── Search params ────────────────────────────────────────────────────────────
+
+export const applicationSearchSchema = z.object({
+  /** Filtro por estado del embudo. */
+  status: z.enum(APPLICATION_STATUSES).optional(),
+
+  /**
+   * Ocultar las ya publicadas. Por default se ocultan: la cola es de trabajo
+   * pendiente, igual que `WHERE NOT already_published` en la consulta 1.
+   */
+  published: z.enum(['hide', 'show']).catch('hide').default('hide'),
+
+  q: z.string().trim().max(80).optional(),
+})
+
+export type ApplicationSearch = z.infer<typeof applicationSearchSchema>
+
+/**
+ * Zona de cobertura: texto libre, y es lo que el usuario ve en la ficha.
+ * Escribila como la leería una persona ("CABA y GBA Norte"), no como un código.
+ */
+export const approveSchema = z.object({
+  applicationId: z.uuid(),
+  coverageZone: z.string().trim().min(3).max(120),
+})
+
+export const updateStatusSchema = z.object({
+  applicationId: z.uuid(),
+  status: z.enum(MANUAL_STATUSES),
+})

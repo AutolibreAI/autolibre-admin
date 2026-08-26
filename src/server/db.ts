@@ -1,0 +1,108 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVER-ONLY MODULE
+//
+// The marker import is erased at build time, but the Start import-protection
+// plugin uses it to poison this module for the client graph. `vite.config.ts`
+// additionally blocks the whole `src/server/**` tree from the client
+// environment, so a stray import fails the build instead of shipping the
+// connection string to a browser.
+// ─────────────────────────────────────────────────────────────────────────────
+import '@tanstack/react-start/server-only'
+
+import { Pool, type PoolClient, type QueryResultRow } from 'pg'
+
+/**
+ * Postgres access for the admin panel.
+ *
+ * DECISION (taken, not a default): the panel talks to Postgres directly and
+ * leans on stored procedures, rather than going through the hex API. This
+ * deliberately departs from autolibre-mobile's "new adapters target the hex
+ * backend by default" rule, because the admin's work IS the SQL that already
+ * exists — `approve_partner_application()`, the `v_partner_application_queue`
+ * view, and the runbook in the backend's `scripts/sql/`. Re-expressing those as
+ * REST endpoints would add a hop without adding a rule.
+ *
+ * What this does NOT license: putting domain decisions in SQL. The backend's
+ * condition on `approve_partner_application()` still holds — it moves state and
+ * copies data, it does not decide. Anything that decides belongs in a use case.
+ */
+
+const connectionString = process.env.POSTGRES_DATABASE_URL
+
+if (!connectionString) {
+  throw new Error(
+    'Falta POSTGRES_DATABASE_URL en .env — el panel no puede arrancar sin base.',
+  )
+}
+
+/**
+ * One pool per process. Parked on `globalThis` because Vite re-executes SSR
+ * modules on change in dev; without this, every HMR cycle would leak a pool and
+ * eventually exhaust Postgres' connection limit.
+ */
+const globalForDb = globalThis as unknown as { __autolibrePool?: Pool }
+
+export const pool: Pool =
+  globalForDb.__autolibrePool ??
+  (globalForDb.__autolibrePool = new Pool({
+    connectionString,
+    // Small on purpose: an admin panel has a handful of concurrent operators,
+    // and the same database serves the mobile API.
+    max: 5,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+  }))
+
+/**
+ * Typed query helper.
+ *
+ * The generic is the caller's claim about the row shape — Postgres cannot
+ * verify it, so treat every `sql<T>` call as an assertion that has to be read
+ * against the actual SELECT list. Never widen it to `any`.
+ */
+export async function sql<T extends QueryResultRow>(
+  text: string,
+  params: ReadonlyArray<unknown> = [],
+): Promise<Array<T>> {
+  const result = await pool.query<T>(text, params as Array<unknown>)
+  return result.rows
+}
+
+/** Single-row variant. Returns `null` rather than throwing on an empty result. */
+export async function sqlOne<T extends QueryResultRow>(
+  text: string,
+  params: ReadonlyArray<unknown> = [],
+): Promise<T | null> {
+  const rows = await sql<T>(text, params)
+  return rows[0] ?? null
+}
+
+/**
+ * Run several statements as one unit.
+ *
+ * This is not optional for the approval flow: `approve_partner_application()`
+ * creates the partner and a second statement loads its rubros. If the second
+ * fails on its own, the partner exists with zero services — active, listed
+ * without filters, and invisible under every chip in the app. That is the exact
+ * silent failure the DBeaver runbook has to catch after the fact (its query 6).
+ * A transaction makes it unrepresentable.
+ */
+export async function withTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (cause) {
+    await client.query('ROLLBACK').catch(() => {
+      // Rollback can fail if the connection already died. Surface the original
+      // error, not this one — it is the cause, and the one worth reading.
+    })
+    throw cause
+  } finally {
+    client.release()
+  }
+}
