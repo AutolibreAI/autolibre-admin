@@ -32,6 +32,9 @@ importers:
       lucide-react:
         specifier: ^1.34.0
         version: 1.34.0(react@19.2.8)
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
       radix-ui:
         specifier: ^1.6.7
         version: 1.6.7(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -72,9 +75,6 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
-      pg:
-        specifier: ^8.23.0
-        version: 8.23.0
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0

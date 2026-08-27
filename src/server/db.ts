@@ -29,10 +29,32 @@ import { Pool, type PoolClient, type QueryResultRow } from 'pg'
 
 const connectionString = process.env.POSTGRES_DATABASE_URL
 
-if (!connectionString) {
-  throw new Error(
-    'Falta POSTGRES_DATABASE_URL en .env — el panel no puede arrancar sin base.',
-  )
+/**
+ * Missing config fails on FIRST USE, never at module load.
+ *
+ * The obvious version of this check is a bare `throw` in module scope, and it
+ * was wrong in a way that only showed up on Vercel: the serverless entry
+ * imports every route handler up front (`loadEntries` → `Promise.all`), so a
+ * module-scope throw takes down the whole cold start. Every route 500s —
+ * `/login`, `/api/health`, the error page — which removes the only surfaces
+ * that could have told you which env var was missing and where.
+ *
+ * Failing here instead keeps the process alive: routes that never touch
+ * Postgres keep serving, `/api/health` still reports the deploy target, and the
+ * error lands on the request that actually needed a database, with a stack that
+ * points at the query.
+ *
+ * `new Pool()` below stays eager on purpose — pg does not dial anything at
+ * construction, so an unconfigured pool costs nothing until someone queries it.
+ */
+function assertConfigured(): void {
+  if (!connectionString) {
+    throw new Error(
+      'Falta POSTGRES_DATABASE_URL — el panel no puede consultar la base sin eso. ' +
+        'En local va en .env; en Vercel es una env var del proyecto, y hay que ' +
+        'redeployar después de cargarla (Vercel no la inyecta en deployments existentes).',
+    )
+  }
 }
 
 /**
@@ -64,6 +86,7 @@ export async function sql<T extends QueryResultRow>(
   text: string,
   params: ReadonlyArray<unknown> = [],
 ): Promise<Array<T>> {
+  assertConfigured()
   const result = await pool.query<T>(text, params as Array<unknown>)
   return result.rows
 }
@@ -90,6 +113,7 @@ export async function sqlOne<T extends QueryResultRow>(
 export async function withTransaction<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
+  assertConfigured()
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
