@@ -2,6 +2,7 @@ import { Link, Outlet, createFileRoute, redirect } from '@tanstack/react-router'
 import { SignOutButton } from '@clerk/tanstack-react-start'
 import {
   Car,
+  Coins,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -67,6 +68,12 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { to: '/solicitudes', label: 'Solicitudes', icon: Inbox },
   { to: '/partners', label: 'Partners', icon: Store },
   { to: '/records', label: 'Registros', icon: Car },
+  /**
+   * Costos de IA es la excepción declarada a la regla de arriba: no espeja un
+   * bounded context del backend, porque el backend no tiene uno. Es operación
+   * del panel, y su dato vive en el schema `ops` — que este repo posee y migra.
+   */
+  { to: '/ai-costos', label: 'Costos de IA', icon: Coins },
   { to: '/settings', label: 'Preferencias', icon: Settings },
 ]
 

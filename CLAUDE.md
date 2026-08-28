@@ -50,7 +50,14 @@ pnpm dev          # servidor de desarrollo en :3000
 pnpm build        # build de producción → .output/
 pnpm start        # correr el build (node-server)
 pnpm typecheck    # tsc --noEmit
+
+pnpm db:migrate         # aplica las migraciones PENDIENTES del schema `ops`
+pnpm db:migrate:status  # qué hay aplicado y qué falta
 ```
+
+**`pnpm db:migrate` migra SOLO `ops`**, el schema que este panel posee. `public` es del backend y lo
+migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.schema_migrations` es
+**por base**: aplicar en desarrollo no aplica en producción. → `.claude/rules/ai-costs.md`
 
 Consultar la base (solo lectura, desde la raíz del repo):
 
@@ -92,6 +99,9 @@ node .claude/skills/db-connect/query.mjs "select ..."
 ## Mapa del repo
 
 ```
+migrations/                  # DDL del schema `ops` — versionado, lo aplica pnpm db:migrate
+scripts/migrate.mjs          # el runner: checksum, advisory lock, transacción por migración
+
 src/
 ├── routes/                  # File-based routing. Un archivo = una URL.
 │   ├── __root.tsx           # Documento completo (<html> abajo) + fuentes + head
@@ -145,6 +155,29 @@ Piezas: `clerkMiddleware()` en `src/start.ts` · `<ClerkProvider>` en `__root.ts
 > El guard de ruta modela lo que la UI ofrece. **Un server function es un endpoint HTTP público**:
 > el chequeo de rol va también ahí, siempre.
 
+### 3. Las métricas de operación viven en un schema propio: `ops`
+
+**Decidido.** El panel es dueño del schema `ops` en la misma base: lo crea, lo migra y lo consulta.
+El repo del backend no lo conoce.
+
+El motivo es que son bounded contexts distintos con dueños distintos. `public` es el DOMINIO y lo
+migra Drizzle desde el backend; los costos de IA, las tarifas y la cobertura de instrumentación son
+**operación del panel** — nadie de la app los lee. Meterlos en `public` los pondría bajo las
+migraciones de otro repo y haría del panel un bloqueante de las suyas.
+
+Lo que esto **no** habilita:
+
+- **Ninguna FK cruza a `public`.** UUID pelado y `LEFT JOIN` al leer. Una FK cruzada vuelve a atar
+  los dos schemas justo en lo que se quiso desatar.
+- **Ningún DDL en runtime.** Las funciones de `ops` son nuestras, pero viven versionadas en
+  `migrations/`. Aplicar DDL a mano desde DBeaver recrea el problema que este repo existe para matar.
+- **No resuelve la medición.** El panel puede leer, agregar y preciar sin tocar el backend. **Medir
+  no**: los tokens los devuelve el proveedor en la respuesta de la llamada, y esa llamada la hace el
+  backend. Al 2026-08-27, la generación de imágenes de catálogo (1030 filas) y el análisis de
+  telemetría (129) no graban ningún dato de consumo, y eso no se arregla desde este repo.
+
+→ `.claude/rules/ai-costs.md`
+
 ## ⚠ Riesgo abierto: 761 admins heredados
 
 Relevado el 2026-08-26 sobre la base real:
@@ -182,6 +215,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `backend-contracts.md` | Bounded contexts, vocabulario, auth Clerk, dónde vive cada dato |
 | `database.md` | Cómo consultar, 42 tablas, enums, las dos funciones de app |
 | `partner-approval.md` | La primera pantalla real: el runbook de aprobación de partners y sus trampas |
+| `ai-costs.md` | El schema `ops`: migraciones, costo NULL vs 0, precios con vigencia, qué NO se mide |
 
 ## Cómo mantener esto vivo
 

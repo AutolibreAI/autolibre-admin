@@ -6,7 +6,10 @@
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
+    "db:migrate:status": "node --env-file-if-exists=.env scripts/migrate.mjs --status",
+    "db:migrate:dry": "node --env-file-if-exists=.env scripts/migrate.mjs --dry-run"
   },
   "dependencies": {
     "@clerk/localizations": "^4.15.7",
