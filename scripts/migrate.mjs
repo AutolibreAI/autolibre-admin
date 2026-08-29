@@ -40,6 +40,38 @@ if (!connectionString) {
 }
 
 /**
+ * TLS igual que en `src/server/db.ts`: el CA viaja como CONTENIDO en
+ * `POSTGRES_CA_CERT`, no como `sslrootcert=` en la URL.
+ *
+ * Este runner corre en una laptop, donde `./ca-certificate.crt` SÍ existe — pero
+ * si la URL de `.env` la comparte con el panel (y la comparte), tiene que
+ * funcionar con la URL ya limpia de parámetros SSL. Sin esto, sacarle el
+ * `sslmode` a la URL para arreglar el deploy rompe `pnpm db:migrate`, que es el
+ * peor momento para descubrirlo.
+ */
+function resolveSsl() {
+  const raw = process.env.POSTGRES_CA_CERT?.trim()
+  if (!raw) return undefined
+  const ca = raw.includes('-----BEGIN CERTIFICATE-----')
+    ? raw.replace(/\\n/g, '\n')
+    : Buffer.from(raw, 'base64').toString('utf8')
+  return { ca, rejectUnauthorized: true }
+}
+
+/** Saca los parámetros SSL de libpq: los resuelve `resolveSsl()`, no la URL. */
+function withoutUrlSslParams(url) {
+  try {
+    const parsed = new URL(url)
+    for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey']) {
+      parsed.searchParams.delete(key)
+    }
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
+/**
  * Lee y ordena los archivos.
  *
  * El orden es por nombre, así que el prefijo numérico ES el orden de ejecución.
@@ -92,7 +124,10 @@ async function bootstrap(client) {
 }
 
 async function main() {
-  const client = new pg.Client({ connectionString })
+  const client = new pg.Client({
+    connectionString: withoutUrlSslParams(connectionString),
+    ssl: resolveSsl(),
+  })
   await client.connect()
 
   try {
