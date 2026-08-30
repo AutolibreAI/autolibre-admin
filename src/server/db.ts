@@ -56,26 +56,8 @@ function assertConfigured(): void {
     )
   }
 
-  // Un host remoto SIN CA no se intenta en texto plano: se rechaza acá.
-  //
-  // La versión permisiva de esto (devolver `undefined` y dejar que pg disque sin
-  // TLS) ya falló una vez en producción, y el costo real fue el mensaje: Postgres
-  // contesta `no pg_hba.conf entry for host "…", user "doadmin", database
-  // "autolibre", no encryption`. Eso se lee como un problema de firewall o de
-  // trusted sources en DigitalOcean, y ahí se van dos horas — cuando lo único que
-  // pasaba era que POSTGRES_CA_CERT no estaba cargada.
-  //
-  // El otro final malo es peor y es silencioso: contra un Postgres que SÍ acepte
-  // texto plano, el panel se conecta feliz y manda credenciales de admin sin
-  // cifrar, sin que nadie se entere nunca.
-  if (!resolveSsl() && !targetsLocalhost(connectionString)) {
-    throw new Error(
-      'Falta POSTGRES_CA_CERT y la base no es local — el panel NO se conecta sin TLS. ' +
-        'Cargá el PEM del CA (o su base64) en esa env var y redeployá. ' +
-        'El base64 sale de: node -e "console.log(require(\'fs\').readFileSync(\'ca-certificate.crt\').toString(\'base64\'))". ' +
-        'Ojo: NO lo pongas como sslrootcert= en la URL — el archivo no viaja en el bundle serverless.',
-    )
-  }
+  // No hace falta asertar nada sobre TLS: `resolveSsl()` nunca devuelve una
+  // configuración insegura para un host remoto. Ver el comentario de esa función.
 }
 
 /** Solo un Postgres en la misma máquina puede hablar sin cifrar. */
@@ -121,7 +103,22 @@ function resolveSsl(): PoolConfig['ssl'] {
   if (connectionString && targetsLocalhost(connectionString)) return undefined
 
   const raw = process.env.POSTGRES_CA_CERT?.trim()
-  if (!raw) return undefined
+
+  // Host remoto SIN CA propio → TLS contra el trust store del sistema.
+  //
+  // Ausencia de `POSTGRES_CA_CERT` NO significa "conectá sin cifrar". Significa
+  // "este proveedor usa un CA público". Neon es ese caso: su certificado ya lo
+  // valida el trust store de Node, y exigirle un CA propio la rechazaría de
+  // gusto. DigitalOcean es el otro caso — firma con CA propia y por eso necesita
+  // la variable.
+  //
+  // Devolver `undefined` acá fue el bug: `pg` discaba en texto plano, Neon
+  // contestaba `connection is insecure (try using sslmode=require)` y DigitalOcean
+  // `no pg_hba.conf entry for host "…", no encryption` — dos mensajes que se leen
+  // como firewall y no como "falta cifrado". Peor: contra un servidor que SÍ
+  // acepte texto plano, el panel mandaba credenciales de admin sin cifrar y nadie
+  // se enteraba. `rejectUnauthorized: true` es el piso, no el techo.
+  if (!raw) return { rejectUnauthorized: true }
 
   const ca = raw.includes('-----BEGIN CERTIFICATE-----')
     ? // Some env UIs (and every `.env` parser) collapse real newlines into the

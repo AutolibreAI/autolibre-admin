@@ -55,7 +55,11 @@ function resolveSsl() {
   if (targetsLocalhost(connectionString)) return undefined
 
   const raw = process.env.POSTGRES_CA_CERT?.trim()
-  if (!raw) return undefined
+
+  // Remoto sin CA propio → TLS contra el trust store del sistema, NUNCA texto
+  // plano. Neon usa CA público (no necesita la variable); DigitalOcean firma con
+  // CA propia (sí la necesita). La ausencia de CA no autoriza a no cifrar.
+  if (!raw) return { rejectUnauthorized: true }
   const ca = raw.includes('-----BEGIN CERTIFICATE-----')
     ? raw.replace(/\\n/g, '\n')
     : Buffer.from(raw, 'base64').toString('utf8')
