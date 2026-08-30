@@ -12,7 +12,7 @@ paths:
 
 ## La spec ya está escrita
 
-`../CLEAN-ARCHITECTURE/autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql`
+`../autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql`
 
 Ese archivo es un runbook de DBeaver de 8 consultas, con sus trampas documentadas. **Es la
 especificación de esta pantalla.** Leelo entero antes de escribir una línea — no lo resumas de acá,

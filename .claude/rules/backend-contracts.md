@@ -9,7 +9,7 @@ paths:
 
 ## Dónde está la verdad
 
-`../CLEAN-ARCHITECTURE/autolibre-backend-hex` — NestJS, DDD + CQRS + Hexagonal, bounded contexts.
+`../autolibre-backend-hex` — NestJS, DDD + CQRS + Hexagonal, bounded contexts.
 
 - `CLAUDE.md` de ese repo: la ley de arquitectura y las decisiones de modelado
 - `autolibre-ddl-ddd.md`: **el DDL es la fuente de verdad del modelo de datos.** Leelo antes de

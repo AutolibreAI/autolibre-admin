@@ -5,7 +5,13 @@ import {
   approveSchema,
   updateStatusSchema,
 } from '~/lib/partners'
-import { editServicesSchema, partnerSearchSchema } from '~/lib/catalog'
+import {
+  editServicesSchema,
+  partnerSearchSchema,
+  setPartnerContactSchema,
+  setPartnerLocationSchema,
+  setPartnerStatusSchema,
+} from '~/lib/catalog'
 import {
   approveApplication,
   editPartnerServices,
@@ -14,6 +20,9 @@ import {
   listApplications,
   listPartners,
   pipelineHealth,
+  setPartnerContact,
+  setPartnerLocation,
+  setPartnerStatus,
   unstickApplication,
   updateApplicationStatus,
 } from '~/server/partners.repo'
@@ -24,7 +33,11 @@ import type {
   ApplicationListItem,
   PipelineHealth,
 } from '~/lib/partners'
-import type { ApprovalResult, EditServicesResult } from '~/server/partners.repo'
+import type {
+  ApprovalResult,
+  EditServicesResult,
+  PartnerWriteResult,
+} from '~/server/partners.repo'
 import type { PartnerListItem, PartnerServicesView } from '~/lib/catalog'
 
 /**
@@ -117,4 +130,46 @@ export const editPartnerServicesFn = createServerFn({ method: 'POST' })
   .validator(editServicesSchema)
   .handler(async ({ data }): Promise<EditServicesResult> =>
     editPartnerServices(data.partnerId, data.add, data.remove),
+  )
+
+// ── Migración 007: editar la ficha del partner ───────────────────────────────
+//
+// EL ACTOR SALE DE LA SESIÓN, NUNCA DEL PAYLOAD.
+//
+// Es la misma regla que `approvePartnerApplication` de arriba, y acá pesa más:
+// `ops.action_log` es el ÚNICO registro de quién cambió qué en el marketplace —
+// `partners` sólo tiene `updated_at`, que dice cuándo y no dice quién. Un actor
+// que entra por parámetro convierte esa auditoría en una firma que cualquiera
+// puede falsificar, o sea en ninguna auditoría.
+//
+// Por qué el panel puede escribir esto: `IPartnerRepository` del backend expone
+// SÓLO `findActive()` y `findActiveById()`. No hay caso de uso que edite un
+// partner en ningún lado. → `.claude/rules/ops-metrics.md`
+
+export const setPartnerStatusFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerStatusSchema)
+  .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
+    setPartnerStatus(data, context.user.id, { signal: requestSignal() }),
+  )
+
+/**
+ * Cargar coordenadas.
+ *
+ * El caso que la motiva: al 2026-08-30 los 34 partners activos de producción
+ * tienen `latitude IS NULL`, así que el marketplace no puede ordenar por
+ * cercanía a nadie.
+ */
+export const setPartnerLocationFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerLocationSchema)
+  .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
+    setPartnerLocation(data, context.user.id, { signal: requestSignal() }),
+  )
+
+export const setPartnerContactFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerContactSchema)
+  .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
+    setPartnerContact(data, context.user.id, { signal: requestSignal() }),
   )

@@ -3,6 +3,7 @@ import { Link, createFileRoute, notFound, useRouter } from '@tanstack/react-rout
 import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { PartnerFicha } from '~/components/PartnerFicha'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
@@ -122,6 +123,14 @@ function PartnerServicesEditor() {
           </AlertDescription>
         </Alert>
       ) : null}
+
+      {/*
+        La ficha va ARRIBA de los rubros y no en una solapa aparte: las dos
+        cosas que dejan a un partner roto —quedarse sin rubros y quedarse sin
+        contacto/coordenadas— tienen que verse en la misma pantalla. Separarlas
+        haría que arreglar una y no la otra sea el resultado normal.
+      */}
+      <PartnerFicha partner={view.partner} />
 
       <Suggestions view={view} onApply={(ids) => setSelected((p) => new Set([...p, ...ids]))} />
 

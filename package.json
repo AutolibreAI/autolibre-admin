@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite dev --port 3000",
     "build": "vite build",
+    "vercel-build": "node --env-file-if-exists=.env scripts/migrate.mjs --on-deploy && vite build",
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
     "typecheck": "tsc --noEmit",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",

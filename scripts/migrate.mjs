@@ -10,11 +10,14 @@
 // Un schema propio sin migraciones versionadas no es independencia, es el mismo
 // trabajo manual con un nombre nuevo.
 //
-//   node --env-file-if-exists=.env scripts/migrate.mjs           aplica pendientes
-//   node --env-file-if-exists=.env scripts/migrate.mjs --status  qué hay aplicado
-//   node --env-file-if-exists=.env scripts/migrate.mjs --dry-run qué aplicaría
+//   node --env-file-if-exists=.env scripts/migrate.mjs            aplica pendientes
+//   node --env-file-if-exists=.env scripts/migrate.mjs --status   qué hay aplicado
+//   node --env-file-if-exists=.env scripts/migrate.mjs --dry-run  qué aplicaría
+//   node --env-file-if-exists=.env scripts/migrate.mjs --on-deploy  ídem, pero
+//                                                     sólo si el entorno lo habilita
 //
-// (o `pnpm db:migrate`, `pnpm db:migrate:status`, `pnpm db:migrate:dry`)
+// (o `pnpm db:migrate`, `pnpm db:migrate:status`, `pnpm db:migrate:dry`;
+//  `--on-deploy` lo usa `pnpm vercel-build`, no se corre a mano)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fs from 'node:fs'
@@ -29,12 +32,92 @@ const MIGRATIONS_DIR = path.join(HERE, '..', 'migrations')
 const args = new Set(process.argv.slice(2))
 const DRY_RUN = args.has('--dry-run')
 const STATUS = args.has('--status')
+const ON_DEPLOY = args.has('--on-deploy')
 
 const connectionString = process.env.POSTGRES_DATABASE_URL
-if (!connectionString) {
+
+/**
+ * ¿Este build tiene permiso para migrar?
+ *
+ * POR QUÉ EXISTE ESTA COMPUERTA: Vercel no tiene hook de post-deploy, así que
+ * el único lugar donde el panel puede aplicar sus migraciones es el BUILD. Y el
+ * build no corre sólo en producción — corre en cada preview, en cada push a
+ * cada rama. Sin compuerta, una rama sin mergear le aplica sus migraciones a la
+ * base de producción, en silencio y antes de que nadie las revise.
+ *
+ * El default es `production`: se migra únicamente cuando Vercel dice que este
+ * build es el de producción.
+ *
+ *   OPS_MIGRATE_ON_DEPLOY=production  (default) sólo en el deploy de producción
+ *   OPS_MIGRATE_ON_DEPLOY=always      siempre — para una preview con base propia
+ *   OPS_MIGRATE_ON_DEPLOY=never       nunca — las migraciones se aplican a mano
+ *
+ * Devuelve `true` si hay que migrar. Corta el build (exit 1) si el entorno no
+ * alcanza para decidir: ver el caso de `VERCEL_ENV` ausente, abajo.
+ */
+function deployGateOpen() {
+  const mode = (process.env.OPS_MIGRATE_ON_DEPLOY ?? 'production').trim().toLowerCase()
+
+  if (mode === 'never') {
+    console.log('\n  Migraciones salteadas: OPS_MIGRATE_ON_DEPLOY=never.\n')
+    return false
+  }
+
+  if (mode === 'always') return true
+
+  if (mode !== 'production') {
+    console.error(
+      `\n  OPS_MIGRATE_ON_DEPLOY="${mode}" no es un valor válido.\n` +
+        '  Los únicos son: production | always | never.\n',
+    )
+    process.exit(1)
+  }
+
+  // Los dos marcadores, por la misma razón que `vite.config.ts` chequea los dos:
+  // `VERCEL` depende del toggle de system env vars, `NOW_BUILDER` lo pone el
+  // contenedor de build y no depende de nada.
+  const onBuilder = Boolean(process.env.VERCEL ?? process.env.NOW_BUILDER)
+  if (!onBuilder) {
+    console.log(
+      '\n  Migraciones salteadas: esto no es un build de Vercel.\n' +
+        '  En una máquina las migraciones se aplican a mano, con `pnpm db:migrate`.\n',
+    )
+    return false
+  }
+
+  const vercelEnv = process.env.VERCEL_ENV
+
+  if (vercelEnv === 'production') return true
+
+  if (vercelEnv) {
+    console.log(
+      `\n  Migraciones salteadas: VERCEL_ENV=${vercelEnv}, no es el deploy de producción.\n`,
+    )
+    return false
+  }
+
+  /**
+   * Builder de Vercel SIN `VERCEL_ENV`: pasa cuando el proyecto tiene apagado
+   * "Automatically expose System Environment Variables".
+   *
+   * Acá no se puede distinguir producción de preview, y las dos salidas
+   * silenciosas son malas: migrar producción desde una preview, o saltear la
+   * migración en producción y enterarse en el primer request con
+   * `relation "ops.v_ai_usage_costed" does not exist` — un deploy verde que
+   * revienta recién cuando alguien abre la pantalla.
+   *
+   * Así que corta el build. Es ruidoso a propósito y se arregla una sola vez.
+   */
   console.error(
-    'Falta POSTGRES_DATABASE_URL.\n' +
-      'En local va en .env (el script lo lee con --env-file-if-exists).',
+    '\n  Build de Vercel sin VERCEL_ENV: no se puede distinguir producción de preview.\n\n' +
+      '  Se corta a propósito — adivinar acá significa o migrar producción desde\n' +
+      '  una rama sin mergear, o deployar producción sin su migración y descubrirlo\n' +
+      '  en el primer request.\n\n' +
+      '  Arreglo (cualquiera de los dos):\n' +
+      '   · Vercel → Settings → Environment Variables → activar\n' +
+      '     "Automatically expose System Environment Variables".\n' +
+      '   · O fijar OPS_MIGRATE_ON_DEPLOY (always | never) en el entorno que\n' +
+      '     corresponda.\n',
   )
   process.exit(1)
 }
@@ -142,6 +225,21 @@ async function bootstrap(client) {
 }
 
 async function main() {
+  // La compuerta va ANTES del chequeo de la URL: una preview sin
+  // POSTGRES_DATABASE_URL no tiene por qué romper su build por una migración
+  // que igual no le tocaba correr.
+  if (ON_DEPLOY && !deployGateOpen()) return
+
+  if (!connectionString) {
+    console.error(
+      '\n  Falta POSTGRES_DATABASE_URL.\n' +
+        '  En local va en .env (el script lo lee con --env-file-if-exists).\n' +
+        '  En Vercel es una env var del proyecto, y tiene que estar disponible en\n' +
+        '  BUILD además de en runtime — si no, este script no ve la base.\n',
+    )
+    process.exit(1)
+  }
+
   const client = new pg.Client({
     connectionString: withoutUrlSslParams(connectionString),
     ssl: resolveSsl(),

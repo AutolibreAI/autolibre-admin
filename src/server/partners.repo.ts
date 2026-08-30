@@ -577,12 +577,22 @@ export async function getPartnerServices(
     id: string
     name: string
     status: string
+    tier: string
     coverage_zone: string
     application_id: string | null
     declared_services: Array<string> | null
+    whatsapp: string | null
+    email: string | null
+    redirect_link: string | null
+    hours: string | null
+    address: string | null
+    latitude: number | null
+    longitude: number | null
   }>(
-    `SELECT p.id, p.name, p.status::text AS status, p.coverage_zone,
-            p.application_id, a.declared_services
+    `SELECT p.id, p.name, p.status::text AS status, p.tier::text AS tier,
+            p.coverage_zone, p.application_id, a.declared_services,
+            p.whatsapp, p.email, p.redirect_link, p.hours, p.address,
+            p.latitude, p.longitude
        FROM partners p
        LEFT JOIN partner_applications a ON a.id = p.application_id
       WHERE p.id = $1`,
@@ -648,9 +658,19 @@ export async function getPartnerServices(
       id: partner.id,
       name: partner.name,
       status: partner.status,
+      tier: partner.tier,
       coverageZone: partner.coverage_zone,
       applicationId: partner.application_id,
       declaredServices,
+      whatsapp: partner.whatsapp,
+      email: partner.email,
+      redirectLink: partner.redirect_link,
+      hours: partner.hours,
+      address: partner.address,
+      // `double precision` sí llega como number desde `pg`; el cast defensivo
+      // es por si alguien cambia la columna a `numeric`, que llegaría string.
+      latitude: partner.latitude === null ? null : Number(partner.latitude),
+      longitude: partner.longitude === null ? null : Number(partner.longitude),
     },
     families,
     assignedServiceIds: assigned.map((a) => a.service_id),
@@ -725,4 +745,140 @@ export async function editPartnerServices(
 
     return { added, removed, total: Number(total.rows[0]?.n ?? 0) }
   })
+}
+
+// ── Acciones sobre la ficha — migración 007 ──────────────────────────────────
+//
+// Las tres invocan un stored procedure de `ops` y no arman el UPDATE acá, y el
+// motivo es la auditoría: `ops.set_partner_*` escribe la fila en
+// `ops.action_log` DENTRO de la misma transacción implícita de la función. Un
+// UPDATE desde este archivo más un INSERT de log serían dos sentencias que
+// pueden separarse, y el modo de falla es el peor posible: el cambio queda y el
+// registro de quién lo hizo no.
+//
+// El `actorId` llega SIEMPRE desde la sesión (ver `src/fn/partners.ts`). Este
+// módulo no sabe leer sesiones y no debería aprender.
+//
+// El error de Postgres se propaga tal cual. Los SP tiran sentinelas legibles
+// (`PARTNER_NOT_FOUND:`, `INCOMPLETE_COORDINATES`, `LEAD_ALREADY_OPEN`…) que la
+// UI traduce, igual que ya hace con `UNAUTHENTICATED` y `FORBIDDEN` en
+// `src/components/Fallbacks.tsx`.
+
+/** El estado nuevo del partner, tal como lo devolvió el SP. */
+export interface PartnerWriteResult {
+  id: string
+  name: string
+  status: string
+  whatsapp: string | null
+  email: string | null
+  redirectLink: string | null
+  hours: string | null
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+}
+
+/** El `jsonb` que devuelven los tres SP es la fila entera de `partners`. */
+interface PartnerJson {
+  id: string
+  name: string
+  status: string
+  whatsapp: string | null
+  email: string | null
+  redirect_link: string | null
+  hours: string | null
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+}
+
+function toWriteResult(row: PartnerJson): PartnerWriteResult {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    whatsapp: row.whatsapp,
+    email: row.email,
+    redirectLink: row.redirect_link,
+    hours: row.hours,
+    address: row.address,
+    latitude: row.latitude === null ? null : Number(row.latitude),
+    longitude: row.longitude === null ? null : Number(row.longitude),
+  }
+}
+
+export async function setPartnerStatus(
+  input: { partnerId: string; status: string; note?: string },
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<{ p: PartnerJson }>(
+    'SELECT ops.set_partner_status($1, $2, $3, $4) AS p',
+    [input.partnerId, input.status, actorId, input.note ?? null],
+  )
+  if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
+  return toWriteResult(row.p)
+}
+
+export async function setPartnerLocation(
+  input: { partnerId: string; latitude: number | null; longitude: number | null },
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<{ p: PartnerJson }>(
+    'SELECT ops.set_partner_location($1, $2, $3, $4) AS p',
+    [input.partnerId, input.latitude, input.longitude, actorId],
+  )
+  if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
+  return toWriteResult(row.p)
+}
+
+/**
+ * Los cinco campos van SIEMPRE, como string.
+ *
+ * El SP interpreta `NULL` como "no toques este campo" y `''` como "borralo".
+ * Mandar los cinco desde un formulario que los muestra los cinco significa que
+ * lo que se ve en pantalla es exactamente lo que queda guardado — el modo de
+ * parche parcial existe para otros llamadores, no para esta pantalla.
+ */
+export async function setPartnerContact(
+  input: {
+    partnerId: string
+    whatsapp: string
+    email: string
+    redirectLink: string
+    hours: string
+    address: string
+  },
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<{ p: PartnerJson }>(
+    `SELECT ops.set_partner_contact(
+       p_partner_id    => $1,
+       p_actor_id      => $2,
+       p_whatsapp      => $3,
+       p_email         => $4,
+       p_redirect_link => $5,
+       p_hours         => $6,
+       p_address       => $7
+     ) AS p`,
+    [
+      input.partnerId,
+      actorId,
+      input.whatsapp,
+      input.email,
+      input.redirectLink,
+      input.hours,
+      input.address,
+    ],
+  )
+  if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
+  return toWriteResult(row.p)
 }

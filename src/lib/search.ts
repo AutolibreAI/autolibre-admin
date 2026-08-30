@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { RECORD_STATUSES } from './types'
 
 /**
  * Search-param schemas live next to the types because they are the public
@@ -7,38 +6,13 @@ import { RECORD_STATUSES } from './types'
  * query string becomes typed data — every downstream consumer (loader deps,
  * server functions, components, `<Link search={...}>`) receives the parsed
  * output and is checked against it by the compiler.
- */
-
-export const SORT_FIELDS = ['name', 'updatedAt'] as const
-export type SortField = (typeof SORT_FIELDS)[number]
-
-export const listSearchSchema = z.object({
-  /** Free-text filter. */
-  q: z.string().trim().max(80).optional(),
-
-  /** 1-based. Coerced because a URL only ever carries strings. */
-  page: z.coerce.number().int().min(1).catch(1).default(1),
-
-  pageSize: z.coerce.number().int().min(10).max(100).catch(25).default(25),
-
-  status: z.enum(RECORD_STATUSES).optional(),
-
-  sort: z.enum(SORT_FIELDS).catch('updatedAt').default('updatedAt'),
-
-  dir: z.enum(['asc', 'desc']).catch('desc').default('desc'),
-})
-
-export type ListSearch = z.infer<typeof listSearchSchema>
-
-/**
- * Note the two different failure modes, both deliberate:
  *
- *  - `.catch(...)` degrades a malformed value to a sane default. A bookmarked
- *    `?page=banana` should still render page 1 rather than an error screen.
- *  - A field with no `.catch()` still throws, and Router surfaces that through
- *    the route's `errorComponent`.
- *
- * Choose per field based on whether a wrong value is recoverable.
+ * Este archivo quedó con lo TRANSVERSAL. Cada contexto define el suyo junto a
+ * sus tipos, y no acá: `applicationSearchSchema` en `~/lib/partners`,
+ * `partnerSearchSchema` en `~/lib/catalog`, `aiUsageSearchSchema` en
+ * `~/lib/ai-usage`, `opsSearchSchema` en `~/lib/ops`. Un archivo con los
+ * schemas de todos los contextos se convierte en el lugar donde el vocabulario
+ * de uno se filtra al otro.
  */
 
 export const loginSearchSchema = z.object({
@@ -46,3 +20,16 @@ export const loginSearchSchema = z.object({
    *  open redirect. */
   redirect: z.string().startsWith('/').optional(),
 })
+
+/**
+ * Nota sobre los dos modos de falla de zod, que aplica a todos los schemas del
+ * proyecto y se documenta acá una sola vez:
+ *
+ *  - `.catch(...)` degrada un valor inválido a un default sano. Un
+ *    `?window=banana` guardado en un favorito debería renderizar la ventana por
+ *    default, no una pantalla de error.
+ *  - Un campo SIN `.catch()` tira, y Router lo muestra por el `errorComponent`
+ *    de la ruta.
+ *
+ * Se elige por campo, según si un valor equivocado es recuperable o no.
+ */

@@ -8,7 +8,7 @@ paths:
 
 ## Leé el DDL antes de introspeccionar
 
-`../CLEAN-ARCHITECTURE/autolibre-backend-hex/autolibre-ddl-ddd.md` es la fuente de verdad del modelo.
+`../autolibre-backend-hex/autolibre-ddl-ddd.md` es la fuente de verdad del modelo.
 Consultá la base viva solo cuando necesites el **estado real** (confirmar que corrió una migración,
 inspeccionar datos), no para saber cómo es una tabla.
 

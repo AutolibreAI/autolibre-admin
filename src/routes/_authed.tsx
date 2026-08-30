@@ -1,12 +1,12 @@
 import { Link, Outlet, createFileRoute, redirect } from '@tanstack/react-router'
 import { SignOutButton } from '@clerk/tanstack-react-start'
 import {
-  Car,
+  Activity,
   Coins,
+  Handshake,
   Inbox,
   LayoutDashboard,
   LogOut,
-  Settings,
   Store,
   type LucideIcon,
 } from 'lucide-react'
@@ -67,14 +67,26 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { to: '/dashboard', label: 'Inicio', icon: LayoutDashboard },
   { to: '/solicitudes', label: 'Solicitudes', icon: Inbox },
   { to: '/partners', label: 'Partners', icon: Store },
-  { to: '/records', label: 'Registros', icon: Car },
   /**
-   * Costos de IA es la excepción declarada a la regla de arriba: no espeja un
-   * bounded context del backend, porque el backend no tiene uno. Es operación
-   * del panel, y su dato vive en el schema `ops` — que este repo posee y migra.
+   * `Leads` va después de `Partners` y no antes: es la dirección OPUESTA del
+   * mismo contexto. `PartnerApplication` (Solicitudes) es el taller viniendo
+   * hacia nosotros; `Lead` es el usuario yendo hacia el taller. Ponerlos
+   * contiguos en el menú es lo que mantiene esa distinción a la vista.
    */
+  { to: '/leads', label: 'Leads', icon: Handshake },
+  /**
+   * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
+   * espejan un bounded context del backend porque el backend no tiene uno. Son
+   * operación del panel.
+   *
+   * `Operación` lee tablas de `public` y no escribe ninguna: muestra colas
+   * colgadas y motivos de falla, y manda a la pantalla donde se arregla. Su
+   * única escritura es sobre `ops`, que este repo posee.
+   *
+   * `Costos de IA` vive entero en `ops` — el schema que este repo migra.
+   */
+  { to: '/operacion', label: 'Operación', icon: Activity },
   { to: '/ai-costos', label: 'Costos de IA', icon: Coins },
-  { to: '/settings', label: 'Preferencias', icon: Settings },
 ]
 
 function AppShell() {

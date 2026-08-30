@@ -39,6 +39,33 @@ compila, deploya, y recién revienta en el primer request a `/ai-costos` con
 `POSTGRES_DATABASE_URL` de ese entorno.** Al 2026-08-27 el schema está aplicado en desarrollo y
 **no** en producción.
 
+### En Vercel eso lo hace el build, y sólo el de producción
+
+Desde el 2026-08-30 `pnpm vercel-build` corre `scripts/migrate.mjs --on-deploy` **antes** de
+`vite build`. Es el único momento posible: Vercel no tiene hook de post-deploy.
+
+El orden importa y no es reversible: si la migración falla, el build falla y **no se deploya nada**.
+Fallar cerrado es lo que queremos — el estado "código nuevo servido contra schema viejo" no llega a
+existir.
+
+La compuerta está en `deployGateOpen()` y su default es `production`, porque **las previews también
+buildean**. Sin compuerta, una rama sin mergear le aplica sus migraciones a la base de producción, en
+silencio y antes de que nadie las revise. `OPS_MIGRATE_ON_DEPLOY` la abre (`always`) o la cierra
+(`never`) por entorno.
+
+**Un builder de Vercel sin `VERCEL_ENV` corta el build a propósito.** Pasa con el toggle
+"Automatically expose System Environment Variables" apagado, y ahí no hay forma de distinguir
+producción de preview: las dos salidas silenciosas son malas, así que no se adivina.
+
+Dos condiciones que se descubren tarde si no se las nombra:
+
+- **`POSTGRES_DATABASE_URL` y `POSTGRES_CA_CERT` tienen que estar disponibles en BUILD**, no sólo en
+  runtime. Una env var scopeada sólo a runtime deja al migrador sin base y voltea el build.
+- **El contenedor de build tiene que poder abrir el puerto de la base.** Si el Postgres administrado
+  tiene "Trusted Sources" / allowlist de IPs, las IPs del builder de Vercel no son fijas y la
+  conexión muere por timeout. Ese caso no se arregla desde este repo: o se abre el acceso, o se pone
+  `OPS_MIGRATE_ON_DEPLOY=never` y se migra a mano.
+
 ### Nunca edites una migración ya aplicada
 
 El runner guarda un checksum y aborta si el archivo cambió. El arreglo **no** es borrar la fila de

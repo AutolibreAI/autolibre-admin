@@ -24,11 +24,22 @@ panel necesita decidir algo, decide el panel o decide un caso de uso del backend
 
 | Repo | Path | Qué manda desde ahí |
 |---|---|---|
-| `autolibre-backend-hex` | `../CLEAN-ARCHITECTURE/autolibre-backend-hex` | Contratos de API, bounded contexts, vocabulario del dominio, DDL (`autolibre-ddl-ddd.md`) |
+| `autolibre-backend-hex` | `../autolibre-backend-hex` | Contratos de API, bounded contexts, vocabulario del dominio, DDL (`autolibre-ddl-ddd.md`) |
 | `autolibre-mobile` | `../autolibre-mobile` | Design system (`modules/shared/ui/theme/tokens.ts`), patrón Clean/Hex adaptado a cliente |
 
 **No se copian decisiones de producto de acá para allá.** Si el panel necesita un endpoint que no
 existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el panel.
+
+> **Excepción relevada el 2026-08-30, y es acotada.** Esa regla supone que "agregarlo en el backend"
+> es una opción. Para el marketplace **no lo es**: `IPartnerRepository` expone sólo `findActive()` y
+> `findActiveById()`, no hay ningún caso de uso que edite un partner, y `lead` sólo tiene
+> `submit-lead`. El backend no puede editar un partner ni mover un lead — y su propio
+> `lead-status.vo.ts` dice que *"el resto del recorrido lo mueve el equipo desde SQL"*.
+>
+> Ahí el panel escribe, vía stored procedures versionados de `ops`, con auditoría obligatoria. La
+> regla completa, sus 8 guardrails y los dos SP que se decidió NO escribir están en
+> `.claude/rules/ops-write-actions.md`. **Antes de escribir un SP nuevo hay que verificar que el
+> backend realmente no tenga el camino** — la excepción se gana con un `grep`, no se asume.
 
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
 > El que manda es el `-hex`. Si una ruta te lleva al otro, estás mirando el lugar equivocado.
@@ -53,7 +64,14 @@ pnpm typecheck    # tsc --noEmit
 
 pnpm db:migrate         # aplica las migraciones PENDIENTES del schema `ops`
 pnpm db:migrate:status  # qué hay aplicado y qué falta
+
+pnpm vercel-build       # lo corre Vercel: migra `ops` y RECIÉN DESPUÉS buildea
 ```
+
+`vercel-build` no se corre a mano — existe porque Vercel no tiene hook de post-deploy y el build es
+el único momento donde el panel puede aplicar sus migraciones. Migra **sólo en el deploy de
+producción**: las previews también buildean, y sin esa compuerta una rama sin mergear le escribiría
+el schema a producción. → `.claude/rules/ai-costs.md`
 
 **`pnpm db:migrate` migra SOLO `ops`**, el schema que este panel posee. `public` es del backend y lo
 migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.schema_migrations` es
@@ -91,9 +109,13 @@ node .claude/skills/db-connect/query.mjs "select ..."
    nosotros; `Lead` es el usuario yendo hacia el taller. Confundirlos desalinea la conversación
    entera sin que nadie lo note.
 8. **No inventar contenido de dominio.** Datos de ejemplo, entidades o pantallas fabricadas se
-   marcan explícitamente como placeholder o no se escriben. Hoy `src/server/placeholder-data.ts`
-   y el dominio `RecordItem` de `src/lib/types.ts` son placeholder declarado, y se borran con la
-   primera pantalla real → `.claude/rules/partner-approval.md`.
+   marcan explícitamente como placeholder o no se escriben. **Ya no queda ninguno**: el 2026-08-30
+   se borraron `src/server/placeholder-data.ts`, `records.repo.ts`, `fn/records.ts`, el dominio
+   `RecordItem` de `src/lib/types.ts` y las pantallas `/records`, `/analytics` y `/settings` que lo
+   renderizaban. Toda pantalla del panel lee hoy de Postgres.
+   **Corolario operativo**: una pantalla nueva arranca escribiendo su consulta y verificándola con
+   `node .claude/skills/db-connect/query.mjs`, no escribiendo un array de ejemplo "hasta que haya
+   dato". Ese array sobrevive meses y termina en producción.
 9. **No `git commit` salvo que se pida en ese turno.**
 
 ## Mapa del repo
@@ -120,6 +142,22 @@ src/
 ├── router.tsx               # createRouter + RouterContext
 └── start.ts                 # createStart: defaultSsr + request middleware
 ```
+
+### Pantallas, y qué consulta de DBeaver reemplaza cada una
+
+La premisa del repo dice que una pantalla que no reemplaza ninguna consulta no tiene por qué existir.
+Esta tabla es esa premisa hecha checklist: si una fila nueva no puede llenar la columna derecha, la
+pantalla no va todavía.
+
+| Ruta | SSR | Reemplaza |
+|---|---|---|
+| `/dashboard` | `true` + streaming | El censo por `(role, auth_provider)`, el `count(*)` de partners y el `group by status` de leads, sueltos |
+| `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
+| `/partners` | `true` | El listado del directorio, la carga manual de rubros y **la ficha** (estado, coordenadas, contacto) |
+| `/leads` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
+| `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
+| `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
 
 ## Decisiones tomadas
 
@@ -178,7 +216,7 @@ Lo que esto **no** habilita:
 
 → `.claude/rules/ai-costs.md`
 
-## ⚠ Riesgo abierto: 761 admins heredados
+## ⚠ Riesgo abierto: admins `native` heredados
 
 Relevado el 2026-08-26 sobre la base real:
 
@@ -189,8 +227,8 @@ Relevado el 2026-08-26 sobre la base real:
 | user | clerk | 124 |
 | **admin** | **clerk** | **2** |
 
-El 28% de la base figura como admin, todos `native` (era pre-Clerk). Huele a default mal migrado, no
-a decisión.
+El 28% de la base figuraba como admin, todos `native` (era pre-Clerk). Huele a default mal migrado,
+no a decisión.
 
 **Hoy no pueden entrar**: el lookup está acotado a `auth_provider = 'clerk'` y una fila native nunca
 matchea una identidad de Clerk. Eso es un **efecto colateral, no una salvaguarda** — el día que
@@ -198,6 +236,49 @@ alguien migre una cuenta native a Clerk, hereda admin.
 
 No lo "arregles" ampliando la query. El arreglo es una auditoría de datos del lado del backend, y no
 es decisión de este repo.
+
+### Revisado el 2026-08-30 — el censo era de DEV, y producción está limpia
+
+**El censo de arriba nunca fue "sobre la base real": es de DEV.** Relevado de nuevo el 2026-08-30
+contra los dos destinos, uno al lado del otro:
+
+| role · auth_provider | DEV (`localhost:5435/autolibre_ai_hex`) | PROD (`…ondigitalocean.com:25060/autolibre`) |
+|---|---|---|
+| user · native | 2385 | 0 |
+| **admin · native** | **876** | **0** |
+| user · clerk | 135 | 2 |
+| admin · clerk | 2 | 1 |
+| **total** | **3398** | **3** |
+
+Dos conclusiones, y son opuestas entre sí:
+
+1. **En producción el riesgo NO existe.** Cero filas `native`, de cualquier rol. Producción arrancó
+   sobre Clerk y nunca arrastró la herencia. Los 34 partners que hay vinieron del `legacy_sheet`.
+2. **En DEV el riesgo creció**: de 761 a 876 admins `native` en cuatro días. Es data sembrada, no
+   usuarios reales — pero es la data contra la que se prueba el panel, así que toda pantalla tiene
+   que sobrevivir a 876 admins sin romperse ni mentir.
+
+#### Cómo se distinguen los dos destinos
+
+`POSTGRES_DATABASE_URL` en `.env` tiene tres candidatas y se elige descomentando una:
+
+| Destino | Base | Qué es |
+|---|---|---|
+| `localhost:5435` (Docker) | `autolibre_ai_hex` | **DEV.** Es acá donde se desarrolla y se prueban las migraciones de `ops`. |
+| `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN.** No se toca para explorar. |
+| `…neon.tech` | `neondb` | sin relevar |
+
+Reglas que salen de esto y no son negociables:
+
+1. **Ningún número de este repo significa nada sin decir contra qué base se sacó.** Toda consulta de
+   relevamiento arranca por `select current_database(), inet_server_addr()`. Los nombres de base son
+   DISTINTOS (`autolibre_ai_hex` vs `autolibre`), así que el chequeo es barato y concluyente.
+2. **`ops.schema_migrations` es por base.** Aplicar en DEV no aplica en PROD. Una migración nueva se
+   prueba en DEV y recién después se aplica en PROD, a mano y a sabiendas.
+3. **La tabla del censo nunca debió vivir en un `.md`.** El número ahora se calcula solo:
+   `adoptionPulse()` en `src/server/ops.repo.ts` devuelve `legacyNativeAdmins` y la pantalla de
+   Inicio lo muestra — contra la base a la que el panel esté conectado, sea cual sea. Regla general:
+   **si un número de la base aparece en un `.md`, es porque todavía no tiene pantalla.**
 
 ## Decisión abierta
 
@@ -216,6 +297,8 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `database.md` | Cómo consultar, 42 tablas, enums, las dos funciones de app |
 | `partner-approval.md` | La primera pantalla real: el runbook de aprobación de partners y sus trampas |
 | `ai-costs.md` | El schema `ops`: migraciones, costo NULL vs 0, precios con vigencia, qué NO se mide |
+| `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
+| `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
 
 ## Cómo mantener esto vivo
 
