@@ -50,12 +50,26 @@ if (!connectionString) {
  * peor momento para descubrirlo.
  */
 function resolveSsl() {
+  // Contra localhost el CA se ignora: el Postgres de desarrollo no habla TLS y
+  // `pg` moriría con `The server does not support SSL connections`.
+  if (targetsLocalhost(connectionString)) return undefined
+
   const raw = process.env.POSTGRES_CA_CERT?.trim()
   if (!raw) return undefined
   const ca = raw.includes('-----BEGIN CERTIFICATE-----')
     ? raw.replace(/\\n/g, '\n')
     : Buffer.from(raw, 'base64').toString('utf8')
   return { ca, rejectUnauthorized: true }
+}
+
+/** Solo un Postgres en la misma máquina puede hablar sin cifrar. */
+function targetsLocalhost(url) {
+  try {
+    const { hostname } = new URL(url)
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
+  } catch {
+    return false
+  }
 }
 
 /** Saca los parámetros SSL de libpq: los resuelve `resolveSsl()`, no la URL. */

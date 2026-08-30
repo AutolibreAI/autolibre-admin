@@ -55,6 +55,38 @@ function assertConfigured(): void {
         'redeployar después de cargarla (Vercel no la inyecta en deployments existentes).',
     )
   }
+
+  // Un host remoto SIN CA no se intenta en texto plano: se rechaza acá.
+  //
+  // La versión permisiva de esto (devolver `undefined` y dejar que pg disque sin
+  // TLS) ya falló una vez en producción, y el costo real fue el mensaje: Postgres
+  // contesta `no pg_hba.conf entry for host "…", user "doadmin", database
+  // "autolibre", no encryption`. Eso se lee como un problema de firewall o de
+  // trusted sources en DigitalOcean, y ahí se van dos horas — cuando lo único que
+  // pasaba era que POSTGRES_CA_CERT no estaba cargada.
+  //
+  // El otro final malo es peor y es silencioso: contra un Postgres que SÍ acepte
+  // texto plano, el panel se conecta feliz y manda credenciales de admin sin
+  // cifrar, sin que nadie se entere nunca.
+  if (!resolveSsl() && !targetsLocalhost(connectionString)) {
+    throw new Error(
+      'Falta POSTGRES_CA_CERT y la base no es local — el panel NO se conecta sin TLS. ' +
+        'Cargá el PEM del CA (o su base64) en esa env var y redeployá. ' +
+        'El base64 sale de: node -e "console.log(require(\'fs\').readFileSync(\'ca-certificate.crt\').toString(\'base64\'))". ' +
+        'Ojo: NO lo pongas como sslrootcert= en la URL — el archivo no viaja en el bundle serverless.',
+    )
+  }
+}
+
+/** Solo un Postgres en la misma máquina puede hablar sin cifrar. */
+function targetsLocalhost(url: string): boolean {
+  try {
+    const { hostname } = new URL(url)
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
+  } catch {
+    // URL ilegible: se asume remoto. Ante la duda, se exige TLS.
+    return false
+  }
 }
 
 /**
@@ -80,6 +112,14 @@ function assertConfigured(): void {
  * "verify-full minus a file", it is no verification at all.
  */
 function resolveSsl(): PoolConfig['ssl'] {
+  // Contra localhost el CA se IGNORA, esté cargado o no.
+  //
+  // El Postgres de desarrollo no habla TLS, y tener `POSTGRES_CA_CERT` en el
+  // `.env` local es lo natural una vez que existe la variable — ahí `pg` intenta
+  // negociar y muere con `The server does not support SSL connections`. La regla
+  // es el destino, no la presencia del certificado.
+  if (connectionString && targetsLocalhost(connectionString)) return undefined
+
   const raw = process.env.POSTGRES_CA_CERT?.trim()
   if (!raw) return undefined
 
