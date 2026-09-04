@@ -8,6 +8,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  MessageSquare,
   ScanLine,
   Store,
   Users,
@@ -108,6 +109,15 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * → `.claude/rules/scanner-compatibility.md`
    */
   { to: '/escaneres', label: 'Escáneres', icon: ScanLine },
+  /**
+   * `Chats de IA` es el último bloque de dominio y no encaja en ninguno de
+   * los dos de arriba: `conversations` cuelga de `assistant/`, un bounded
+   * context propio, no de `vehicle-management`. Va acá y no junto a
+   * `Usuarios` porque la pregunta no es "qué tiene este usuario" — eso ya
+   * está en su ficha — es "qué chats hay", con el usuario como una columna
+   * más.
+   */
+  { to: '/chats', label: 'Chats de IA', icon: MessageSquare },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son
