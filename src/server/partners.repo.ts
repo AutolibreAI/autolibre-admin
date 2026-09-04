@@ -3,6 +3,7 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne, withTransaction } from './db'
 import { normalizeForMatch } from '~/lib/catalog'
 import type {
+  PartnerLink,
   PartnerListItem,
   PartnerSearch,
   PartnerServicesView,
@@ -579,6 +580,7 @@ export async function getPartnerServices(
     status: string
     tier: string
     coverage_zone: string
+    description: string | null
     application_id: string | null
     declared_services: Array<string> | null
     whatsapp: string | null
@@ -588,11 +590,30 @@ export async function getPartnerServices(
     address: string | null
     latitude: number | null
     longitude: number | null
+    links: Array<PartnerLink> | null
   }>(
+    /**
+     * Los links vienen por SUBCONSULTA, no por `LEFT JOIN` + `group by`.
+     *
+     * Con un join, cada fila de `partner_links` multiplicaría la fila del
+     * partner y habría que agrupar por sus quince columnas. Es el fan-out, y su
+     * modo de falla es el de siempre acá: no rompe, devuelve un número más
+     * grande. Mismo criterio que las subconsultas escalares de `listCatalogs`.
+     *
+     * El `order by` no es cosmético: sin él Postgres puede devolver los links
+     * en cualquier orden entre dos requests, y la lista de "otros" del
+     * formulario se reordenaría sola mientras alguien la está editando.
+     */
     `SELECT p.id, p.name, p.status::text AS status, p.tier::text AS tier,
-            p.coverage_zone, p.application_id, a.declared_services,
+            p.coverage_zone, p.description, p.application_id, a.declared_services,
             p.whatsapp, p.email, p.redirect_link, p.hours, p.address,
-            p.latitude, p.longitude
+            p.latitude, p.longitude,
+            (SELECT coalesce(
+                      jsonb_agg(jsonb_build_object('kind', l.kind::text, 'url', l.url)
+                                ORDER BY l.kind::text, l.url),
+                      '[]'::jsonb)
+               FROM partner_links l
+              WHERE l.partner_id = p.id) AS links
        FROM partners p
        LEFT JOIN partner_applications a ON a.id = p.application_id
       WHERE p.id = $1`,
@@ -660,6 +681,7 @@ export async function getPartnerServices(
       status: partner.status,
       tier: partner.tier,
       coverageZone: partner.coverage_zone,
+      description: partner.description,
       applicationId: partner.application_id,
       declaredServices,
       whatsapp: partner.whatsapp,
@@ -671,6 +693,9 @@ export async function getPartnerServices(
       // es por si alguien cambia la columna a `numeric`, que llegaría string.
       latitude: partner.latitude === null ? null : Number(partner.latitude),
       longitude: partner.longitude === null ? null : Number(partner.longitude),
+      // `coalesce(..., '[]')` en el SQL garantiza el array; el `?? []` cubre el
+      // caso de que alguien saque ese coalesce y no toque este archivo.
+      links: partner.links ?? [],
     },
     families,
     assignedServiceIds: assigned.map((a) => a.service_id),
@@ -881,4 +906,73 @@ export async function setPartnerContact(
   )
   if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
   return toWriteResult(row.p)
+}
+
+// ── Migración 008: perfil y links ────────────────────────────────────────────
+
+/**
+ * Zona de cobertura, descripción y tier.
+ *
+ * Los tres van SIEMPRE, igual que los cinco de `setPartnerContact` y por el
+ * mismo motivo: lo que el operador ve en pantalla es exactamente lo que queda
+ * guardado. El SP sabe interpretar `NULL` como "no toques", pero esta pantalla
+ * no usa ese modo — un formulario que manda parches parciales es imposible de
+ * leer cuando algo sale mal.
+ */
+export async function setPartnerProfile(
+  input: {
+    partnerId: string
+    coverageZone: string
+    description: string
+    tier: string
+  },
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<{ p: PartnerJson }>(
+    `SELECT ops.set_partner_profile(
+       p_partner_id    => $1,
+       p_actor_id      => $2,
+       p_coverage_zone => $3,
+       p_description   => $4,
+       p_tier          => $5
+     ) AS p`,
+    [input.partnerId, actorId, input.coverageZone, input.description, input.tier],
+  )
+  if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
+  return toWriteResult(row.p)
+}
+
+/**
+ * El juego completo de links.
+ *
+ * Se manda como UN parámetro jsonb y no como N filas, porque el reemplazo tiene
+ * que ser atómico: el SP borra lo que sobra y escribe lo que falta adentro de la
+ * misma transacción. Partirlo en varias sentencias desde acá dejaría al partner
+ * sin links si la segunda falla.
+ *
+ * `JSON.stringify` explícito: `pg` serializa un array de JS a un array de
+ * Postgres (`{...}`), no a jsonb. Sin esto el SP recibe algo que
+ * `jsonb_typeof` no reconoce como `'array'` y rebota con `LINKS_NOT_AN_ARRAY` —
+ * un error correcto, disparado por la razón equivocada.
+ */
+export async function setPartnerLinks(
+  input: { partnerId: string; links: Array<{ kind: string; url: string }> },
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<{ kind: string; url: string }>> {
+  void opts.signal
+
+  const row = await sqlOne<{ links: Array<{ kind: string; url: string }> | null }>(
+    `SELECT ops.set_partner_links(
+       p_partner_id => $1,
+       p_actor_id   => $2,
+       p_links      => $3::jsonb
+     ) AS links`,
+    [input.partnerId, actorId, JSON.stringify(input.links)],
+  )
+  if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
+  return row.links ?? []
 }

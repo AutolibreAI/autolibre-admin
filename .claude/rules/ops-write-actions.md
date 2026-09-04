@@ -143,3 +143,130 @@ que termina en `ROLLBACK`**. Cubre: transiciones válidas, los cinco errores con
 
 **Repetir ese patrón para cada SP nuevo.** Un stored procedure sin probar es peor que no tenerlo: se
 ve como una garantía y no lo es.
+
+---
+
+# Migración 008 — el resto de la ficha: perfil y links
+
+Alcance añadido: `migrations/008_ops_partner_perfil_y_links.sql`, su `.test.sql`, las funciones
+`setPartnerProfile` / `setPartnerLinks` de `src/server/partners.repo.ts`, sus `*Fn` en
+`src/fn/partners.ts`, y las tarjetas `ProfileCard` / `LinksCard` de `src/components/PartnerFicha.tsx`.
+
+Se apoya en la justificación entera de la 007 y no la repite: el backend no tiene ningún camino para
+editar un partner, verificado con `grep`, no supuesto.
+
+## Cuándo un SP agrupa campos y cuándo no
+
+La 007 separó estado, ubicación y contacto en tres funciones. La 008 mete zona, descripción y tier en
+UNA. No es una inconsistencia: **el criterio es la consecuencia, no la cantidad de campos.**
+
+- Pausar saca al taller del marketplace. Cargar coordenadas lo hace ordenable. Completar el contacto
+  lo hace contactable. Son tres cosas distintas y cada una merece su entrada en `ops.action_log`.
+- Zona, descripción y badge son tres caras de una sola: **cómo se ve la tarjeta.** Se editan en la
+  misma sentada, y separarlas daría tres entradas de auditoría para un solo acto de edición — tan
+  inútil como una sola entrada que dice "cambió algo".
+
+## Las cuatro minas de esta migración
+
+### 1. `mercado_libre` tiene que estar en el formulario aunque nadie lo pida
+
+`set_partner_links` deja la tabla **igual** al payload: lo que no viene, se borra. Consecuencia
+directa y silenciosa: **un kind que la UI no renderice se borra en el primer guardado.**
+
+Al 2026-09-04 hay 1 link de `mercado_libre` en producción. Sin el campo en el formulario, el primer
+admin que edite ese partner lo borra sin enterarse, y no hay forma de notarlo después.
+
+> **Regla que sale de esto: si aparece un kind nuevo en `partner_link_kind`, se agrega a
+> `PARTNER_LINK_KINDS` el mismo día.** No es una mejora pendiente, es una pérdida de datos en
+> progreso.
+
+### 2. `idx_partner_links_kind_unique` decide la forma del formulario
+
+UNIQUE **parcial** sobre `(partner_id, kind)` WHERE `kind <> 'other'`. Un partner tiene como máximo
+un Instagram y un Facebook, pero puede tener muchos `other`.
+
+Por eso la UI es campo único para los seis kinds con restricción y **lista** para `other`. Un
+formulario que ofreciera dos Instagram chocaría el índice, y uno que ofreciera un solo `other`
+escondería links existentes.
+
+### 3. Maps no existe en el enum, y `other` ya venía siendo su cajón
+
+`partner_link_kind` no tiene `maps`, y este repo no migra `public`. Pero al 2026-09-04, **10 de los
+11 links guardados como `other` son de `maps.app.goo.gl`**.
+
+La ficha le da campo propio y lo guarda como `other`; `isMapsUrl()` decide al leer cuál de los
+`other` sube a ese campo.
+
+**El caso que la heurística deja afuera a propósito**: `https://share.google/hNP1lXzbykdC3muYU`. Es
+un acortador genérico de Google que puede apuntar a cualquier cosa. Clasificarlo como maps por venir
+de un dominio de Google sería adivinar, y el costo de adivinar mal es mover el link de alguien a un
+campo donde no lo va a buscar. **Ante la duda, cae en "otros"** — ese cajón es visible y editable; un
+campo equivocado es invisible.
+
+El arreglo de verdad es un valor nuevo en el enum del backend. Hasta entonces esto es una heurística
+y está escrita como tal.
+
+### 4. Un guardado de links NO puede ser `DELETE` + `INSERT`
+
+Parece lo obvio y borra `created_at` de todos los links, incluidos los que nadie tocó. Es la misma
+lección que `upsertExcludedDomain` en `ops.repo.ts`, donde el `ON CONFLICT DO UPDATE`
+deliberadamente no pisa esa columna: **cuándo se cargó un link es el dato con valor.**
+
+Un operador que corrige un typo en la descripción no debería resetear la antigüedad de nueve links
+que no miró. Así que:
+
+- los kinds únicos van por **UPSERT** — conservan `id` y `created_at`, y el trigger mueve
+  `updated_at` sólo si la URL cambió de verdad;
+- los `other` se matchean **por URL**, porque no tienen clave natural: se borra lo que ya no está y
+  se inserta lo que falta. Un `other` idéntico ni se toca.
+
+El caso 17 de la suite es el que verifica esto y es el que justifica todo el diseño.
+
+## `coverage_zone` vacía NO borra: rechaza
+
+`partners.coverage_zone` es NOT NULL en el schema del backend, así que `''` no es "borrá el dato": es
+un valor que la columna no puede representar. El SP lo rechaza con `COVERAGE_ZONE_REQUIRED`.
+
+Es la asimetría con `description`, que **sí** es nullable y donde `''` sí borra — mismo contrato que
+`set_partner_contact`, y por el mismo motivo: el import del `legacy_sheet` dejó strings vacíos.
+
+La validación está duplicada en zod y en el SP, igual que las coordenadas de la 007, y por la misma
+razón: la de zod llega como issue con el path del campo y el formulario la muestra al lado del input;
+la del SP es la que no se puede saltear.
+
+## El largo de la descripción se avisa, no se impide
+
+90 caracteres es el largo **ideal** para la tarjeta del marketplace. No es un límite, y el SP a
+propósito no lo valida.
+
+El número que lo decide: al 2026-09-04, **25 de los 34 partners con descripción ya lo pasan**
+(promedio 114, máximo 248). Un límite duro en el formulario haría imposible corregirle la zona de
+cobertura a tres cuartos del directorio.
+
+Por eso pasarse pinta **ámbar y no rojo**: rojo dice "esto está mal", ámbar dice "se va a cortar en
+la tarjeta". El techo duro de 600 es otra cosa — no sale de ningún requisito de diseño, es holgura
+sobre el máximo real para que nadie pegue un documento entero en un campo `text` sin restricción.
+
+## El vocabulario: es `tier`, no `aliado`
+
+El equipo lo llama "badge de aliado" y la UI lo dice así. **El código dice `tier` y `founding`**,
+porque el vocabulario es el del backend (regla dura 7). Un campo llamado `aliado` en el front sería
+intraducible el día que alguien abra DBeaver y encuentre `partner_tier`.
+
+La tarjeta lo dice en pantalla —"Escribe `partners.tier`: Aliado es `founding`"— justamente para que
+esa traducción no viva sólo en la cabeza de quien la escribió.
+
+## Cómo se probó
+
+`migrations/008_ops_partner_perfil_y_links.test.sql`: 32 casos, **entera dentro de una transacción
+que termina en `ROLLBACK`**, con el mismo patrón que la 007.
+
+Crea su propio partner y su propio actor en vez de usar filas reales. El motivo no es sólo no dejar
+basura —para eso alcanza el ROLLBACK—: un `UPDATE` sobre un partner real toma su fila con
+`FOR UPDATE` y **bloquea a cualquier otro que la toque** mientras la transacción está abierta.
+
+Cubre: los tres campos del perfil, el borrado por `''` y el rechazo de la zona vacía, las cuatro
+sentinelas nuevas, que `updated_at` lo mueva el trigger, la conservación de `id` y `created_at` en un
+link intacto, el upsert al cambiar una URL, el borrado por ausencia, la deduplicación de `other`, y
+que el log de links guarde links y no la fila del partner. Más 2 casos de integración con el SQL de
+parámetros nombrados exacto que manda el repo.
