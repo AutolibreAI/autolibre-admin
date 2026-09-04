@@ -196,6 +196,7 @@ function UsersList() {
                 <TableHead>Usuario</TableHead>
                 <TableHead>Rol</TableHead>
                 <TableHead className="text-right">Vehículos</TableHead>
+                <TableHead className="text-right">Escaneos</TableHead>
                 <TableHead>Alta</TableHead>
                 <TableHead>Última actividad</TableHead>
               </TableRow>
@@ -272,6 +273,38 @@ function Row({ user }: { user: UserListItem }) {
           <span className="text-muted-foreground/50">0</span>
         ) : (
           user.vehicleCount
+        )}
+      </TableCell>
+
+      {/*
+        Escaneos: los que TRAJERON DATOS sobre los intentados.
+
+        El denominador no es adorno. Al 2026-09-04, 6 de las 17 sesiones de la
+        base quedaron `completed` con cero lecturas y cero minutos: el escáner
+        nunca enganchó. Mostrar sólo el total presentaría esos fracasos como
+        uso, y el usuario con "4 escaneos" que en realidad son 4 fracasos es
+        justamente el que va a llamar a soporte.
+
+        Cuando ninguno sirvió se pinta ámbar. No rojo: el problema puede ser el
+        escáner del usuario y no la app, y esta pantalla no sabe cuál de los dos.
+      */}
+      <TableCell className="text-right tabular-nums">
+        {user.scansTotal === 0 ? (
+          <span className="text-muted-foreground/50" title="Nunca usó el escáner">
+            —
+          </span>
+        ) : (
+          <span
+            className={cn(user.scansOk === 0 && 'text-status-yellow')}
+            title={
+              user.scansOk === 0
+                ? `${user.scansTotal} ${user.scansTotal === 1 ? 'intento' : 'intentos'}, ninguno trajo datos`
+                : `${user.scansOk} de ${user.scansTotal} trajeron datos`
+            }
+          >
+            {user.scansOk}
+            <span className="text-muted-foreground"> / {user.scansTotal}</span>
+          </span>
         )}
       </TableCell>
 

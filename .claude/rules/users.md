@@ -130,3 +130,51 @@ provisioning encuentra el email tomado, no crea nada, y la persona queda con ses
 usuario de AutoLibre. La única evidencia por el camino del webhook es un `logger.warn`.
 
 El detalle completo, con la tabla de los dos caminos, está en el `CLAUDE.md`.
+
+---
+
+## La columna «Escaneos» del listado, y por qué son DOS números
+
+`scansOk / scansTotal`: las sesiones del escáner OBD que trajeron datos, sobre los intentos.
+
+Mostrar sólo el total sería repetir el error que `/escaneres` existe para no cometer. Al 2026-09-04,
+de las 17 sesiones de la base **6 quedaron marcadas como `completed` con cero lecturas y cero minutos
+de duración**: el escáner nunca enganchó. Son fracasos guardados como éxitos.
+
+Y no es un caso de borde. Con los datos reales de producción, los dos usuarios más activos tienen
+**4 de 8** y **2 de 4**: la mitad de sus intentos no trajo nada. Sin el denominador, la lista diría
+"8 escaneos" y "4 escaneos" — y el usuario que llama a soporte porque el escáner no le anda
+aparecería como el que más lo usa.
+
+Cuando ninguno sirvió se pinta **ámbar y no rojo**: el problema puede ser el escáner del usuario y no
+la app, y esta pantalla no sabe cuál de los dos. Un guión gris significa que nunca lo usó, que es
+distinto de que le haya fallado.
+
+### ⚠ El predicado está en DOS lugares y se tocan juntos
+
+```sql
+status = 'completed' AND coalesce(total_readings, 0) > 0
+```
+
+Vive en `users.repo.ts` (esta columna) y en `scanners.repo.ts` (la constante `OK`). **Si divergen, el
+panel dice dos verdades distintas sobre la misma palabra** — un usuario con "3 escaneos" acá y una
+fila que suma 5 en Escáneres, sin ningún error que lo delate. Es la misma clase de acoplamiento que
+`INTERNAL_PREDICATE` entre `ops.repo.ts` y la vista `ops.v_ai_usage`.
+
+La explicación completa de por qué el corte es ése —y por qué va sobre `total_readings` y no sobre
+`scanner_firmware`— está en `.claude/rules/scanner-compatibility.md`. No se duplica acá.
+
+## Las tarjetas del pulso de Inicio llevan a su pantalla
+
+Tres de las cuatro: Usuarios → `/usuarios`, Partners → `/partners`, Leads → `/leads`.
+
+**Vehículos no lleva a ningún lado, y es deliberado.** Los autos se ven adentro de la ficha de su
+dueño; no existe un listado propio. La alternativa era mandarla igual a `/usuarios`, y es peor:
+prometería un listado de vehículos que no hay. Una tarjeta que no se puede clickear es una molestia;
+una que te lleva al lugar equivocado te hace dudar de si entendiste el número.
+
+Por eso `to` es opcional en `PulseTile` y sin él la tarjeta no recibe ni cursor de mano ni hover — la
+diferencia se ve antes de hacer click.
+
+Las que sí son link llevan anillo de foco. No es cosmético: pasan a ser destinos de tabulación, y un
+foco invisible deja a quien navega con teclado sin saber dónde está parado.

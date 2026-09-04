@@ -60,6 +60,8 @@ interface UserListRow {
   auth_provider: AuthProvider
   created_at: Date | string
   vehicle_count: number | string
+  scans_ok: number | string
+  scans_total: number | string
   last_activity_at: Date | string | null
 }
 
@@ -132,6 +134,21 @@ export async function listUsers(
       u.auth_provider,
       u.created_at,
       (select count(*) from vehicles v where v.user_id = u.id)::int as vehicle_count,
+      -- Escaneos que sirvieron, sobre intentos.
+      --
+      -- El predicado de "sirvio" es el MISMO que el de scanners.repo.ts:
+      -- completed Y con al menos una lectura. Una sesion completed con cero
+      -- lecturas es un pareo que fallo, no un escaneo — 6 de las 17 de la base
+      -- al 2026-09-04. Contar solo el total presentaria esos fracasos como uso.
+      --
+      -- Si este predicado y el de /escaneres divergen, el panel dice dos
+      -- verdades distintas sobre la misma palabra y nada lo delata.
+      (select count(*) filter (
+                where d.status::text = 'completed'
+                  and coalesce(d.total_readings, 0) > 0)::int
+         from driving_sessions d where d.user_id = u.id) as scans_ok,
+      (select count(*)::int
+         from driving_sessions d where d.user_id = u.id) as scans_total,
       greatest(
         (select max(v.created_at) from vehicles v where v.user_id = u.id),
         (select max(c.created_at) from conversations c where c.user_id = u.id),
@@ -154,6 +171,8 @@ export async function listUsers(
     authProvider: r.auth_provider,
     createdAt: toIsoRequired(r.created_at),
     vehicleCount: toInt(r.vehicle_count),
+    scansOk: toInt(r.scans_ok),
+    scansTotal: toInt(r.scans_total),
     lastActivityAt: toIso(r.last_activity_at),
   }))
 }

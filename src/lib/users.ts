@@ -200,6 +200,23 @@ export interface UserListItem {
    * el usuario se registró y no hizo nada más, que es un dato — no un cero.
    */
   lastActivityAt: string | null
+  /**
+   * Escaneos: sesiones del escáner OBD que TRAJERON DATOS, sobre el total de
+   * intentos.
+   *
+   * Son dos números y no uno a propósito. Contar sólo las sesiones sería
+   * repetir el error que `/escaneres` existe para no cometer: al 2026-09-04, de
+   * las 17 sesiones de la base, **6 quedaron marcadas como `completed` con cero
+   * lecturas y cero minutos de duración** — el escáner nunca enganchó. Un
+   * usuario con "4 escaneos" que en realidad son 4 fracasos es exactamente el
+   * que va a llamar a soporte, y la lista tiene que dejarlo ver.
+   *
+   * El predicado es el MISMO que el de `scanners.repo.ts`. Si divergen, el
+   * panel dice dos verdades distintas sobre la misma palabra.
+   * → `.claude/rules/scanner-compatibility.md`
+   */
+  scansOk: number
+  scansTotal: number
 }
 
 export interface UserVehicle {
