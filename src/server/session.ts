@@ -75,8 +75,30 @@ export async function readSessionUser(): Promise<SessionUser | null> {
  *
  * Those 761 cannot reach the panel today: the lookup above is scoped to
  * `auth_provider = 'clerk'`, and a native row never matches a Clerk identity.
- * That is a side effect, NOT a safeguard. The day someone migrates a native
- * account onto Clerk, it inherits `admin`.
+ *
+ * CORRECTED 2026-09-04 — this block used to end with "the day someone migrates
+ * a native account onto Clerk, it inherits `admin`". That mechanism does not
+ * exist. Verified against the schema and against autolibre-backend-hex:
+ *
+ *  - `users` carries `idx_users_email_unique` UNIQUE (email) and
+ *    `idx_users_external_identity_unique` UNIQUE (auth_provider,
+ *    external_auth_id). One row = one person = ONE identity; a `native` row and
+ *    a `clerk` row cannot coexist for the same email. (Both are plain unique
+ *    INDEXES, so they do NOT show up in `pg_constraint` — query `pg_indexes`.)
+ *  - Both provisioning paths REFUSE rather than migrate, and neither ever
+ *    writes `auth_provider`, `external_auth_id` or `role`:
+ *      · `HandleIdentityWebhookHandler.provision()` → `logger.warn` + `return`
+ *        (2xx on purpose, so the provider does not retry). No row created.
+ *      · `AuthenticateUserHandler.provision()` → throws CONFLICT (409).
+ *
+ * So automatic admin inheritance cannot happen. The only remaining path is a
+ * deliberate manual UPDATE on the existing row.
+ *
+ * The REAL exposure is the opposite one, and it is user-facing: a person
+ * holding a legacy `native` row can never obtain an AutoLibre account through
+ * Clerk. They end up with a valid Clerk session and no AutoLibre user — the
+ * webhook leaves only a `logger.warn` behind. `/usuarios?onlyLegacyNative=true`
+ * is that list.
  *
  * Do not "fix" this by widening the query to accept native rows. The fix is a
  * data audit on the backend side, and it is not this repo's call to make.

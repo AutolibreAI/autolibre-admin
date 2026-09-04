@@ -155,6 +155,8 @@ pantalla no va todavía.
 | `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
 | `/partners` | `true` | El listado del directorio, la carga manual de rubros y **la ficha** (estado, coordenadas, contacto) |
 | `/leads` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/usuarios` | `true` | El `select * from users where email ilike '%…%'` de cada reclamo de soporte, más las dos columnas que no están en él: cuántos vehículos tiene y cuándo fue su última señal de vida |
+| `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
 | `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
 | `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
 | `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
@@ -231,11 +233,51 @@ El 28% de la base figuraba como admin, todos `native` (era pre-Clerk). Huele a d
 no a decisión.
 
 **Hoy no pueden entrar**: el lookup está acotado a `auth_provider = 'clerk'` y una fila native nunca
-matchea una identidad de Clerk. Eso es un **efecto colateral, no una salvaguarda** — el día que
-alguien migre una cuenta native a Clerk, hereda admin.
+matchea una identidad de Clerk.
 
-No lo "arregles" ampliando la query. El arreglo es una auditoría de datos del lado del backend, y no
-es decisión de este repo.
+### Corregido el 2026-09-04 — el mecanismo que decía esta nota no existe
+
+Esta sección decía *"el día que alguien migre una cuenta native a Clerk, hereda admin"*. **Eso está
+mal**, y se relevó contra el schema y contra `autolibre-backend-hex`:
+
+**1. Una persona tiene exactamente UNA identidad.** `public.users` tiene dos índices únicos:
+
+```
+idx_users_email_unique              UNIQUE (email)
+idx_users_external_identity_unique  UNIQUE (auth_provider, external_auth_id)
+```
+
+Una fila = una persona = una identidad. No puede existir una fila `native` y otra `clerk` para el
+mismo email. *(Ojo: se crearon con `CREATE UNIQUE INDEX`, así que **no aparecen en `pg_constraint`**
+— hay que preguntarle a `pg_indexes`. Mirar sólo `pg_constraint` devuelve el falso negativo de
+"`users` sólo tiene PK".)*
+
+**2. Los dos caminos de provisioning del backend RECHAZAN la migración.** Ninguno toca jamás
+`auth_provider`, `external_auth_id` ni `role`:
+
+| Camino | Qué hace si el email ya es de una fila `native` |
+|---|---|
+| Webhook — `HandleIdentityWebhookHandler.provision()` | `logger.warn(...)` y **`return`**. Devuelve 2xx a propósito para que Clerk no reintente. Fila no creada. |
+| Perezoso — `AuthenticateUserHandler.provision()` | `throw ApplicationException(CONFLICT)` → 409. Fila no creada. |
+
+Y `sync()` / `syncEmailFromProvider()` sólo escriben email, nombre y teléfono.
+
+**Conclusión: la herencia automática de admin no puede pasar.** El único camino que queda es un
+`UPDATE` manual y deliberado sobre la fila existente — una sentencia, hecha a mano, a sabiendas.
+
+### Lo que SÍ pasa, y nadie lo había escrito
+
+El riesgo real es el opuesto y es de cara al usuario: **quien tenga una fila `native` heredada no
+puede sacar cuenta de AutoLibre por Clerk.** Se registra en Clerk, el provisioning encuentra el email
+tomado y no crea nada. Termina con sesión válida de Clerk y **sin usuario de AutoLibre** — o sea, sin
+app. Por el webhook la evidencia es un `logger.warn` y nada más; por el camino perezoso, un 409 en la
+primera request autenticada.
+
+Eso hace que `/usuarios?onlyLegacyNative=true` valga más de lo que decía: **esa lista no es "posibles
+admins heredados", es "los emails cuyo registro por Clerk va a fallar en silencio"**.
+
+No lo "arregles" ampliando la query del lookup. El arreglo es una auditoría de datos del lado del
+backend, y no es decisión de este repo.
 
 ### Revisado el 2026-08-30 — el censo era de DEV, y producción está limpia
 
@@ -268,6 +310,14 @@ Dos conclusiones, y son opuestas entre sí:
 | `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN.** No se toca para explorar. |
 | `…neon.tech` | `neondb` | sin relevar |
 
+> **Revisado el 2026-09-04 y esta tabla ya no alcanza.** El `.env` apuntaba a una
+> CUARTA base: `autolibre` en `127.0.0.1` — 72 usuarios, todos `clerk`, cero `native`.
+> O sea que el nombre `autolibre` **ya no identifica a producción**: hay una local que se
+> llama igual. Corolario, y es el que importa: `select current_database()` dejó de ser
+> concluyente por sí solo. **El chequeo de relevamiento es
+> `select current_database(), inet_server_addr()` — los dos, siempre.** `127.0.0.1`
+> es local aunque la base se llame `autolibre`.
+
 Reglas que salen de esto y no son negociables:
 
 1. **Ningún número de este repo significa nada sin decir contra qué base se sacó.** Toda consulta de
@@ -299,6 +349,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ai-costs.md` | El schema `ops`: migraciones, costo NULL vs 0, precios con vigencia, qué NO se mide |
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
+| `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
 
 ## Cómo mantener esto vivo
 

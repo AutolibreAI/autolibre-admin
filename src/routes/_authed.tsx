@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Store,
+  Users,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '~/components/ui/button'
@@ -74,6 +75,14 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * contiguos en el menú es lo que mantiene esa distinción a la vista.
    */
   { to: '/leads', label: 'Leads', icon: Handshake },
+  /**
+   * `Usuarios` cierra el bloque de dominio y va después de `Leads` a propósito:
+   * es el OTRO extremo del mismo marketplace. Un lead sale de un usuario y
+   * llega a un partner, así que las tres pantallas contiguas cubren el
+   * recorrido entero — y desde la ficha del usuario se salta al partner que
+   * administra, si administra alguno.
+   */
+  { to: '/usuarios', label: 'Usuarios', icon: Users },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son

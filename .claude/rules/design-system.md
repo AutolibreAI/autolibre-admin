@@ -76,6 +76,20 @@ del catálogo de DTC (`amarillo` / `violeta` / `rojo`).
 (`#9A6B0F`) es el legible sobre fondo claro. Para texto y badges usá el segundo — es lo que hace
 `StatusBadge`.
 
+> ⚠ **Pero la clase de Tailwind NO se llama igual que la variable, y esto ya mordió.**
+> `@theme inline` expone **`--color-status-yellow: var(--status-yellow-text)`** — o sea que
+> **`text-status-yellow` YA es el ámbar legible `#9A6B0F`**. No existe ningún
+> `--color-status-yellow-text`, así que **`text-status-yellow-text` no genera nada**: Tailwind
+> descarta la clase desconocida en silencio y el elemento hereda el color del padre.
+>
+> Cómo se ve el bug: un badge de advertencia que sale gris o negro en vez de ámbar. `tsc` pasa, el
+> build pasa, `cn()` pasa — **no hay ninguna herramienta que lo agarre**. Se encontró leyendo el
+> `@theme` a mano después de escribirlo mal seis veces.
+>
+> Regla que sale de esto y aplica a TODO token nuevo: **el nombre de la clase es lo que está en
+> `@theme inline`, nunca lo que está en `:root`.** Antes de usar una clase de color que no viste en
+> otro archivo del repo, `grep --color-<nombre> src/styles.css`. Si no está ahí, no existe.
+
 ## Clases utilitarias disponibles
 
 Además del vocabulario de shadcn (`bg-card`, `text-muted-foreground`, …), `@theme inline` expone:

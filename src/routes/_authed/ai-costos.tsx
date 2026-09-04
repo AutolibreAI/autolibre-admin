@@ -25,6 +25,7 @@ import {
   getAiUsageSummary,
 } from '~/fn/ai-usage'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { Chip, FilterGroup } from '~/components/Filters'
 import { PanelSkeleton } from '~/components/Fallbacks'
 import {
   Table,
@@ -621,39 +622,3 @@ function Pill({ tone, children }: { tone: 'ok' | 'warn' | 'bad'; children: React
   )
 }
 
-function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <div className="flex flex-wrap gap-1.5">{children}</div>
-    </div>
-  )
-}
-
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        'h-8 rounded-md border px-3 text-sm transition-colors',
-        active
-          ? 'border-brand bg-brand-soft text-brand'
-          : 'border-border bg-card text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
-  )
-}

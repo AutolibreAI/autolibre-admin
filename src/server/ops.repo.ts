@@ -105,9 +105,15 @@ interface AdoptionRow {
  *
  * `legacy_native_admins` está separado del resto porque es el riesgo abierto del
  * repo: cuentas `admin` + `native`, herencia de la era pre-Clerk. Hoy no pueden
- * entrar — el lookup de sesión exige `auth_provider = 'clerk'` — pero eso es un
- * efecto colateral, no una salvaguarda. El número tiene que estar a la vista
- * para que el día que alguien migre una cuenta native a Clerk se note.
+ * entrar — el lookup de sesión exige `auth_provider = 'clerk'`.
+ *
+ * Este comentario decía que el número había que vigilarlo "para que el día que
+ * alguien migre una cuenta native a Clerk se note". **Corregido el 2026-09-04:
+ * esa migración no puede pasar sola.** `idx_users_email_unique` impide la
+ * segunda fila y los dos caminos de provisioning del backend rechazan en vez de
+ * migrar. El número sigue valiendo, pero por otro motivo: cada fila native es
+ * una persona **cuyo registro por Clerk falla en silencio**, porque su email ya
+ * está tomado. → `CLAUDE.md`, sección del riesgo.
  */
 export async function adoptionPulse(
   opts: { signal?: AbortSignal } = {},
