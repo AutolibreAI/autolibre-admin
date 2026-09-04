@@ -176,6 +176,13 @@ interface QueueRow {
   already_published: boolean
 }
 
+/**
+ * `status IS NULL` ("Todos") excluye `discarded` por default — ver el
+ * comentario en `applicationSearchSchema.status`. El primer término de la
+ * disyunción es el que decide eso; el segundo (`status = $1`) es el filtro
+ * exacto de siempre y no cambió: elegir el chip `Descartado` sigue mostrando
+ * sólo descartadas, sin necesidad de un control nuevo.
+ */
 export async function listApplications(
   search: ApplicationSearch,
   opts: { signal?: AbortSignal } = {},
@@ -187,7 +194,10 @@ export async function listApplications(
             follow_up_date, declared_services, how_found, created_at,
             already_published
        FROM v_partner_application_queue
-      WHERE ($1::partner_application_status IS NULL OR status = $1)
+      WHERE (
+              ($1::partner_application_status IS NULL AND status <> 'discarded')
+              OR status = $1
+            )
         AND ($2::boolean OR NOT already_published)
         AND ($3::text IS NULL OR business_name ILIKE '%' || $3 || '%'
                               OR email         ILIKE '%' || $3 || '%')`,
