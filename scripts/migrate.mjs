@@ -34,7 +34,7 @@ const DRY_RUN = args.has('--dry-run')
 const STATUS = args.has('--status')
 const ON_DEPLOY = args.has('--on-deploy')
 
-const connectionString = process.env.POSTGRES_DATABASE_URL
+const connectionString = process.env.POSTGRES_MIGRATION_URL
 
 /**
  * ¿Este build tiene permiso para migrar?
@@ -311,7 +311,7 @@ async function assertNotBehindPooler(client) {
       '  pgBouncer la sesión no es una conexión estable: el lock se toma en una\n' +
       '  conexión de servidor y el unlock puede caer en otra. Queda tomado para\n' +
       '  siempre, y a partir de ahí toda migración se cuelga esperándolo.\n\n' +
-      '  Usá el puerto DIRECTO de la base en POSTGRES_DATABASE_URL. En DigitalOcean\n' +
+      '  Usá el puerto DIRECTO de la base en POSTGRES_MIGRATION_URL. En DigitalOcean\n' +
       '  es el 25060; el 25061 (…/nombre-pool) es el pooler.\n',
   )
   process.exit(1)
@@ -319,13 +319,13 @@ async function assertNotBehindPooler(client) {
 
 async function main() {
   // La compuerta va ANTES del chequeo de la URL: una preview sin
-  // POSTGRES_DATABASE_URL no tiene por qué romper su build por una migración
+  // POSTGRES_MIGRATION_URL no tiene por qué romper su build por una migración
   // que igual no le tocaba correr.
   if (ON_DEPLOY && !deployGateOpen()) return
 
   if (!connectionString) {
     console.error(
-      '\n  Falta POSTGRES_DATABASE_URL.\n' +
+      '\n  Falta POSTGRES_MIGRATION_URL.\n' +
         '  En local va en .env (el script lo lee con --env-file-if-exists).\n' +
         '  En Vercel es una env var del proyecto, y tiene que estar disponible en\n' +
         '  BUILD además de en runtime — si no, este script no ve la base.\n',
