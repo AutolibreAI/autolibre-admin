@@ -8,6 +8,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  ScanLine,
   Store,
   Users,
   type LucideIcon,
@@ -96,6 +97,17 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * → `.claude/rules/vehicle-manuals.md`
    */
   { to: '/catalogo', label: 'Catálogo', icon: BookOpen },
+  /**
+   * `Escáneres` va pegada a `Catálogo` porque comparte su eje vertical: las
+   * filas de esa matriz SON los modelos del catálogo. Las dos contestan sobre
+   * el auto, no sobre el marketplace ni sobre la persona.
+   *
+   * Es la única pantalla del panel que no mira un estado que alguien mueve,
+   * sino un hecho acumulado: qué hardware enganchó con qué auto. Por eso no
+   * tiene ni una acción — no hay nada que corregir en una sesión que ya pasó.
+   * → `.claude/rules/scanner-compatibility.md`
+   */
+  { to: '/escaneres', label: 'Escáneres', icon: ScanLine },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son

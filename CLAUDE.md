@@ -192,6 +192,7 @@ pantalla no va todavía.
 | `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
 | `/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra 83 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
 | `/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
+| `/escaneres` | `true` | **La consulta que no se corría porque no se te ocurre**: con qué versión de auto —`TOYOTA COROLLA XEI 1.8 M/T 2013`, no "un Corolla"— funcionó cada escáner y con cuáles no. Cruza `driving_sessions` → `vehicles` → `vehicle_catalog_specs` → `vehicle_catalogs`, y separa los intentos que trajeron datos de los que engancharon y no trajeron nada. Lo que sí pasaba: contestar "¿le recomiendo este escáner a un Vento?" de memoria |
 | `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
 | `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
 | `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
@@ -447,6 +448,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
+| `scanner-compatibility.md` | La matriz escáner ↔ vehículo: por qué una celda vacía es "no se probó" y nunca "no funciona", por qué `count(distinct)` necesita `GROUPING SETS`, y las dos cosas que faltan del backend |
 | `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, el flujo de dos llamadas HTTP que no es atómico, el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, límite de 10MB, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
 
 ## Cómo mantener esto vivo
