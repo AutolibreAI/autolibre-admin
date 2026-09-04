@@ -179,13 +179,24 @@ function withoutUrlSslParams(url) {
  * Se usa padding de 3 dígitos porque un `10_x.sql` ordenaría antes que `9_x.sql`
  * en comparación de strings, y ese bug aparece recién en la décima migración —
  * cuando ya nadie se acuerda de esta decisión.
+ *
+ * ── `*.test.sql` NO es una migración ──────────────────────────────────────
+ *
+ * Las suites de prueba de los stored procedures viven al lado de la migración
+ * que prueban, porque es donde se van a buscar. Pero son otra cosa: empiezan en
+ * `BEGIN` y terminan en `ROLLBACK`, y aplicarlas no deja nada.
+ *
+ * Sin este filtro, `008_x.test.sql` parsea la MISMA versión `008` que
+ * `008_x.sql` y el runner las trata como dos migraciones con el mismo número:
+ * la segunda choca por checksum contra la primera ya aplicada. El error habla
+ * de "drift", que manda a investigar una migración corrupta que no existe.
  */
 function readMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) return []
 
   return fs
     .readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => f.endsWith('.sql') && !f.endsWith('.test.sql'))
     .sort()
     .map((file) => {
       const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')
@@ -199,7 +210,30 @@ function readMigrations() {
         version,
         file,
         sql,
-        checksum: crypto.createHash('sha256').update(sql).digest('hex'),
+        /**
+         * El checksum se calcula sobre el contenido NORMALIZADO a LF.
+         *
+         * Sobre los bytes crudos es dependiente de la plataforma, y eso rompe
+         * de verdad: con `core.autocrlf=true` (el default de Git en Windows)
+         * los `.sql` se registran en LF y se hacen checkout en CRLF. Una
+         * migración aplicada desde Linux —el build de Vercel, por ejemplo—
+         * guarda el hash de la versión LF, y la misma migración leída después
+         * desde Windows hashea distinto sin que UNA SOLA LÍNEA de SQL haya
+         * cambiado.
+         *
+         * Verificado el 2026-09-04 contra producción: las 7 migraciones
+         * aplicadas daban drift desde Windows, y las 7 coincidían exactamente
+         * con el hash de su versión LF. El mensaje que sale de ahí —"la base ya
+         * no coincide con el archivo"— manda a investigar una corrupción que no
+         * existe, y peor, entrena a ignorar la advertencia que sí importa.
+         *
+         * Normalizar sólo cambia el FINGERPRINT. El SQL que se ejecuta sigue
+         * siendo `sql`, tal cual está en disco.
+         */
+        checksum: crypto
+          .createHash('sha256')
+          .update(sql.replace(/\r\n/g, '\n'))
+          .digest('hex'),
       }
     })
 }
