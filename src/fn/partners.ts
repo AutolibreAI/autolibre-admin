@@ -9,7 +9,9 @@ import {
   editServicesSchema,
   partnerSearchSchema,
   setPartnerContactSchema,
+  setPartnerLinksSchema,
   setPartnerLocationSchema,
+  setPartnerProfileSchema,
   setPartnerStatusSchema,
 } from '~/lib/catalog'
 import {
@@ -21,7 +23,9 @@ import {
   listPartners,
   pipelineHealth,
   setPartnerContact,
+  setPartnerLinks,
   setPartnerLocation,
+  setPartnerProfile,
   setPartnerStatus,
   unstickApplication,
   updateApplicationStatus,
@@ -172,4 +176,38 @@ export const setPartnerContactFn = createServerFn({ method: 'POST' })
   .validator(setPartnerContactSchema)
   .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
     setPartnerContact(data, context.user.id, { signal: requestSignal() }),
+  )
+
+// ── Migración 008: perfil y links ────────────────────────────────────────────
+//
+// Mismo borde que las tres de arriba: el actor sale de `context.user.id`, o sea
+// de la sesión de Clerk, y no está en ningún schema de zod.
+
+/**
+ * Zona de cobertura, descripción y badge de aliado.
+ *
+ * Los tres juntos porque son una sola cosa: cómo se presenta el partner en la
+ * tarjeta del marketplace. Tres server functions producirían tres entradas de
+ * `ops.action_log` para un solo acto de edición.
+ */
+export const setPartnerProfileFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerProfileSchema)
+  .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
+    setPartnerProfile(data, context.user.id, { signal: requestSignal() }),
+  )
+
+/**
+ * El juego completo de links.
+ *
+ * Devuelve los links tal como quedaron —no un `void`— porque el SP los
+ * normaliza: descarta las URLs vacías y deduplica los `other`. Que la UI
+ * recargue igual no lo hace redundante: el valor de retorno es lo que hace
+ * verificable el efecto desde cualquier otro llamador.
+ */
+export const setPartnerLinksFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerLinksSchema)
+  .handler(async ({ data, context }): Promise<Array<{ kind: string; url: string }>> =>
+    setPartnerLinks(data, context.user.id, { signal: requestSignal() }),
   )

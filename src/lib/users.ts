@@ -50,6 +50,14 @@ export const DOCUMENT_STATUS_LABELS: Record<string, string> = {
   pending_renewal: 'A renovar',
 }
 
+/** `vehicle_data_query_status`: los cuatro valores del enum, no una adivinanza. */
+export const VEHICLE_DATA_QUERY_STATUS_LABELS: Record<string, string> = {
+  queued: 'en cola',
+  processing: 'en curso',
+  completed: 'consultada',
+  failed: 'la consulta falló',
+}
+
 export const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   document_expiration: 'Vencimiento de documento',
   maintenance_reminder: 'Recordatorio de mantenimiento',
@@ -200,6 +208,40 @@ export interface UserListItem {
    * el usuario se registró y no hizo nada más, que es un dato — no un cero.
    */
   lastActivityAt: string | null
+  /**
+   * Escaneos: sesiones del escáner OBD que TRAJERON DATOS, sobre el total de
+   * intentos.
+   *
+   * Son dos números y no uno a propósito. Contar sólo las sesiones sería
+   * repetir el error que `/escaneres` existe para no cometer: al 2026-09-04, de
+   * las 17 sesiones de la base, **6 quedaron marcadas como `completed` con cero
+   * lecturas y cero minutos de duración** — el escáner nunca enganchó. Un
+   * usuario con "4 escaneos" que en realidad son 4 fracasos es exactamente el
+   * que va a llamar a soporte, y la lista tiene que dejarlo ver.
+   *
+   * El predicado es el MISMO que el de `scanners.repo.ts`. Si divergen, el
+   * panel dice dos verdades distintas sobre la misma palabra.
+   * → `.claude/rules/scanner-compatibility.md`
+   */
+  scansOk: number
+  scansTotal: number
+
+  /**
+   * "El registro" — la licencia de conducir, la de `driver_licenses`, no la
+   * cédula (eso es `registration_cards` y es del auto). Sale de la fila NO
+   * archivada más reciente; si no hay ninguna, de la archivada más reciente —
+   * mismo criterio que `insurances`/`registration_cards` en el resto del repo.
+   *
+   * `driverLicenseDaysUntilExpiration` viene YA CALCULADO por Postgres
+   * (`expiration_date - current_date`) y no por `new Date()` en el
+   * componente: esta pantalla es SSR completo, y una resta contra el reloj
+   * del NAVEGADOR puede diferir de la del SERVIDOR en el instante justo que
+   * cruza medianoche UTC entre el render y la hidratación — el mismo tipo de
+   * mismatch que `format.ts` fija con `timeZone: 'UTC'` para las fechas. Acá
+   * el número ya es un dato, no un cálculo que el cliente repite.
+   */
+  driverLicenseExpiresAt: string | null
+  driverLicenseDaysUntilExpiration: number | null
 }
 
 export interface UserVehicle {
@@ -219,6 +261,136 @@ export interface UserVehicle {
   engine: string | null
   fuelType: string | null
   transmission: string | null
+
+  /**
+   * "¿Consultaron VTV/multas de este auto?" — y es una pregunta DISTINTA de
+   * "¿tiene la VTV cargada?" (eso ya está en el censo, tabla
+   * `vehicle_inspections`, y es el disco/documento). Acá es la consulta
+   * automática contra el proveedor:
+   *
+   * - VTV sale de `vehicle_data_queries` con `'vtv' = any(requested_modules)`.
+   *   `vtvQueryStatus` es `null` cuando nunca se pidió, y si no es `null`
+   *   siempre viene acompañado del intento más reciente.
+   * - Multas sale de `vehicle_fine_syncs`, que tiene UNA fila por vehículo y
+   *   sólo existe si alguna vez se sincronizó — su sola presencia (`finesSyncedAt`
+   *   no nulo) ES la respuesta.
+   *
+   * `finesCount` es cuántas multas quedaron encontradas, para no confundir
+   * "nunca se consultó" con "se consultó y no había ninguna".
+   *
+   * `vtvQueryStatus` es texto libre y no un union: `vehicle_data_query_status`
+   * tiene CUATRO valores (`queued | processing | completed | failed`), y como
+   * acá se toma el intento más reciente sin filtrar por estado, puede caer
+   * cualquiera de los cuatro — inventar un union de dos lo haría renderizar en
+   * blanco el día que la fila más nueva esté todavía en curso.
+   */
+  vtvQueryStatus: string | null
+  vtvQueryCompletedAt: string | null
+  vtvQueryCreatedAt: string | null
+  finesSyncedAt: string | null
+  finesCount: number
+
+  /** Documentos cargados para este auto — presencia, no consulta. */
+  insuranceStatus: string | null
+  insuranceExpiresAt: string | null
+  registrationCardLoadedAt: string | null
+}
+
+export type MaintenanceTaskState = 'done' | 'overdue' | 'pending' | 'undated'
+
+export interface UserMaintenanceTask {
+  id: string
+  vehiclePlate: string
+  name: string
+  itemType: string
+  dueDate: string | null
+  performedAt: string | null
+  archived: boolean
+  createdAt: string
+  /**
+   * Derivado, no una columna. `done` es lo único que el dominio afirma
+   * (`performed_at` está cargado); `overdue` / `pending` / `undated` son una
+   * lectura NUESTRA del reloj contra `due_date` — misma familia que `stuck` en
+   * `/operacion` y `noData` en `/escaneres`: útil, pero hay que decirlo en voz
+   * alta porque no lo escribió el backend.
+   */
+  state: MaintenanceTaskState
+}
+
+/**
+ * La fila por vehículo del toggle del LISTADO — `/usuarios`, no la ficha.
+ *
+ * Es un tipo aparte de `UserVehicle` a propósito, aunque las dos describan al
+ * mismo vehículo: `UserVehicle` contesta "¿qué trámites tiene cargados?"
+ * (seguro, cédula, si se consultó VTV/multas) para la ficha completa.
+ * `UserVehicleSummary` contesta "¿qué está HACIENDO con este auto?" — uso del
+ * asistente, escaneos, DTCs, tareas, anomalías — para una vista operativa que
+ * se abre por fila y se pide bajo demanda (nunca en el `loader` del listado:
+ * son hasta 500 usuarios, y traer esto para todos en cada carga sería el
+ * mismo error de fan-out que el resto del repo evita).
+ *
+ * Los campos vienen en pares deliberados de "cuándo" + "cuánto", igual que
+ * `scansOk`/`scansTotal` en el resto del archivo: un número solo no dice si
+ * está bien o mal, y las fechas de vencimiento se muestran crudas — el cálculo
+ * de "cuántos días faltan" es de la UI, no de acá, porque esta pantalla sólo
+ * se renderiza del lado del cliente (aparece después de un click, nunca en
+ * SSR) y ahí `new Date()` no tiene el riesgo de mismatch que tiene en una
+ * pantalla que si se manda por SSR.
+ */
+export interface UserVehicleSummary {
+  id: string
+  plate: string
+  alias: string | null
+  archived: boolean
+  brand: string
+  model: string
+  year: number
+
+  /** VTV — el documento (`vehicle_inspections`), no la consulta. */
+  vtvExpiresAt: string | null
+
+  /** `conversations` de este auto — el chat con el asistente de diagnóstico. */
+  diagnosticChatCount: number
+
+  /**
+   * La consulta de deuda de patente — `vehicle_data_queries`, módulo
+   * `tax_debt`. Mismo texto libre que `UserVehicle.vtvQueryStatus` y por la
+   * misma razón: el enum tiene cuatro valores y acá se toma el más reciente
+   * sin filtrar por estado.
+   */
+  taxDebtQueryStatus: string | null
+  taxDebtQueryAt: string | null
+
+  /** Seguro — el documento (`insurances`), no la consulta. */
+  insuranceExpiresAt: string | null
+
+  /** Mismo predicado que en todo el resto del repo: completed + al menos una lectura. */
+  scansOk: number
+  scansTotal: number
+
+  /**
+   * `null` = nunca se escaneó este auto. `0` = se escaneó y no había ningún
+   * código. Son respuestas DISTINTAS y confundirlas es el bug que
+   * `scanner-compatibility.md` documenta para `/escaneres` — acá aplica
+   * igual. Se toma del ÚLTIMO escaneo (`vehicle_last_dtc_scans`): no hay un
+   * estado "resuelto" en el dominio, así que "activo" es una lectura NUESTRA
+   * de "encontrado en el escaneo más reciente".
+   */
+  activeDtcCount: number | null
+  lastDtcScanAt: string | null
+
+  /** `maintenance_occurrences` de este auto: hechas vs. sin hacer. */
+  pastTasksCount: number
+  pendingTasksCount: number
+
+  /**
+   * Cantidad de anomalías del análisis de telemetría MÁS RECIENTE de este
+   * auto (`driving_telemetry_analysis.anomalies`, un array jsonb). `null` =
+   * nunca se analizó. Mismo criterio que `activeDtcCount`: no hay "resuelto"
+   * en el dominio, "activa" es "apareció en el último análisis".
+   */
+  activeAnomalyCount: number | null
+  lastTelemetryAnalysisAt: string | null
 }
 
 export interface UserLegalAcceptance {
@@ -275,6 +447,8 @@ export interface UserDetail {
   pushTokens: Array<UserPushToken>
   notificationPreferences: Array<UserNotificationPreference>
   ownedPartners: Array<UserOwnedPartner>
+  /** `maintenance_occurrences` de todos sus vehículos — las tareas, pasadas y futuras. */
+  tasks: Array<UserMaintenanceTask>
 }
 
 // ── Lo que no cierra ─────────────────────────────────────────────────────────
@@ -368,6 +542,21 @@ export function deriveUserFlags(user: UserDetail): Array<UserFlag> {
     })
   }
 
+  const vehiclesWithNoPaperwork = activeVehicles.filter(
+    (v) =>
+      v.vtvQueryStatus === null &&
+      v.finesSyncedAt === null &&
+      v.insuranceStatus === null &&
+      v.registrationCardLoadedAt === null,
+  )
+  if (vehiclesWithNoPaperwork.length > 0) {
+    flags.push({
+      key: 'vehiculo-sin-tramites',
+      title: `${vehiclesWithNoPaperwork.length} vehículo(s) sin ningún trámite`,
+      detail: `${vehiclesWithNoPaperwork.map((v) => v.plate).join(', ')}. Nunca se consultó VTV ni multas, y no tiene seguro ni cédula cargados — cero filas en las cuatro tablas.`,
+    })
+  }
+
   if (c.vehicles === 0 && (c.conversations > 0 || c.fines > 0 || c.drivingSessions > 0)) {
     flags.push({
       key: 'actividad-sin-vehiculo',
@@ -385,6 +574,37 @@ export const USER_ROLE_FILTERS = ['all', 'user', 'admin', 'provider'] as const
 export type UserRoleFilter = (typeof USER_ROLE_FILTERS)[number]
 
 /**
+ * Las columnas por las que se puede ordenar el listado. Un `Record` en
+ * `users.repo.ts` mapea cada una a su expresión SQL — la lista de acá es el
+ * contrato con la URL, no con la base.
+ */
+export const USER_SORT_KEYS = [
+  'name',
+  'role',
+  'vehicles',
+  'scans',
+  'createdAt',
+  'lastActivity',
+  'license',
+] as const
+export type UserSortKey = (typeof USER_SORT_KEYS)[number]
+
+export const USER_SORT_DIRS = ['asc', 'desc'] as const
+export type UserSortDir = (typeof USER_SORT_DIRS)[number]
+
+export const USER_VEHICLE_FILTERS = ['all', 'yes', 'no'] as const
+export type UserVehicleFilter = (typeof USER_VEHICLE_FILTERS)[number]
+
+/**
+ * Vigente / vencido / sin cargar — los tres estados que ya usa `ExpiryCell`
+ * en el toggle de vehículos, acá como filtro. `vencido` incluye "vence hoy":
+ * de este lado de la pantalla no hace falta la precisión del día exacto que
+ * sí tiene esa celda.
+ */
+export const USER_LICENSE_FILTERS = ['all', 'valid', 'expired', 'missing'] as const
+export type UserLicenseFilter = (typeof USER_LICENSE_FILTERS)[number]
+
+/**
  * Ver la nota sobre los dos modos de falla de zod en `~/lib/search`. Acá todo
  * degrada con `.catch()`: un filtro guardado en un favorito que ya no existe
  * tiene que mostrar la lista completa, no una pantalla de error.
@@ -399,6 +619,17 @@ export const userSearchSchema = z.object({
    * no se recuerda.
    */
   onlyLegacyNative: z.coerce.boolean().catch(false).default(false),
+
+  /** El orden por defecto es el de siempre: alta descendente. */
+  sort: z.enum(USER_SORT_KEYS).catch('createdAt').default('createdAt'),
+  dir: z.enum(USER_SORT_DIRS).catch('desc').default('desc'),
+
+  hasVehicles: z.enum(USER_VEHICLE_FILTERS).catch('all').default('all'),
+  /** `scansOk = 0` con `scansTotal > 0` — el escáner se usó y nunca sirvió. */
+  onlyScanFailures: z.coerce.boolean().catch(false).default(false),
+  /** `lastActivityAt` nulo — se registró y no hizo nada más. */
+  onlyNeverActive: z.coerce.boolean().catch(false).default(false),
+  license: z.enum(USER_LICENSE_FILTERS).catch('all').default('all'),
 })
 
 export type UserSearch = z.infer<typeof userSearchSchema>

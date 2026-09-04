@@ -1,10 +1,10 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { userSearchSchema } from '~/lib/users'
-import { findUserDetail, listUsers } from '~/server/users.repo'
+import { findUserDetail, listUserVehicleSummaries, listUsers } from '~/server/users.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { UserDetail, UserListItem } from '~/lib/users'
+import type { UserDetail, UserListItem, UserVehicleSummary } from '~/lib/users'
 
 /**
  * El borde RPC de Usuarios. Las dos funciones son de LECTURA y las dos pasan por
@@ -44,3 +44,17 @@ export const getAppUser = createServerFn({ method: 'GET' })
     if (!found) throw new Error(`NOT_FOUND:${data.userId}`)
     return found
   })
+
+/**
+ * El detalle por vehículo del toggle en `/usuarios`. Deliberadamente NO va en
+ * el `loader` de la lista — se pide sólo cuando un operador abre esa fila
+ * puntual, nunca para las 500 de golpe. Mismo guard que el resto del
+ * archivo y por el mismo motivo: sigue siendo el padrón completo, sólo que
+ * agrupado distinto.
+ */
+export const getUserVehicleSummaries = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(z.object({ userId: z.uuid() }))
+  .handler(async ({ data }): Promise<Array<UserVehicleSummary>> =>
+    listUserVehicleSummaries(data.userId, { signal: requestSignal() }),
+  )

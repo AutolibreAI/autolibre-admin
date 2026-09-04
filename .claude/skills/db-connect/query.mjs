@@ -104,8 +104,26 @@ const pool = new pg.Pool({
 });
 
 try {
-  const { rows } = await pool.query(sql);
-  console.log(JSON.stringify(rows, null, 2));
+  const result = await pool.query(sql);
+
+  // Un script de varias sentencias (una suite de `*.test.sql`, por ejemplo)
+  // usa el protocolo simple y `pg` devuelve UN ARRAY de resultados, no uno
+  // solo. Leer `.rows` de ese array da `undefined`, así que la suite corría
+  // entera y no imprimía nada — el modo de falla que se lee como "no pasó nada"
+  // cuando en realidad pasó todo.
+  const sets = Array.isArray(result) ? result : [result];
+  const withRows = sets.filter((r) => r?.rows?.length);
+
+  if (withRows.length === 0) {
+    console.log('[]');
+  } else if (withRows.length === 1) {
+    console.log(JSON.stringify(withRows[0].rows, null, 2));
+  } else {
+    for (const [i, set] of withRows.entries()) {
+      console.log(`\n── resultado ${i + 1} de ${withRows.length} ──`);
+      console.log(JSON.stringify(set.rows, null, 2));
+    }
+  }
 } catch (err) {
   console.error('Query failed:', err.message || err);
   process.exitCode = 1;

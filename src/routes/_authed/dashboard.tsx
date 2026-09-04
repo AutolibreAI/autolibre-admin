@@ -102,10 +102,24 @@ function Dashboard() {
 function PulseRow({ pulse }: { pulse: OpsPulse }) {
   const { adoption, marketplace, leads } = pulse
 
-  const tiles = [
+  /**
+   * `to` es opcional a propósito.
+   *
+   * Tres de las cuatro tarjetas tienen una pantalla detrás; **Vehículos no**.
+   * Los autos se ven adentro de la ficha de su dueño, y no existe un listado
+   * propio — así que esa tarjeta no lleva a ningún lado y no finge que sí: sin
+   * `to` no recibe ni el cursor de mano ni el hover.
+   *
+   * La alternativa era mandarla igual a `/usuarios`, y es peor: prometería un
+   * listado de vehículos que no hay. Una tarjeta que no se puede clickear es
+   * una molestia; una que te lleva al lugar equivocado te hace dudar de si
+   * entendiste el número.
+   */
+  const tiles: ReadonlyArray<PulseTile> = [
     {
       key: 'users',
       icon: Users,
+      to: '/usuarios',
       value: formatInt(adoption.usersTotal),
       label: 'Usuarios reales',
       // Las cuentas internas se muestran, no se restan en silencio: la
@@ -131,6 +145,7 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
     {
       key: 'partners',
       icon: Store,
+      to: '/partners',
       value: formatInt(marketplace.active),
       label: 'Partners publicados',
       hint: `${formatInt(marketplace.founding)} founding · ${formatInt(marketplace.total)} en total`,
@@ -139,6 +154,7 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
     {
       key: 'leads',
       icon: Handshake,
+      to: '/leads',
       value: formatInt(leads.won),
       label: 'Leads ganados',
       hint:
@@ -148,27 +164,72 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
       // Un lead sin contactar más de 48 h es plata que se está yendo.
       alert: leads.staleUncontacted > 0,
     },
-  ] as const
+  ]
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      {tiles.map(({ key, icon: Icon, value, label, hint, alert }) => (
-        <div
-          key={key}
-          className={cn(
-            'rounded-lg border p-4',
-            alert ? 'border-status-yellow/30 bg-status-yellow-bg' : 'border-border bg-card',
-          )}
-        >
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Icon className="size-4 shrink-0" aria-hidden />
-            <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
-          </div>
-          <div className="mt-2 font-heading text-2xl font-bold tracking-tight">{value}</div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hint}</p>
-        </div>
+      {tiles.map((tile) => (
+        <PulseCard key={tile.key} tile={tile} />
       ))}
     </div>
+  )
+}
+
+interface PulseTile {
+  key: string
+  icon: LucideIcon
+  /** Ausente cuando el número no tiene una pantalla detrás. Ver `tiles`. */
+  to?: string
+  value: string
+  label: string
+  hint: string
+  alert: boolean
+}
+
+/**
+ * Una tarjeta del pulso, clickeable sólo si tiene a dónde ir.
+ *
+ * El contenido es idéntico en los dos casos y vive una sola vez: duplicarlo en
+ * una rama con `<Link>` y otra con `<div>` es cómo terminan divergiendo dos
+ * tarjetas que deberían verse iguales.
+ *
+ * La versión con link agrega el borde de hover y el anillo de foco. **Ese
+ * anillo no es opcional**: la tarjeta pasa a ser un destino de tabulación, y un
+ * foco invisible deja a quien navega con teclado sin saber dónde está. Se pinta
+ * desde el token, con `focus-visible` para que no aparezca al clickear.
+ */
+function PulseCard({ tile }: { tile: PulseTile }) {
+  const { icon: Icon, to, value, label, hint, alert } = tile
+
+  const base = cn(
+    'block rounded-lg border p-4',
+    alert ? 'border-status-yellow/30 bg-status-yellow-bg' : 'border-border bg-card',
+  )
+
+  const body = (
+    <>
+      <div className="flex items-center gap-2 text-muted-foreground">
+        <Icon className="size-4 shrink-0" aria-hidden />
+        <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
+      </div>
+      <div className="mt-2 font-heading text-2xl font-bold tracking-tight">{value}</div>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hint}</p>
+    </>
+  )
+
+  if (!to) return <div className={base}>{body}</div>
+
+  return (
+    <Link
+      to={to}
+      className={cn(
+        base,
+        'transition-colors hover:border-foreground/20',
+        'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+      )}
+    >
+      {body}
+    </Link>
   )
 }
 

@@ -74,3 +74,10 @@ scratch/
 tmp/
 .vercel
 .env*.local
+
+# clerk configuration (can include secrets)
+/.clerk/
+
+# npm no es el gestor de este repo: pnpm-lock.yaml es el unico lockfile.
+package-lock.json
+yarn.lock

@@ -3,16 +3,20 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import type {
   AuthProvider,
+  MaintenanceTaskState,
   UserCensus,
   UserDetail,
   UserDriverLicense,
   UserLegalAcceptance,
   UserListItem,
+  UserMaintenanceTask,
   UserNotificationPreference,
   UserOwnedPartner,
   UserPushToken,
   UserSearch,
+  UserSortKey,
   UserVehicle,
+  UserVehicleSummary,
 } from '~/lib/users'
 import type { UserRole } from '~/lib/types'
 
@@ -43,6 +47,15 @@ import type { UserRole } from '~/lib/types'
  */
 const toInt = (value: unknown): number => Number(value ?? 0)
 
+/**
+ * Como `toInt`, pero preserva `null`. Hace falta donde el cero y el "nunca
+ * pasó" son respuestas DISTINTAS — `activeDtcCount` y `activeAnomalyCount`: un
+ * auto sin escanear no es lo mismo que un auto escaneado y limpio, y
+ * `toInt` los aplastaría a los dos en `0`.
+ */
+const toIntOrNull = (value: unknown): number | null =>
+  value === null || value === undefined ? null : Number(value)
+
 const toIso = (value: unknown): string | null =>
   value instanceof Date ? value.toISOString() : value === null || value === undefined ? null : String(value)
 
@@ -60,14 +73,44 @@ interface UserListRow {
   auth_provider: AuthProvider
   created_at: Date | string
   vehicle_count: number | string
+  scans_ok: number | string
+  scans_total: number | string
   last_activity_at: Date | string | null
+  driver_license_expires_at: Date | string | null
+  driver_license_days_until_expiration: number | string | null
+}
+
+/**
+ * Mapa cerrado `UserSortKey → expresión SQL`. Es lo que hace seguro
+ * interpolar `dir`/columna directo en el `ORDER BY`: los dos valores salen de
+ * un enum de zod y de un `Record` que los propios TIPOS obligan a cubrir —
+ * nunca de texto suelto del usuario. Un `ORDER BY $1` con parámetro no
+ * existe en `pg`; el nombre de columna no es un valor, así que no hay forma
+ * de parametrizarlo.
+ */
+const SORT_COLUMNS: Record<UserSortKey, string> = {
+  name: 'name',
+  role: 'role',
+  vehicles: 'vehicle_count',
+  scans: 'scans_total',
+  createdAt: 'created_at',
+  lastActivity: 'last_activity_at',
+  license: 'driver_license_days_until_expiration',
 }
 
 /**
  * El listado. Reemplaza el `select * from users where email ilike '%…%'` con el
  * que hoy se busca a alguien antes de poder mirarle nada.
  *
- * Dos decisiones que se ven en el SQL:
+ * Va envuelto en un `select * from (...) s` — no por gusto: `vehicle_count`,
+ * `scans_ok`, `last_activity_at` y el registro son subconsultas escalares del
+ * SELECT, y filtrar u ordenar por ellas en la MISMA consulta obligaría a
+ * repetir cada subconsulta en el `where`/`order by` (Postgres no deja usar un
+ * alias del SELECT en su propio nivel). Envolver una vez y referenciar el
+ * alias en la consulta de afuera es más simple que duplicar seis
+ * subconsultas, y el plan que arma Postgres es el mismo.
+ *
+ * Tres decisiones que se ven en el SQL interno:
  *
  *  1. **`vehicle_count` y `last_activity_at` son subconsultas escalares, no
  *     JOINs.** Un `left join vehicles` más `count(*)` obliga a un `group by`
@@ -80,6 +123,14 @@ interface UserListRow {
  *     dominio (regla dura 8); derivarla del dato que sí existe, no. Queda `null`
  *     para el que se registró y nunca hizo nada — que es exactamente lo que se
  *     quiere ver.
+ *
+ *  3. **`driver_license_days_until_expiration` se calcula acá, no en React.**
+ *     Esta pantalla es SSR completo — si el "cuántos días faltan" se calculara
+ *     en el componente con `new Date()`, el servidor y el cliente podrían
+ *     calcularlo en momentos distintos y, cruzando medianoche UTC en el medio,
+ *     devolver números distintos: mismatch de hidratación por construcción.
+ *     `expiration_date - current_date` en Postgres se calcula UNA vez, contra
+ *     UN reloj, y viaja como dato.
  */
 export async function listUsers(
   search: UserSearch,
@@ -121,25 +172,78 @@ export async function listUsers(
     where.push(`u.auth_provider = 'native'`)
   }
 
+  // ── Filtros que sí pueden ir en el nivel interno (son columnas de `users`) ──
+  // Los que dependen de una subconsulta del SELECT (vehículos, escaneos,
+  // actividad, registro) van en el `where` de AFUERA, sobre el alias.
+
+  const outerWhere: Array<string> = []
+
+  if (search.hasVehicles !== 'all') {
+    outerWhere.push(search.hasVehicles === 'yes' ? 'vehicle_count > 0' : 'vehicle_count = 0')
+  }
+
+  if (search.onlyScanFailures) {
+    outerWhere.push('scans_total > 0 and scans_ok = 0')
+  }
+
+  if (search.onlyNeverActive) {
+    outerWhere.push('last_activity_at is null')
+  }
+
+  if (search.license === 'valid') {
+    outerWhere.push('driver_license_days_until_expiration is not null and driver_license_days_until_expiration >= 0')
+  } else if (search.license === 'expired') {
+    outerWhere.push('driver_license_days_until_expiration is not null and driver_license_days_until_expiration < 0')
+  } else if (search.license === 'missing') {
+    outerWhere.push('driver_license_expires_at is null')
+  }
+
+  const sortColumn = SORT_COLUMNS[search.sort]
+
   const rows = await sql<UserListRow>(
     `
-    select
-      u.id,
-      u.email,
-      u.name,
-      u.phone,
-      u.role,
-      u.auth_provider,
-      u.created_at,
-      (select count(*) from vehicles v where v.user_id = u.id)::int as vehicle_count,
-      greatest(
-        (select max(v.created_at) from vehicles v where v.user_id = u.id),
-        (select max(c.created_at) from conversations c where c.user_id = u.id),
-        (select max(d.created_at) from driving_sessions d where d.user_id = u.id)
-      ) as last_activity_at
-    from users u
-    ${where.length ? `where ${where.join(' and ')}` : ''}
-    order by u.created_at desc
+    select * from (
+      select
+        u.id,
+        u.email,
+        u.name,
+        u.phone,
+        u.role,
+        u.auth_provider,
+        u.created_at,
+        (select count(*) from vehicles v where v.user_id = u.id)::int as vehicle_count,
+        -- Escaneos que sirvieron, sobre intentos.
+        --
+        -- El predicado de "sirvio" es el MISMO que el de scanners.repo.ts:
+        -- completed Y con al menos una lectura. Una sesion completed con cero
+        -- lecturas es un pareo que fallo, no un escaneo — 6 de las 17 de la base
+        -- al 2026-09-04. Contar solo el total presentaria esos fracasos como uso.
+        --
+        -- Si este predicado y el de /escaneres divergen, el panel dice dos
+        -- verdades distintas sobre la misma palabra y nada lo delata.
+        (select count(*) filter (
+                  where d.status::text = 'completed'
+                    and coalesce(d.total_readings, 0) > 0)::int
+           from driving_sessions d where d.user_id = u.id) as scans_ok,
+        (select count(*)::int
+           from driving_sessions d where d.user_id = u.id) as scans_total,
+        greatest(
+          (select max(v.created_at) from vehicles v where v.user_id = u.id),
+          (select max(c.created_at) from conversations c where c.user_id = u.id),
+          (select max(d.created_at) from driving_sessions d where d.user_id = u.id)
+        ) as last_activity_at,
+        -- El registro: la fila NO archivada más reciente y, si no hay
+        -- ninguna, la archivada más reciente — mismo criterio que
+        -- insurances/registration_cards en findUserDetail.
+        (select l.expiration_date from driver_licenses l where l.user_id = u.id
+           order by l.archived asc, l.created_at desc limit 1) as driver_license_expires_at,
+        (select (l.expiration_date - current_date) from driver_licenses l where l.user_id = u.id
+           order by l.archived asc, l.created_at desc limit 1) as driver_license_days_until_expiration
+      from users u
+      ${where.length ? `where ${where.join(' and ')}` : ''}
+    ) s
+    ${outerWhere.length ? `where ${outerWhere.join(' and ')}` : ''}
+    order by ${sortColumn} ${search.dir} nulls last, id
     limit 500
     `,
     params,
@@ -154,7 +258,11 @@ export async function listUsers(
     authProvider: r.auth_provider,
     createdAt: toIsoRequired(r.created_at),
     vehicleCount: toInt(r.vehicle_count),
+    scansOk: toInt(r.scans_ok),
+    scansTotal: toInt(r.scans_total),
     lastActivityAt: toIso(r.last_activity_at),
+    driverLicenseExpiresAt: toIso(r.driver_license_expires_at),
+    driverLicenseDaysUntilExpiration: toIntOrNull(r.driver_license_days_until_expiration),
   }))
 }
 
@@ -244,6 +352,25 @@ interface VehicleRow {
   engine: string | null
   fuel_type: string | null
   transmission: string | null
+  vtv_query_status: string | null
+  vtv_query_completed_at: Date | string | null
+  vtv_query_created_at: Date | string | null
+  fines_synced_at: Date | string | null
+  fines_count: number | string
+  insurance_status: string | null
+  insurance_expires_at: Date | string | null
+  registration_card_loaded_at: Date | string | null
+}
+
+interface TaskRow {
+  id: string
+  vehicle_plate: string
+  name: string
+  item_type: string
+  due_date: Date | string | null
+  performed_at: Date | string | null
+  archived: boolean
+  created_at: Date | string
 }
 
 interface LegalRow {
@@ -287,9 +414,9 @@ interface OwnedPartnerRow {
  * El expediente. `null` cuando el uuid no existe — el borde de arriba lo
  * traduce a un 404, no a un error.
  *
- * Las siete consultas van en paralelo con `Promise.all` y no en secuencia: son
+ * Las ocho consultas van en paralelo con `Promise.all` y no en secuencia: son
  * independientes entre sí y el pool tiene `max: 5`, así que serializarlas sólo
- * suma latencia. Ojo con agregar una octava — a partir de ahí compiten por
+ * suma latencia. Ojo con agregar una novena — a partir de ahí compiten por
  * conexiones con el resto del panel.
  */
 export async function findUserDetail(
@@ -305,7 +432,7 @@ export async function findUserDetail(
   )
   if (!user) return null
 
-  const [census, vehicles, legal, licenses, push, preferences, partners] = await Promise.all([
+  const [census, vehicles, legal, licenses, push, preferences, partners, tasks] = await Promise.all([
     sqlOne<CensusRow>(CENSUS_SQL, [userId]),
 
     /**
@@ -313,12 +440,42 @@ export async function findUserDetail(
      * NOT NULL con FK, así que un vehículo sin spec no es representable. Un
      * `left join` acá escondería una corrupción de datos detrás de celdas
      * vacías en vez de dejar que se note.
+     *
+     * Las columnas de trámites son subconsultas escalares, mismo criterio que
+     * el resto del archivo: un `left join` a `insurances`/`registration_cards`
+     * puede traer más de una fila por vehículo y multiplica el resultado sin
+     * avisar.
+     *
+     * VTV y multas son la CONSULTA, no el documento — por eso no salen de
+     * `vehicle_inspections` (eso ya está en el censo, es el disco cargado).
+     * `vehicle_fine_syncs` tiene una fila por vehículo y sólo existe si se
+     * sincronizó, así que su presencia sola alcanza. `vehicle_data_queries`
+     * puede tener varios intentos; se toma el más reciente por `created_at`
+     * para que `vtv_query_status` sea el ÚLTIMO estado y no cualquiera.
      */
     sql<VehicleRow>(
       `select v.id, v.plate, v.alias, v.color, v.odometer_value, v.archived,
               v.created_at, v.registered_at,
               vc.brand, vc.model, vc.year, vc.trim, vc.vehicle_type::text as vehicle_type,
-              vcs.engine, vcs.fuel_type::text as fuel_type, vcs.transmission::text as transmission
+              vcs.engine, vcs.fuel_type::text as fuel_type, vcs.transmission::text as transmission,
+              (select q.status::text from vehicle_data_queries q
+                where q.vehicle_id = v.id and 'vtv' = any(q.requested_modules)
+                order by q.created_at desc limit 1) as vtv_query_status,
+              (select q.completed_at from vehicle_data_queries q
+                where q.vehicle_id = v.id and 'vtv' = any(q.requested_modules)
+                order by q.created_at desc limit 1) as vtv_query_completed_at,
+              (select q.created_at from vehicle_data_queries q
+                where q.vehicle_id = v.id and 'vtv' = any(q.requested_modules)
+                order by q.created_at desc limit 1) as vtv_query_created_at,
+              (select fs.last_synced_at from vehicle_fine_syncs fs
+                where fs.vehicle_id = v.id) as fines_synced_at,
+              (select count(*)::int from fines f where f.vehicle_id = v.id) as fines_count,
+              (select i.status::text from insurances i where i.vehicle_id = v.id
+                order by i.archived asc, i.created_at desc limit 1) as insurance_status,
+              (select i.expiration_date from insurances i where i.vehicle_id = v.id
+                order by i.archived asc, i.created_at desc limit 1) as insurance_expires_at,
+              (select r.created_at from registration_cards r where r.vehicle_id = v.id
+                order by r.archived asc, r.created_at desc limit 1) as registration_card_loaded_at
        from vehicles v
        join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
        join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
@@ -362,6 +519,27 @@ export async function findUserDetail(
        order by name`,
       [userId],
     ),
+
+    /**
+     * Las tareas — `maintenance_occurrences` de todos sus vehículos. Se filtra
+     * por `o.user_id` y no por `v.user_id in (…)`: son la misma columna en la
+     * práctica (una occurrence siempre es del dueño del vehículo), pero filtrar
+     * por la FK directa evita un `IN` sobre la lista de vehículos que ya se
+     * pidió aparte.
+     *
+     * El `join` a `vehicles` es sólo para la patente que se muestra en la
+     * lista — no decide nada y no puede fan-outear: `vehicle_id` es NOT NULL
+     * con FK a una fila única.
+     */
+    sql<TaskRow>(
+      `select o.id, v.plate as vehicle_plate, o.name, o.item_type::text as item_type,
+              o.due_date, o.performed_at, o.archived, o.created_at
+       from maintenance_occurrences o
+       join vehicles v on v.id = o.vehicle_id
+       where o.user_id = $1
+       order by coalesce(o.performed_at, o.due_date, o.created_at) desc`,
+      [userId],
+    ),
   ])
 
   return {
@@ -395,6 +573,14 @@ export async function findUserDetail(
         engine: r.engine,
         fuelType: r.fuel_type,
         transmission: r.transmission,
+        vtvQueryStatus: r.vtv_query_status,
+        vtvQueryCompletedAt: toIso(r.vtv_query_completed_at),
+        vtvQueryCreatedAt: toIso(r.vtv_query_created_at),
+        finesSyncedAt: toIso(r.fines_synced_at),
+        finesCount: toInt(r.fines_count),
+        insuranceStatus: r.insurance_status,
+        insuranceExpiresAt: toIso(r.insurance_expires_at),
+        registrationCardLoadedAt: toIso(r.registration_card_loaded_at),
       }),
     ),
 
@@ -444,7 +630,41 @@ export async function findUserDetail(
         coverageZone: r.coverage_zone,
       }),
     ),
+
+    tasks: tasks.map(
+      (r): UserMaintenanceTask => ({
+        id: r.id,
+        vehiclePlate: r.vehicle_plate,
+        name: r.name,
+        itemType: r.item_type,
+        dueDate: toIso(r.due_date),
+        performedAt: toIso(r.performed_at),
+        archived: r.archived,
+        createdAt: toIsoRequired(r.created_at),
+        state: deriveTaskState(r),
+      }),
+    ),
   }
+}
+
+/**
+ * `done` es lo único que afirma el dominio (`performed_at` cargado). El resto
+ * es una lectura nuestra del reloj contra `due_date` y se escribe como tal —
+ * misma familia que `stuck` en `ops.repo.ts` y `noData` en `scanners.repo.ts`:
+ * ninguna de las tres la escribe el backend, las tres son la señal que nadie
+ * ve si no se calcula.
+ *
+ * `new Date()` y no `Date.now()` comparado con un string: `due_date` llega acá
+ * ya convertido a `Date` por `pg`. Comparar contra "hoy" y no contra el
+ * `now()` de Postgres es aceptable porque el umbral es de DÍAS, no de
+ * minutos — a diferencia de `stuck`, un desfasaje de reloj de unos segundos
+ * nunca mueve una tarea de bucket.
+ */
+function deriveTaskState(row: TaskRow): MaintenanceTaskState {
+  if (row.performed_at) return 'done'
+  if (!row.due_date) return 'undated'
+  const due = row.due_date instanceof Date ? row.due_date : new Date(row.due_date)
+  return due.getTime() < Date.now() ? 'overdue' : 'pending'
 }
 
 /**
@@ -489,4 +709,144 @@ function mapCensus(row: CensusRow | null): UserCensus {
     feedback: n('feedback'),
     reviewedApplications: n('reviewed_applications'),
   }
+}
+
+// ── Resumen por vehículo, para el toggle del listado ────────────────────────
+
+interface VehicleSummaryRow {
+  id: string
+  plate: string
+  alias: string | null
+  archived: boolean
+  brand: string
+  model: string
+  year: number | string
+  vtv_expires_at: Date | string | null
+  diagnostic_chat_count: number | string
+  tax_debt_query_status: string | null
+  tax_debt_query_at: Date | string | null
+  insurance_expires_at: Date | string | null
+  scans_ok: number | string
+  scans_total: number | string
+  active_dtc_count: number | string | null
+  last_dtc_scan_at: Date | string | null
+  past_tasks_count: number | string
+  pending_tasks_count: number | string
+  active_anomaly_count: number | string | null
+  last_telemetry_analysis_at: Date | string | null
+}
+
+/**
+ * El "qué está haciendo" por auto, para el toggle de cada fila en `/usuarios`.
+ *
+ * A propósito NO vive en `findUserDetail`: es una consulta cara (dos LEFT JOIN
+ * más ocho subconsultas por vehículo) que sólo tiene sentido pedir cuando un
+ * operador abre esa fila puntual — no en el `loader` del listado, que puede
+ * traer 500 usuarios, ni en la ficha, que ya tiene su propia noción de
+ * "vehículo" (`UserVehicle`, trámites) y no necesita ésta también.
+ *
+ * `lds` y la subconsulta de `dta` son LEFT JOIN y no subconsultas escalares
+ * —única excepción al estilo del resto del archivo—, y es a propósito: los
+ * dos son 1:1 garantizados (`vehicle_last_dtc_scans` tiene PK `vehicle_id`; la
+ * subconsulta de `dta` elige un único `id`), así que no hay riesgo de
+ * fan-out, y unirlos evita repetir la misma subconsulta dos veces para sacar
+ * "el estado" y "cuándo" del mismo evento.
+ */
+export async function listUserVehicleSummaries(
+  userId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<UserVehicleSummary>> {
+  void opts.signal
+
+  const rows = await sql<VehicleSummaryRow>(
+    `select
+       v.id, v.plate, v.alias, v.archived,
+       vc.brand, vc.model, vc.year,
+
+       -- VTV: el documento (vehicle_inspections), no la consulta al proveedor.
+       (select vi.expiration_date from vehicle_inspections vi where vi.vehicle_id = v.id
+          order by vi.archived asc, vi.created_at desc limit 1) as vtv_expires_at,
+
+       -- Chats de IA de diagnóstico: conversations cuelga del vehículo directo.
+       (select count(*)::int from conversations c where c.vehicle_id = v.id) as diagnostic_chat_count,
+
+       -- Deuda de patente: la consulta (vehicle_data_queries, módulo tax_debt),
+       -- la más reciente sin filtrar por estado — mismo criterio que VTV en
+       -- findUserDetail.
+       (select q.status::text from vehicle_data_queries q
+          where q.vehicle_id = v.id and 'tax_debt' = any(q.requested_modules)
+          order by q.created_at desc limit 1) as tax_debt_query_status,
+       (select coalesce(q.completed_at, q.created_at) from vehicle_data_queries q
+          where q.vehicle_id = v.id and 'tax_debt' = any(q.requested_modules)
+          order by q.created_at desc limit 1) as tax_debt_query_at,
+
+       -- Seguro: el documento, no la consulta.
+       (select i.expiration_date from insurances i where i.vehicle_id = v.id
+          order by i.archived asc, i.created_at desc limit 1) as insurance_expires_at,
+
+       -- Escaneos: mismo predicado "sirvió" que en TODO el resto del repo —
+       -- completed y con al menos una lectura.
+       (select count(*) filter (
+                 where d.status::text = 'completed' and coalesce(d.total_readings, 0) > 0)::int
+          from driving_sessions d where d.vehicle_id = v.id) as scans_ok,
+       (select count(*)::int from driving_sessions d where d.vehicle_id = v.id) as scans_total,
+
+       -- DTCs "activos": los del ÚLTIMO escaneo. Se chequea lds.vehicle_id
+       -- (y no session_id) porque es la columna de la FK del join: es la
+       -- que dice de forma inequívoca "no hubo fila", nunca un dato del
+       -- dominio que casualmente sea null.
+       case when lds.vehicle_id is null then null
+            else (select count(*)::int from diagnostic_dtcs dd where dd.session_id = lds.session_id)
+       end as active_dtc_count,
+       lds.scanned_at as last_dtc_scan_at,
+
+       -- Tareas: hechas vs. sin hacer, de este auto.
+       (select count(*)::int from maintenance_occurrences o
+          where o.vehicle_id = v.id and o.performed_at is not null) as past_tasks_count,
+       (select count(*)::int from maintenance_occurrences o
+          where o.vehicle_id = v.id and o.performed_at is null) as pending_tasks_count,
+
+       -- Anomalías "activas": el tamaño del array del análisis de telemetría
+       -- MÁS RECIENTE. jsonb_array_length(null) da null en Postgres, así que
+       -- "nunca se analizó" sale gratis del LEFT JOIN sin un CASE aparte.
+       jsonb_array_length(dta.anomalies) as active_anomaly_count,
+       dta.created_at as last_telemetry_analysis_at
+
+     from vehicles v
+     join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+     join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
+     left join vehicle_last_dtc_scans lds on lds.vehicle_id = v.id
+     left join driving_telemetry_analysis dta on dta.id = (
+       select a.id from driving_telemetry_analysis a
+        where a.vehicle_id = v.id order by a.created_at desc limit 1
+     )
+     where v.user_id = $1
+     order by v.archived, v.created_at desc`,
+    [userId],
+  )
+
+  return rows.map(
+    (r): UserVehicleSummary => ({
+      id: r.id,
+      plate: r.plate,
+      alias: r.alias,
+      archived: r.archived,
+      brand: r.brand,
+      model: r.model,
+      year: toInt(r.year),
+      vtvExpiresAt: toIso(r.vtv_expires_at),
+      diagnosticChatCount: toInt(r.diagnostic_chat_count),
+      taxDebtQueryStatus: r.tax_debt_query_status,
+      taxDebtQueryAt: toIso(r.tax_debt_query_at),
+      insuranceExpiresAt: toIso(r.insurance_expires_at),
+      scansOk: toInt(r.scans_ok),
+      scansTotal: toInt(r.scans_total),
+      activeDtcCount: toIntOrNull(r.active_dtc_count),
+      lastDtcScanAt: toIso(r.last_dtc_scan_at),
+      pastTasksCount: toInt(r.past_tasks_count),
+      pendingTasksCount: toInt(r.pending_tasks_count),
+      activeAnomalyCount: toIntOrNull(r.active_anomaly_count),
+      lastTelemetryAnalysisAt: toIso(r.last_telemetry_analysis_at),
+    }),
+  )
 }
