@@ -2,6 +2,7 @@ import { Link, Outlet, createFileRoute, redirect } from '@tanstack/react-router'
 import { SignOutButton } from '@clerk/tanstack-react-start'
 import {
   Activity,
+  BookOpen,
   Coins,
   Handshake,
   Inbox,
@@ -83,6 +84,18 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * administra, si administra alguno.
    */
   { to: '/usuarios', label: 'Usuarios', icon: Users },
+  /**
+   * `Catálogo` cierra el bloque de dominio, y va último de ese bloque porque es
+   * el único que NO es marketplace: es `vehicle-management`, el bounded context
+   * de los vehículos. Las cuatro de arriba cubren el recorrido taller ↔ usuario;
+   * ésta cubre el auto.
+   *
+   * Es también la ÚNICA pantalla del panel cuyas escrituras no son SQL: sube
+   * PDFs por HTTP contra el backend hex, porque el archivo va a DigitalOcean
+   * Spaces y ninguna cantidad de SQL lo pone ahí.
+   * → `.claude/rules/vehicle-manuals.md`
+   */
+  { to: '/catalogo', label: 'Catálogo', icon: BookOpen },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son

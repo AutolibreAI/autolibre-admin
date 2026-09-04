@@ -41,6 +41,19 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 > `.claude/rules/ops-write-actions.md`. **Antes de escribir un SP nuevo hay que verificar que el
 > backend realmente no tenga el camino** — la excepción se gana con un `grep`, no se asume.
 
+> **El 2026-09-04 ese `grep` dio POSITIVO por primera vez, y el resultado es el opuesto.** Para
+> cargar el manual de un vehículo el backend SÍ tiene el camino: existe el bounded context entero
+> `vehicle-management/vehicle-catalog-manual`, con `POST /vehicle-catalog-manuals` bajo `AdminGuard`
+> y `POST /files` para el archivo. Así que ahí **no** se escribe un SP: el panel llama al endpoint
+> por HTTP, con el token de Clerk del admin logueado (misma instancia de Clerk, el token sirve tal
+> cual).
+>
+> Y aunque el backend no lo tuviera, un SP tampoco alcanzaría: **el PDF va a DigitalOcean Spaces**,
+> y ninguna cantidad de SQL pone un archivo en un bucket.
+>
+> Eso hace de `/catalogo` la ÚNICA pantalla del panel cuyas escrituras no son SQL, y el único
+> consumidor HTTP del backend. → `.claude/rules/vehicle-manuals.md`
+
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
 > El que manda es el `-hex`. Si una ruta te lleva al otro, estás mirando el lugar equivocado.
 
@@ -76,6 +89,18 @@ el schema a producción. → `.claude/rules/ai-costs.md`
 **`pnpm db:migrate` migra SOLO `ops`**, el schema que este panel posee. `public` es del backend y lo
 migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.schema_migrations` es
 **por base**: aplicar en desarrollo no aplica en producción. → `.claude/rules/ai-costs.md`
+
+### Variables de entorno
+
+| Var | Para qué | Si falta |
+|---|---|---|
+| `POSTGRES_DATABASE_URL` | Todo el SQL del panel | Falla en la primera consulta, no al arrancar |
+| `AUTOLIBRE_BACKEND_URL` | Subir manuales al backend hex. **Con el prefijo `/api/v1` incluido** | En dev usa `http://localhost:3005/api/v1`; en producción **falla** — adivinar una URL de producción es peor que fallar |
+
+Las dos fallan en el **primer uso**, nunca al cargar el módulo. En Vercel el entry serverless
+importa todos los handlers de ruta por adelantado, así que un `throw` en scope de módulo se lleva
+puesto el cold start entero — incluidas `/login` y `/api/health`, las únicas superficies que podían
+decirte qué falta. → `src/server/db.ts`
 
 Consultar la base (solo lectura, desde la raíz del repo):
 
@@ -134,6 +159,7 @@ src/
 │   └── middleware.ts        # request/function middleware (sesión, roles)
 ├── server/                  # SERVER-ONLY. Acceso a datos y secretos.
 │   ├── db.ts                #   pool de pg — todo el SQL pasa por acá
+│   ├── backend.ts           #   el ÚNICO cliente HTTP al backend hex (manuales)
 │   └── session.ts           #   Clerk (quién) + users.role (qué puede)
 ├── lib/                     # Contratos compartidos: types, schemas de search, format, cn
 ├── components/
@@ -157,6 +183,8 @@ pantalla no va todavía.
 | `/leads` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
 | `/usuarios` | `true` | El `select * from users where email ilike '%…%'` de cada reclamo de soporte, más las dos columnas que no están en él: cuántos vehículos tiene y cuándo fue su última señal de vida |
 | `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
+| `/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra 83 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
+| `/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
 | `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
 | `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
 | `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
@@ -217,6 +245,33 @@ Lo que esto **no** habilita:
   telemetría (129) no graban ningún dato de consumo, y eso no se arregla desde este repo.
 
 → `.claude/rules/ai-costs.md`
+
+### 4. Los manuales de vehículos se cargan por HTTP contra el backend hex
+
+**Decidido el 2026-09-04.** Es la excepción a la decisión 1 (*"el panel habla con Postgres directo"*)
+y la única que hay. Dos motivos, y cualquiera de los dos alcanza:
+
+1. **El PDF va a DigitalOcean Spaces, no a Postgres.** El panel no tiene ese adapter, ni las
+   credenciales, ni el sniffing de magic bytes con el que el backend rechaza un `.zip` renombrado a
+   `.pdf`. Ninguna cantidad de SQL sube un archivo a un bucket.
+2. **El backend ya tiene el camino completo**, a diferencia de partners y leads: el bounded context
+   `vehicle-management/vehicle-catalog-manual` existe entero, con `POST /vehicle-catalog-manuals`
+   bajo `AdminGuard` y `POST /files` para el archivo.
+
+El acceso vive en `src/server/backend.ts` (server-only, igual que `db.ts`). Autentica con el session
+token de Clerk del admin logueado — misma instancia de Clerk que la app, sin JWT template.
+
+Lo que esto **no** habilita:
+
+- **Ninguna cuenta de servicio.** La request va con la identidad del admin real, así que
+  `files.user_id` queda a su nombre. Es la única auditoría que hay de quién subió cada manual —
+  mismo criterio que `p_actor_id` en los SP de `ops`.
+- **Ningún `INSERT INTO vehicle_catalog_manuals` desde el panel.** Si aparece uno, está mal: sería
+  una fila apuntando a un `file_id` que el panel no puede crear, o un manual sin PDF.
+- **No resuelve la descarga entre admins.** `GET /files/:id/url` está acotado al DUEÑO del archivo,
+  así que el admin que subió es el único que puede bajarlo. No se arregla desde este repo.
+
+→ `.claude/rules/vehicle-manuals.md`
 
 ## ⚠ Riesgo abierto: admins `native` heredados
 
@@ -350,6 +405,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
+| `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, el flujo de dos llamadas HTTP que no es atómico, el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, límite de 10MB, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
 
 ## Cómo mantener esto vivo
 
