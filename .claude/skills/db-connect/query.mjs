@@ -64,7 +64,7 @@ if (!process.env.POSTGRES_DATABASE_URL) {
 }
 
 const pool = new pg.Pool({
-  connectionString: process.env.POSTGRES_DATABASE_URL,
+  connectionString: process.env.POSTGRES_DATABASE_URL_PROD,
 });
 
 try {
