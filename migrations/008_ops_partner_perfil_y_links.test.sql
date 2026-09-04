@@ -50,123 +50,20 @@ RETURNS void LANGUAGE sql AS $$
 $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- set_partner_profile
+-- set_partner_profile: sus pruebas viven en la 009.
+--
+-- La 009 le agregó `p_name`, y agregar un parámetro no reemplaza una función:
+-- crea una sobrecarga. Por eso esa migración hace DROP + CREATE, y por eso la
+-- firma de 6 argumentos que estas pruebas usaban ya no existe.
+--
+-- No se actualizaron acá: se movieron. Las mismas aserciones en dos suites
+-- obligan a mantener las dos sincronizadas, y la que se olvide falla por
+-- razones que no tienen que ver con el código.
+--
+--   → migrations/009_ops_partner_nombre.test.sql
+--
+-- Esta suite se queda con `set_partner_links`, que sigue siendo de la 008.
 -- ═══════════════════════════════════════════════════════════════════════════
-
-DO $$
-DECLARE
-  v_partner uuid;
-  v_actor   uuid;
-  v_row     partners%ROWTYPE;
-  v_log     ops.action_log%ROWTYPE;
-  v_msg     text;
-BEGIN
-  SELECT partner_id, actor_id INTO v_partner, v_actor FROM t_fix;
-
-  -- 1. El camino feliz: los tres campos cambian.
-  PERFORM ops.set_partner_profile(v_partner, v_actor, 'Zona nueva', 'Texto nuevo', 'founding');
-  SELECT * INTO v_row FROM partners WHERE id = v_partner;
-  PERFORM pg_temp.check('01 perfil: zona actualizada',        v_row.coverage_zone = 'Zona nueva', v_row.coverage_zone);
-  PERFORM pg_temp.check('02 perfil: descripción actualizada', v_row.description   = 'Texto nuevo', v_row.description);
-  PERFORM pg_temp.check('03 perfil: tier actualizado',        v_row.tier::text    = 'founding',    v_row.tier::text);
-
-  /**
-   * 2. Guardrail 8: la función NO escribe `updated_at` a mano.
-   *
-   * ── POR QUÉ NO SE COMPARA `updated_at > created_at` ───────────────────────
-   *
-   * Porque no se puede, y la primera versión de esta prueba lo intentaba y
-   * fallaba: `trg_partners_updated_at` llama a `set_updated_at()`, que usa
-   * `now()` — y `now()` es el instante en que arrancó la TRANSACCIÓN, no el de
-   * la sentencia. Adentro de una sola transacción, el `created_at` del INSERT y
-   * el `updated_at` del trigger reciben el MISMO valor, así que `>` es falso
-   * por construcción y no dice nada sobre el trigger.
-   *
-   * (`clock_timestamp()` sí avanza, pero el trigger es del backend y no se
-   * cambia desde este repo para que una prueba nuestra sea más cómoda.)
-   *
-   * Se verifica el guardrail DIRECTAMENTE: que el cuerpo de la función no
-   * asigne la columna. Es mejor prueba que la comparación de timestamps —
-   * aquella pasaba igual si la función escribía `updated_at` a mano, que es
-   * exactamente la duplicación que el guardrail existe para prevenir.
-   */
-  PERFORM pg_temp.check(
-    '04 perfil: el SP no escribe updated_at a mano',
-    pg_get_functiondef('ops.set_partner_profile(uuid,uuid,text,text,text,text)'::regprocedure)
-      !~* 'updated_at[[:space:]]*=',
-    'guardrail 8: lo pone trg_partners_updated_at');
-
-  -- 3. La descripción vacía BORRA (la columna es nullable).
-  PERFORM ops.set_partner_profile(v_partner, v_actor, 'Zona nueva', '   ', 'founding');
-  SELECT * INTO v_row FROM partners WHERE id = v_partner;
-  PERFORM pg_temp.check('05 perfil: descripción vacía → NULL', v_row.description IS NULL,
-                        coalesce(v_row.description, '(null)'));
-
-  -- 4. La zona vacía NO borra: rechaza. La columna es NOT NULL.
-  BEGIN
-    PERFORM ops.set_partner_profile(v_partner, v_actor, '  ', 'x', 'standard');
-    PERFORM pg_temp.check('06 perfil: zona vacía rechazada', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('06 perfil: zona vacía rechazada',
-                          v_msg LIKE 'COVERAGE_ZONE_REQUIRED%', v_msg);
-  END;
-
-  -- 5. Un tier fuera del enum rebota con sentinela propia, no con el error
-  --    crudo del cast de Postgres.
-  BEGIN
-    PERFORM ops.set_partner_profile(v_partner, v_actor, 'Zona nueva', 'x', 'platinum');
-    PERFORM pg_temp.check('07 perfil: tier inválido rechazado', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('07 perfil: tier inválido rechazado',
-                          v_msg LIKE 'INVALID_TIER%', v_msg);
-  END;
-
-  -- 6. Un partner inexistente.
-  BEGIN
-    PERFORM ops.set_partner_profile(gen_random_uuid(), v_actor, 'z', 'x', 'standard');
-    PERFORM pg_temp.check('08 perfil: partner inexistente', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('08 perfil: partner inexistente',
-                          v_msg LIKE 'PARTNER_NOT_FOUND%', v_msg);
-  END;
-
-  -- 7. Un actor que no existe en `users`.
-  BEGIN
-    PERFORM ops.set_partner_profile(v_partner, gen_random_uuid(), 'z', 'x', 'standard');
-    PERFORM pg_temp.check('09 perfil: actor inexistente', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('09 perfil: actor inexistente',
-                          v_msg LIKE 'ACTOR_NOT_FOUND%', v_msg);
-  END;
-
-  -- 8. Actor NULL.
-  BEGIN
-    PERFORM ops.set_partner_profile(v_partner, NULL, 'z', 'x', 'standard');
-    PERFORM pg_temp.check('10 perfil: actor NULL', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('10 perfil: actor NULL', v_msg LIKE 'ACTOR_REQUIRED%', v_msg);
-  END;
-
-  -- 9. La auditoría guarda before Y after completos, no un delta.
-  SELECT * INTO v_log FROM ops.action_log
-   WHERE target_id = v_partner AND action = 'partner.set_profile'
-   ORDER BY created_at LIMIT 1;
-  PERFORM pg_temp.check('11 perfil: log con before',  v_log.before ? 'coverage_zone',
-                        coalesce(v_log.before::text, '(null)'));
-  PERFORM pg_temp.check('12 perfil: log con after',   v_log.after  ? 'coverage_zone',
-                        coalesce(v_log.after::text, '(null)'));
-  PERFORM pg_temp.check('13 perfil: log registra el cambio real',
-                        v_log.before ->> 'coverage_zone' = 'Zona original'
-                    AND v_log.after  ->> 'coverage_zone' = 'Zona nueva',
-                        (v_log.before ->> 'coverage_zone') || ' → ' || (v_log.after ->> 'coverage_zone'));
-  PERFORM pg_temp.check('14 perfil: log con el actor de la sesión',
-                        v_log.actor_id = v_actor, v_log.actor_id::text);
-END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- set_partner_links
@@ -363,16 +260,9 @@ DECLARE
 BEGIN
   SELECT partner_id, actor_id INTO v_partner, v_actor FROM t_fix;
 
-  SELECT ops.set_partner_profile(
-    p_partner_id    => v_partner,
-    p_actor_id      => v_actor,
-    p_coverage_zone => 'Integración',
-    p_description   => 'desde el repo',
-    p_tier          => 'standard'
-  ) INTO v_out;
-  PERFORM pg_temp.check('30 integración: set_partner_profile devuelve la fila',
-                        v_out ->> 'coverage_zone' = 'Integración', v_out::text);
-
+  -- La integración de `set_partner_profile` también se mudó a la 009: su firma
+  -- cambió ahí, y el SQL de parámetros nombrados que manda el repo es
+  -- justamente lo que esa migración tuvo que cuidar.
   SELECT ops.set_partner_links(
     p_partner_id => v_partner,
     p_actor_id   => v_actor,

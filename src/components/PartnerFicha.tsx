@@ -92,6 +92,8 @@ function readableError(cause: unknown): string {
   if (raw.includes('PARTNER_NOT_FOUND')) return 'Este partner ya no existe. Recargá la pantalla.'
 
   // ── Migración 008 ──
+  if (raw.includes('NAME_REQUIRED'))
+    return 'El nombre no puede quedar vacio: la columna es NOT NULL en el backend.'
   if (raw.includes('COVERAGE_ZONE_REQUIRED'))
     return 'La zona de cobertura no puede quedar vacía: la columna es NOT NULL en el backend.'
   if (raw.includes('INVALID_TIER'))
@@ -402,6 +404,7 @@ function ContactCard({ partner }: { partner: Partner }) {
  */
 function ProfileCard({ partner }: { partner: Partner }) {
   const { busy, error, saved, run } = useAction()
+  const [name, setName] = useState(partner.name)
   const [coverageZone, setCoverageZone] = useState(partner.coverageZone)
   const [description, setDescription] = useState(partner.description ?? '')
   const [tier, setTier] = useState<PartnerTier>(
@@ -416,6 +419,7 @@ function ProfileCard({ partner }: { partner: Partner }) {
   const length = description.trim().length
   const overIdeal = length > DESCRIPTION_IDEAL_LENGTH
   const emptyZone = coverageZone.trim() === ''
+  const emptyName = name.trim() === ''
 
   return (
     <Card>
@@ -429,11 +433,52 @@ function ProfileCard({ partner }: { partner: Partner }) {
             e.preventDefault()
             void run(() =>
               setPartnerProfileFn({
-                data: { partnerId: partner.id, coverageZone, description, tier },
+                data: { partnerId: partner.id, name, coverageZone, description, tier },
               }),
             )
           }}
         >
+          <div className="space-y-1">
+            <label htmlFor="name" className="block text-xs text-muted-foreground">
+              Nombre
+            </label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(e) => {
+                const value = e.currentTarget.value
+                setName(value)
+              }}
+              placeholder="Taller San Martín"
+              className="text-xs"
+              aria-invalid={emptyName}
+              autoComplete="off"
+            />
+            {emptyName ? (
+              <p className="text-xs text-destructive">
+                No puede quedar vacío: la columna es NOT NULL en el schema del backend.
+              </p>
+            ) : null}
+            {/*
+              Se AVISA, no se impide, y el aviso refleja el nombre GUARDADO —
+              no el que se está tipeando. `partners.name` no tiene índice único,
+              así que un duplicado es representable y el stored procedure a
+              propósito no lo rechaza: eso es regla de negocio.
+
+              Mismo criterio que el aviso de "sin forma de contacto" de la
+              tarjeta de Contacto. Si el equipo quiere que sea imposible, el
+              lugar es acá, donde cambiar de opinión no cuesta una migración.
+            */}
+            {partner.nameCollisions > 0 ? (
+              <p className="text-xs leading-relaxed text-status-yellow">
+                Hay {partner.nameCollisions}{' '}
+                {partner.nameCollisions === 1 ? 'partner más' : 'partners más'} con este mismo
+                nombre. En el marketplace el usuario ve dos entradas idénticas y no puede
+                distinguirlas.
+              </p>
+            ) : null}
+          </div>
+
           <div className="space-y-1">
             <label htmlFor="coverageZone" className="block text-xs text-muted-foreground">
               Zona de cobertura
@@ -532,7 +577,7 @@ function ProfileCard({ partner }: { partner: Partner }) {
             </p>
           </div>
 
-          <Button type="submit" size="sm" disabled={busy || emptyZone} className="gap-1.5">
+          <Button type="submit" size="sm" disabled={busy || emptyZone || emptyName} className="gap-1.5">
             <Save className="size-3.5" aria-hidden />
             {busy ? 'Guardando…' : 'Guardar perfil'}
           </Button>

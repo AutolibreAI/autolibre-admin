@@ -591,6 +591,7 @@ export async function getPartnerServices(
     latitude: number | null
     longitude: number | null
     links: Array<PartnerLink> | null
+    name_collisions: number | string
   }>(
     /**
      * Los links vienen por SUBCONSULTA, no por `LEFT JOIN` + `group by`.
@@ -613,7 +614,23 @@ export async function getPartnerServices(
                                 ORDER BY l.kind::text, l.url),
                       '[]'::jsonb)
                FROM partner_links l
-              WHERE l.partner_id = p.id) AS links
+              WHERE l.partner_id = p.id) AS links,
+            -- Otros partners con el MISMO nombre.
+            --
+            -- partners.name no tiene índice único, así que un duplicado es
+            -- representable y ops.set_partner_profile no lo rechaza. Este
+            -- contador es lo que permite avisar en la ficha.
+            --
+            -- Se normaliza con lower(btrim(...)) de los dos lados: "Taller
+            -- Norte" y "taller norte " son el mismo taller para un usuario que
+            -- lee la lista, y una comparación exacta no los vería.
+            --
+            -- (Comentario SQL y no JSDoc: esto vive ADENTRO del template
+            -- literal, donde un backtick cierra el string. Ese fue el error.)
+            (SELECT count(*)::int
+               FROM partners o
+              WHERE o.id <> p.id
+                AND lower(btrim(o.name)) = lower(btrim(p.name))) AS name_collisions
        FROM partners p
        LEFT JOIN partner_applications a ON a.id = p.application_id
       WHERE p.id = $1`,
@@ -696,6 +713,9 @@ export async function getPartnerServices(
       // `coalesce(..., '[]')` en el SQL garantiza el array; el `?? []` cubre el
       // caso de que alguien saque ese coalesce y no toque este archivo.
       links: partner.links ?? [],
+      // `count(*)::int` ya viene como number desde `pg`; el cast es la red doble
+      // que este repo usa en todos lados, por si el `::int` se cae del SQL.
+      nameCollisions: Number(partner.name_collisions ?? 0),
     },
     families,
     assignedServiceIds: assigned.map((a) => a.service_id),
@@ -922,6 +942,7 @@ export async function setPartnerContact(
 export async function setPartnerProfile(
   input: {
     partnerId: string
+    name: string
     coverageZone: string
     description: string
     tier: string
@@ -932,14 +953,30 @@ export async function setPartnerProfile(
   void opts.signal
 
   const row = await sqlOne<{ p: PartnerJson }>(
+    /**
+     * La llamada va por parámetros NOMBRADOS, y con la 009 eso pasó de ser
+     * cómodo a ser el motivo por el que esa migración hace `DROP` + `CREATE` en
+     * vez de un `CREATE OR REPLACE`: agregarle un parámetro a una función crea
+     * una SOBRECARGA, y con las dos firmas vivas una llamada nombrada puede
+     * matchear las dos. Postgres responde `function ... is not unique`, en
+     * runtime y en el primer guardado de un operador.
+     */
     `SELECT ops.set_partner_profile(
        p_partner_id    => $1,
        p_actor_id      => $2,
-       p_coverage_zone => $3,
-       p_description   => $4,
-       p_tier          => $5
+       p_name          => $3,
+       p_coverage_zone => $4,
+       p_description   => $5,
+       p_tier          => $6
      ) AS p`,
-    [input.partnerId, actorId, input.coverageZone, input.description, input.tier],
+    [
+      input.partnerId,
+      actorId,
+      input.name,
+      input.coverageZone,
+      input.description,
+      input.tier,
+    ],
   )
   if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
   return toWriteResult(row.p)

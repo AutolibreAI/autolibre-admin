@@ -45,6 +45,19 @@ export interface PartnerServicesView {
     coverageZone: string
     /** El texto de la tarjeta del marketplace. Ver `DESCRIPTION_IDEAL_LENGTH`. */
     description: string | null
+    /**
+     * Cuántos OTROS partners se llaman igual que éste.
+     *
+     * Existe porque `partners.name` no tiene índice único y el stored procedure
+     * deliberadamente no valida unicidad —eso es regla de negocio, y el SP
+     * valida representabilidad—. Este número es lo que permite que la ficha
+     * AVISE en vez de impedir, igual que el aviso de "sin forma de contacto".
+     *
+     * Se calcula al leer, así que refleja el nombre GUARDADO y no el que se
+     * está tipeando: el aviso aparece después de guardar, que es cuando el
+     * problema pasó a ser real.
+     */
+    nameCollisions: number
     /** La solicitud de origen, si vino por ahí (`source = 'application'`). */
     applicationId: string | null
     /** Lo que declaró en el formulario. Vacío para los de planilla o manuales. */
@@ -342,6 +355,19 @@ export function isMapsUrl(url: string): boolean {
  */
 export const setPartnerProfileSchema = z.object({
   partnerId: z.uuid(),
+  /**
+   * `partners.name` es NOT NULL, igual que `coverageZone`: vaciarlo no borra el
+   * dato, es un valor que la columna no puede representar.
+   *
+   * El techo de 120 es holgura sobre el máximo real (30 al 2026-09-04), no un
+   * requisito de diseño: la columna es `text` sin restricción, así que sin esto
+   * el único límite sería el de Postgres.
+   *
+   * **No se valida unicidad.** `partners.name` no tiene índice único, así que
+   * dos partners con el mismo nombre son REPRESENTABLES, y el SP a propósito no
+   * decide eso. La ficha avisa después de guardar.
+   */
+  name: z.string().trim().min(1, 'El nombre no puede quedar vacío.').max(120),
   coverageZone: z
     .string()
     .trim()

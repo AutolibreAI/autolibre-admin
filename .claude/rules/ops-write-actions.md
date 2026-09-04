@@ -270,3 +270,82 @@ sentinelas nuevas, que `updated_at` lo mueva el trigger, la conservación de `id
 link intacto, el upsert al cambiar una URL, el borrado por ausencia, la deduplicación de `other`, y
 que el log de links guarde links y no la fila del partner. Más 2 casos de integración con el SQL de
 parámetros nombrados exacto que manda el repo.
+
+---
+
+# Migración 009 — el nombre entra al perfil
+
+Alcance añadido: `migrations/009_ops_partner_nombre.sql` y su `.test.sql`.
+
+`ops.set_partner_profile` pasó a tomar `p_name`. Va adentro del perfil y no en un SP propio por el
+mismo criterio de la 008: el nombre es **cómo se presenta el partner en la tarjeta**, igual que la
+zona, la descripción y el tier. Se edita en la misma sentada.
+
+## ⚠ `CREATE OR REPLACE` no puede agregar un parámetro
+
+Es la trampa central de esta migración, y muerde en runtime y no al migrar.
+
+Postgres identifica una función por `(nombre, tipos de argumentos)`. Agregarle un parámetro **no la
+reemplaza: crea una SOBRECARGA**, y deja la vieja viva al lado. Con las dos existiendo, una llamada
+por parámetros nombrados —que es exactamente como llama `partners.repo.ts`— puede matchear las dos, y
+Postgres responde:
+
+```
+function ops.set_partner_profile(...) is not unique
+```
+
+Eso no aparece aplicando la migración. Aparece en el primer guardado de un operador.
+
+Por eso la 009 hace **`DROP FUNCTION` explícito con los tipos de la firma vieja** y recién después
+crea la nueva. Y por eso el primer caso de su suite —antes que cualquier prueba de comportamiento—
+verifica que exista **UNA sola** `ops.set_partner_profile` en `pg_proc`.
+
+**Regla para cualquier migración que le agregue un parámetro a un SP existente: DROP + CREATE, y una
+prueba que cuente las firmas.**
+
+## Un DROP + CREATE puede perder validaciones en silencio
+
+Reescribir una función entera es exactamente donde se cae un `IF` sin que nadie lo note: la migración
+pasa, el SP existe, y una validación que estaba dejó de estar.
+
+Por eso los casos 11, 12 y 13 de la suite de la 009 **re-verifican lo que ya probaba la 008** — zona
+vacía rechazada, tier inválido rechazado, descripción vacía que borra. No es duplicación por
+descuido: es la única forma de saber que la reescritura no se comió nada.
+
+## Las pruebas de perfil se MUDARON, no se copiaron
+
+La suite de la 008 llamaba a la firma de 6 argumentos y quedó rota al aplicar la 009. Se sacó ese
+bloque de ahí en vez de actualizarlo: las mismas aserciones en dos suites obligan a mantener las dos
+sincronizadas, y la que se olvide falla por razones que no tienen que ver con el código.
+
+`set_partner_profile` es de la 009. La 008 se quedó con `set_partner_links`.
+
+## El nombre no valida unicidad, y eso es a propósito
+
+`partners.name` **no tiene índice único** en el schema del backend, así que dos partners con el mismo
+nombre son representables. El SP valida representabilidad, no reglas de negocio.
+
+Lo que sí hace el panel: `getPartnerServices` devuelve `nameCollisions` —cuántos OTROS partners se
+llaman igual— y la ficha avisa. Es el mismo patrón que el aviso de "sin forma de contacto": se avisa,
+no se impide, y si el equipo lo quiere obligatorio el lugar es el formulario.
+
+La comparación es `lower(btrim(...))` de los dos lados: "Taller Norte" y "taller norte " son el mismo
+taller para quien lee la lista, y una comparación exacta no los vería.
+
+## Renombrar mueve al partner de lugar en el marketplace
+
+`idx_partners_active_tier_name` es `(tier, name) WHERE status = 'active'`. El nombre **es la clave de
+orden** del listado dentro de cada tier. No es un efecto colateral a corregir —así funciona el índice
+del backend— pero conviene saberlo antes de renombrar de "AA Taller" a "Zzz".
+
+Verificado: nada hace JOIN por nombre. `partner_applications.business_name` es una columna aparte y
+no se toca, así que renombrar el partner no renombra su solicitud de origen.
+
+## Un backtick adentro de un template literal cierra el string
+
+No es de la migración, es de `partners.repo.ts`, y costó un typecheck roto: el comentario que explica
+la subconsulta de `name_collisions` se escribió como JSDoc **adentro** del template literal del SQL, y
+cada `` ` `` de sus referencias a columnas terminaba el string.
+
+**Adentro de un template de SQL, los comentarios van con `--` y sin backticks.** Los JSDoc con
+backticks van AFUERA, antes del literal — que es donde están todos los demás de ese archivo.
