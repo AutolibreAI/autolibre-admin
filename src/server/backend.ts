@@ -52,15 +52,14 @@ import { auth } from '@clerk/tanstack-react-start/server'
 const DEFAULT_BASE_URL = 'http://localhost:3005/api/v1'
 
 /**
- * El timeout, y por qué es tan largo.
+ * Un solo timeout, y corto, porque por acá ya no viaja ningún archivo.
  *
- * Subir 10MB por una conexión de oficina argentina puede tardar bastante, y el
- * backend recién contesta cuando terminó de bufferizar, sniffear y empujar a
- * Spaces. Un timeout corto acá no protege de nada: corta subidas que iban bien
- * y deja el archivo a medio camino sin forma de saberlo.
+ * Cuando el panel proxeaba el PDF hacía falta un timeout de dos minutos. Ahora
+ * todas las llamadas de este módulo son JSON de pocos cientos de bytes: la
+ * transferencia grande la hace el navegador contra Spaces, con su propio
+ * tiempo y sin pasar por acá.
  */
-const UPLOAD_TIMEOUT_MS = 120_000
-const JSON_TIMEOUT_MS = 15_000
+const JSON_TIMEOUT_MS = 20_000
 
 /**
  * Falla en el PRIMER USO, nunca al cargar el módulo.
@@ -155,40 +154,86 @@ async function backendError(response: Response, what: string): Promise<Error> {
 }
 
 /**
- * Paso 1 — subir el PDF.
+ * Paso 1 — pedir la URL firmada. NO viaja el archivo.
  *
- * `POST /files` es multipart y devuelve `{ fileId }`. Sólo pide sesión, no
- * `AdminGuard`: el archivo no es del catálogo todavía, es de quien lo subió.
+ * ── Por qué el panel dejó de subir el PDF ───────────────────────────────────
  *
- * El `FormData` se arma acá y no se reenvía el del cliente a propósito. Un
- * passthrough del body original arrastraría los campos extra del formulario
- * (catalogId, version) al endpoint de archivos, que los ignora hoy y podría no
- * ignorarlos mañana.
+ * Porque no podía. El 2026-09-04 esta función mandaba el multipart a
+ * `POST /files` y producción devolvía `FUNCTION_PAYLOAD_TOO_LARGE`: Vercel
+ * corta el cuerpo de una Serverless Function en 4.5MB, límite de plataforma no
+ * configurable. El PDF ni siquiera llegaba al backend.
+ *
+ * Subir los límites no era el arreglo — un manual de 300 páginas tampoco
+ * entraba en los 10MB del backend. Lo que estaba mal era que el archivo pasara
+ * por un servidor nuestro. Ahora sólo viajan estos metadatos (un JSON de
+ * doscientos bytes) y el PDF va del navegador a Spaces, sin escalas.
+ *
+ * `sizeBytes` NO es informativo: el backend lo firma dentro de la URL como
+ * `ContentLength` exacto, así que un PUT de otro tamaño lo rechaza Spaces. Es
+ * lo que impide que una URL pedida para 6MB sirva para subir 5GB.
  */
-export async function uploadFile(file: File): Promise<string> {
+export async function requestUploadUrl(input: {
+  originalName: string
+  mimeType: string
+  sizeBytes: number
+}): Promise<{ fileId: string; uploadUrl: string }> {
   const token = await bearerToken()
-  const form = new FormData()
-  form.append('file', file, file.name)
 
-  const response = await fetch(`${baseUrl()}/files`, {
+  const response = await fetch(`${baseUrl()}/files/upload-url`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}` },
-    body: form,
-    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
   })
 
-  if (!response.ok) throw await backendError(response, 'La subida del archivo')
+  if (!response.ok) throw await backendError(response, 'El pedido de URL de subida')
 
-  const body = (await response.json()) as { fileId?: unknown }
+  const body = (await response.json()) as { fileId?: unknown; uploadUrl?: unknown }
 
-  if (typeof body.fileId !== 'string' || !body.fileId) {
-    // Un 2xx sin fileId es un contrato roto, no un error del operador. Se
-    // distingue del resto para que el día que pase no se confunda con un
-    // problema de permisos.
-    throw new Error('BACKEND_ERROR:200:El backend aceptó el archivo pero no devolvió su id')
+  if (typeof body.fileId !== 'string' || typeof body.uploadUrl !== 'string') {
+    throw new Error('BACKEND_ERROR:200:El backend no devolvió una URL de subida usable')
   }
 
-  return body.fileId
+  return { fileId: body.fileId, uploadUrl: body.uploadUrl }
+}
+
+/**
+ * Paso 3 — confirmar que el objeto llegó, y recién ahí registrarlo.
+ *
+ * Es el paso que hace ACEPTABLE la subida directa, no un trámite. El presigned
+ * PUT saltea `UploadFileHandler`, que era el único lugar del sistema donde se
+ * sniffeaban los magic bytes: sin este confirm, un `.zip` renombrado a `.pdf`
+ * entraría sin que nada lo note. El backend lee los primeros KB del objeto ya
+ * subido y exige lo mismo que exigía el otro camino.
+ *
+ * `originalName` y `mimeType` tienen que ser los MISMOS del paso 1: la key del
+ * objeto se deriva de `(fileId, originalName)` y entre los dos pasos el backend
+ * no guarda nada. Un nombre distinto apunta a una key que no existe y vuelve
+ * como 404.
+ *
+ * Es idempotente del lado del backend, así que reintentarlo es seguro.
+ */
+export async function confirmUpload(input: {
+  fileId: string
+  originalName: string
+  mimeType: string
+}): Promise<void> {
+  const token = await bearerToken()
+
+  const response = await fetch(`${baseUrl()}/files/confirm`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+  })
+
+  if (!response.ok) throw await backendError(response, 'La confirmación del archivo')
 }
 
 /**

@@ -29,20 +29,33 @@ import { z } from 'zod'
 
 // ── Espejos del backend ──────────────────────────────────────────────────────
 //
-// Estos tres valores están definidos del otro lado y se repiten acá para poder
-// rechazar antes del round trip. Son ESPEJOS, no la autoridad: el backend
-// vuelve a validar los tres y su chequeo es el que no se puede saltear.
+// Valores definidos del otro lado, repetidos acá para poder rechazar antes del
+// round trip. Son ESPEJOS, no la autoridad: el backend vuelve a validarlos y su
+// chequeo es el que no se puede saltear.
 
 /**
- * `MAX_UPLOAD_FILE_SIZE_BYTES` en
- * `autolibre-backend-hex/src/shared/infrastructure/bootstrap/upload-limits.ts`.
+ * `MAX_DIRECT_UPLOAD_FILE_SIZE_BYTES` en
+ * `autolibre-backend-hex/src/files/file/application/direct-upload.ts`.
  *
- * OJO CON ESTE NÚMERO: un manual de usuario en PDF suele pesar entre 5 y 30MB.
- * El límite lo aplica `@fastify/multipart` del lado del backend, así que un
- * manual de 15MB NO se puede subir y el arreglo es allá, no acá. Este chequeo
- * existe para que el operador se entere antes de esperar la subida entera.
+ * ── Por qué 100MB y no 10 ni 4.5 ────────────────────────────────────────────
+ *
+ * Porque el archivo ya no pasa por ningún servidor nuestro. El 2026-09-04 esta
+ * pantalla fallaba con `FUNCTION_PAYLOAD_TOO_LARGE`: Vercel corta el cuerpo de
+ * una Serverless Function en 4.5MB, límite de plataforma no configurable, y el
+ * PDF ni siquiera llegaba al backend. El backend, a su vez, cortaba en 10MB.
+ *
+ * Ninguno de los dos números servía para un manual de 300 páginas, y subirlos
+ * tampoco era el arreglo: **lo que estaba mal era proxear el archivo.** El
+ * panel ahora pide una URL firmada y el navegador sube DIRECTO a DigitalOcean
+ * Spaces, así que los dos techos desaparecieron y el único que queda es el que
+ * el backend decidió para ese flujo.
+ *
+ * Ese número existe igual, y no es burocracia: una URL de subida sin tope es
+ * una invitación a que cualquier usuario autenticado nos llene el bucket. El
+ * backend además lo firma DENTRO de la URL como `ContentLength` exacto, así que
+ * un PUT de otro tamaño lo rechaza Spaces.
  */
-export const MAX_MANUAL_FILE_SIZE_BYTES = 10 * 1024 * 1024
+export const MAX_MANUAL_FILE_SIZE_BYTES = 100 * 1024 * 1024
 
 export const MAX_MANUAL_FILE_SIZE_MB = MAX_MANUAL_FILE_SIZE_BYTES / 1024 / 1024
 

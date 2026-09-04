@@ -264,10 +264,23 @@ y la única que hay. Dos motivos, y cualquiera de los dos alcanza:
    `.pdf`. Ninguna cantidad de SQL sube un archivo a un bucket.
 2. **El backend ya tiene el camino completo**, a diferencia de partners y leads: el bounded context
    `vehicle-management/vehicle-catalog-manual` existe entero, con `POST /vehicle-catalog-manuals`
-   bajo `AdminGuard` y `POST /files` para el archivo.
+   bajo `AdminGuard`.
 
 El acceso vive en `src/server/backend.ts` (server-only, igual que `db.ts`). Autentica con el session
 token de Clerk del admin logueado — misma instancia de Clerk que la app, sin JWT template.
+
+> **Corregido el 2026-09-04, después de que fallara en producción.** El panel PROXEABA el PDF a
+> `POST /files` y Vercel lo cortaba: sus Serverless Functions limitan el cuerpo de una request a
+> **4.5MB**, y es de plataforma — no se configura. Un manual de 300 páginas no llegaba ni al
+> backend, y subir el límite de 10MB del backend tampoco lo habría arreglado.
+>
+> **El archivo ya no pasa por ningún servidor nuestro.** Se implementó subida directa (presigned
+> PUT) en los dos repos: el panel pide una URL firmada, el NAVEGADOR sube a DigitalOcean Spaces, y
+> recién después el backend confirma el objeto —verificando sus magic bytes, que la subida directa
+> saltearía— y crea la fila. Son cuatro llamadas y sólo el PDF queda fuera de Vercel.
+>
+> Requiere **CORS en el bucket de Spaces**, que es configuración de DigitalOcean y no está
+> versionada en ningún repo. → `.claude/rules/vehicle-manuals.md`
 
 Lo que esto **no** habilita:
 
@@ -448,8 +461,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
-| `scanner-compatibility.md` | La matriz escáner ↔ vehículo: por qué una celda vacía es "no se probó" y nunca "no funciona", por qué `count(distinct)` necesita `GROUPING SETS`, y las dos cosas que faltan del backend |
-| `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, el flujo de dos llamadas HTTP que no es atómico, el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, límite de 10MB, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
+| `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, la subida directa a Spaces en cuatro llamadas (y por qué proxear el archivo era el error), el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, el límite de plataforma que sólo aparece en producción, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
 
 ## Cómo mantener esto vivo
 
