@@ -141,7 +141,15 @@ export interface PipelineHealth {
 // ── Search params ────────────────────────────────────────────────────────────
 
 export const applicationSearchSchema = z.object({
-  /** Filtro por estado del embudo. */
+  /**
+   * Filtro por estado del embudo.
+   *
+   * Sin este param ("Todos") la cola excluye `discarded` — mismo criterio que
+   * `published`: es una cola de trabajo pendiente, y una descartada no es
+   * trabajo pendiente. La forma de verlas es elegir el chip `Descartado`
+   * explícitamente, que sigue funcionando como filtro exacto — no hizo falta
+   * agregar un control nuevo, el que ya existía alcanza como "desfiltrar".
+   */
   status: z.enum(APPLICATION_STATUSES).optional(),
 
   /**

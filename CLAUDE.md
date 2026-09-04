@@ -193,6 +193,8 @@ pantalla no va todavía.
 | `/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra 83 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
 | `/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
 | `/escaneres` | `true` | **La consulta que no se corría porque no se te ocurre**: con qué versión de auto —`TOYOTA COROLLA XEI 1.8 M/T 2013`, no "un Corolla"— funcionó cada escáner y con cuáles no. Cruza `driving_sessions` → `vehicles` → `vehicle_catalog_specs` → `vehicle_catalogs`, y separa los intentos que trajeron datos de los que engancharon y no trajeron nada. Lo que sí pasaba: contestar "¿le recomiendo este escáner a un Vento?" de memoria |
+| `/chats` | `true` | El `select * from conversations c join conversation_messages m on m.conversation_id = c.id where c.user_id = '…'` que hoy sería la única forma de ver de qué habló un usuario con el asistente — con lo que ese select no contesta solo: si es de diagnóstico o general (deriva de `vehicle_id`), con qué modelo, y cuántos mensajes mandó cada lado |
+| `/chats/:id` | `true` | El chat completo, en orden — hoy inexistente como pantalla, sólo reconstruible mensaje por mensaje en DBeaver |
 | `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
 | `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
 | `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
@@ -462,6 +464,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
 | `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, la subida directa a Spaces en cuatro llamadas (y por qué proxear el archivo era el error), el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, el límite de plataforma que sólo aparece en producción, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
+| `chats.md` | Chats de IA: por qué `type` y `title` no son columnas y cómo se derivan, por qué el modelo es texto libre y no un enum, por qué `q` va en el `where` de afuera, y las tres patas `LEFT` del join al vehículo |
 
 ## Cómo mantener esto vivo
 

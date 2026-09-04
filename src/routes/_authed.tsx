@@ -1,5 +1,10 @@
-import { Link, Outlet, createFileRoute, redirect } from '@tanstack/react-router'
-import { SignOutButton } from '@clerk/tanstack-react-start'
+import {
+  Link,
+  Outlet,
+  createFileRoute,
+  redirect,
+} from "@tanstack/react-router";
+import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
   BookOpen,
@@ -8,13 +13,14 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  MessageSquare,
   ScanLine,
   Store,
   Users,
   type LucideIcon,
-} from 'lucide-react'
-import { Button } from '~/components/ui/button'
-import { Separator } from '~/components/ui/separator'
+} from "lucide-react";
+import { Button } from "~/components/ui/button";
+import { Separator } from "~/components/ui/separator";
 
 /**
  * Pathless layout route (`_authed`) — contributes no URL segment, only the
@@ -27,7 +33,7 @@ import { Separator } from '~/components/ui/separator'
  *  - Brand green appears only on the active nav item. Everything else is the
  *    grey / Action-Dark base.
  */
-export const Route = createFileRoute('/_authed')({
+export const Route = createFileRoute("/_authed")({
   /**
    * TWO distinct rejections, and collapsing them into one would be a bug:
    *
@@ -42,21 +48,21 @@ export const Route = createFileRoute('/_authed')({
    */
   beforeLoad: ({ context, location }) => {
     if (!context.user) {
-      throw redirect({ to: '/login', search: { redirect: location.href } })
+      throw redirect({ to: "/login", search: { redirect: location.href } });
     }
-    if (context.user.role !== 'admin') {
-      throw redirect({ to: '/sin-acceso' })
+    if (context.user.role !== "admin") {
+      throw redirect({ to: "/sin-acceso" });
     }
     // Narrowing here means every child route sees `user` as a non-null admin.
-    return { user: context.user }
+    return { user: context.user };
   },
   component: AppShell,
-})
+});
 
 interface NavItem {
-  to: string
-  label: string
-  icon: LucideIcon
+  to: string;
+  label: string;
+  icon: LucideIcon;
 }
 
 /**
@@ -67,16 +73,16 @@ interface NavItem {
  * panel, the API and the database.
  */
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { to: '/dashboard', label: 'Inicio', icon: LayoutDashboard },
-  { to: '/solicitudes', label: 'Solicitudes', icon: Inbox },
-  { to: '/partners', label: 'Partners', icon: Store },
+  { to: "/dashboard", label: "Inicio", icon: LayoutDashboard },
+  { to: "/solicitudes", label: "Solicitudes", icon: Inbox },
+  { to: "/partners", label: "Partners", icon: Store },
   /**
    * `Leads` va después de `Partners` y no antes: es la dirección OPUESTA del
    * mismo contexto. `PartnerApplication` (Solicitudes) es el taller viniendo
    * hacia nosotros; `Lead` es el usuario yendo hacia el taller. Ponerlos
    * contiguos en el menú es lo que mantiene esa distinción a la vista.
    */
-  { to: '/leads', label: 'Leads', icon: Handshake },
+  { to: "/leads", label: "Leads", icon: Handshake },
   /**
    * `Usuarios` cierra el bloque de dominio y va después de `Leads` a propósito:
    * es el OTRO extremo del mismo marketplace. Un lead sale de un usuario y
@@ -84,7 +90,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * recorrido entero — y desde la ficha del usuario se salta al partner que
    * administra, si administra alguno.
    */
-  { to: '/usuarios', label: 'Usuarios', icon: Users },
+  { to: "/usuarios", label: "Usuarios", icon: Users },
   /**
    * `Catálogo` cierra el bloque de dominio, y va último de ese bloque porque es
    * el único que NO es marketplace: es `vehicle-management`, el bounded context
@@ -96,7 +102,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * Spaces y ninguna cantidad de SQL lo pone ahí.
    * → `.claude/rules/vehicle-manuals.md`
    */
-  { to: '/catalogo', label: 'Catálogo', icon: BookOpen },
+  { to: "/catalogo", label: "Catálogo", icon: BookOpen },
   /**
    * `Escáneres` va pegada a `Catálogo` porque comparte su eje vertical: las
    * filas de esa matriz SON los modelos del catálogo. Las dos contestan sobre
@@ -107,7 +113,16 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * tiene ni una acción — no hay nada que corregir en una sesión que ya pasó.
    * → `.claude/rules/scanner-compatibility.md`
    */
-  { to: '/escaneres', label: 'Escáneres', icon: ScanLine },
+  { to: "/escaneres", label: "Escáneres", icon: ScanLine },
+  /**
+   * `Chats de IA` es el último bloque de dominio y no encaja en ninguno de
+   * los dos de arriba: `conversations` cuelga de `assistant/`, un bounded
+   * context propio, no de `vehicle-management`. Va acá y no junto a
+   * `Usuarios` porque la pregunta no es "qué tiene este usuario" — eso ya
+   * está en su ficha — es "qué chats hay", con el usuario como una columna
+   * más.
+   */
+  { to: "/chats", label: "Chats de IA", icon: MessageSquare },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son
@@ -119,12 +134,12 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    *
    * `Costos de IA` vive entero en `ops` — el schema que este repo migra.
    */
-  { to: '/operacion', label: 'Operación', icon: Activity },
-  { to: '/ai-costos', label: 'Costos de IA', icon: Coins },
-]
+  { to: "/operacion", label: "Operación", icon: Activity },
+  { to: "/ai-costos", label: "Costos de IA", icon: Coins },
+];
 
 function AppShell() {
-  const { user } = Route.useRouteContext()
+  const { user } = Route.useRouteContext();
 
   return (
     <div className="flex min-h-screen">
@@ -142,7 +157,9 @@ function AppShell() {
             <div className="font-heading text-base font-bold tracking-tight text-foreground">
               Auto<span className="text-brand">Libre</span>
             </div>
-            <p className="text-xs text-muted-foreground max-md:hidden">Panel de administración</p>
+            <p className="text-xs text-muted-foreground max-md:hidden">
+              Panel de administración
+            </p>
           </div>
 
           <nav
@@ -153,13 +170,15 @@ function AppShell() {
               <Link
                 key={to}
                 to={to}
-                activeOptions={{ exact: to === '/dashboard' }}
+                activeOptions={{ exact: to === "/dashboard" }}
                 activeProps={{
-                  className: 'bg-sidebar-accent text-sidebar-accent-foreground font-medium',
-                  'aria-current': 'page',
+                  className:
+                    "bg-sidebar-accent text-sidebar-accent-foreground font-medium",
+                  "aria-current": "page",
                 }}
                 inactiveProps={{
-                  className: 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                  className:
+                    "text-muted-foreground hover:bg-secondary hover:text-foreground",
                 }}
                 className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors"
               >
@@ -173,7 +192,9 @@ function AppShell() {
         <div className="px-3 pb-5 max-md:p-0">
           <Separator className="mb-3 max-md:hidden" />
           <div className="px-2 max-md:px-0 max-md:text-right">
-            <div className="truncate text-sm font-medium text-foreground">{user.name}</div>
+            <div className="truncate text-sm font-medium text-foreground">
+              {user.name}
+            </div>
             <div className="mb-2 truncate text-xs text-muted-foreground max-md:mb-0">
               {user.email}
             </div>
@@ -196,5 +217,5 @@ function AppShell() {
         <Outlet />
       </main>
     </div>
-  )
+  );
 }
