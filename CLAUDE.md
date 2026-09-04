@@ -86,6 +86,13 @@ el único momento donde el panel puede aplicar sus migraciones. Migra **sólo en
 producción**: las previews también buildean, y sin esa compuerta una rama sin mergear le escribiría
 el schema a producción. → `.claude/rules/ai-costs.md`
 
+> **Pendiente abierto el 2026-09-04, y toca justo acá.** Ese `--on-deploy` migra contra el
+> `POSTGRES_DATABASE_URL` que tenga cargado el proyecto de Vercel, sea cual sea. Si esa
+> variable apunta al **pooler** (`:25061/autolibre-pool`), el `pg_advisory_lock` de sesión
+> del runner deja de proteger nada — ver la regla 2 más abajo. **Hay que verificar en el
+> dashboard de Vercel que la variable use el puerto directo `:25060`.** No se puede
+> verificar desde este repo.
+
 **`pnpm db:migrate` migra SOLO `ops`**, el schema que este panel posee. `public` es del backend y lo
 migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.schema_migrations` es
 **por base**: aplicar en desarrollo no aplica en producción. → `.claude/rules/ai-costs.md`
@@ -355,31 +362,66 @@ Dos conclusiones, y son opuestas entre sí:
    usuarios reales — pero es la data contra la que se prueba el panel, así que toda pantalla tiene
    que sobrevivir a 876 admins sin romperse ni mentir.
 
-#### Cómo se distinguen los dos destinos
+#### Cómo se distinguen los destinos
 
-`POSTGRES_DATABASE_URL` en `.env` tiene tres candidatas y se elige descomentando una:
+`POSTGRES_DATABASE_URL` en `.env` tiene cuatro candidatas y se elige descomentando una:
 
 | Destino | Base | Qué es |
 |---|---|---|
 | `localhost:5435` (Docker) | `autolibre_ai_hex` | **DEV.** Es acá donde se desarrolla y se prueban las migraciones de `ops`. |
-| `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN.** No se toca para explorar. |
+| `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN, directo.** No se toca para explorar. |
+| `db-pgsql-nyc1-…ondigitalocean.com:25061/autolibre-pool` | `autolibre` | **PRODUCCIÓN, por el pooler (pgBouncer).** Es la que el `.env` usa hoy. Ver la trampa de abajo. |
 | `…neon.tech` | `neondb` | sin relevar |
 
-> **Revisado el 2026-09-04 y esta tabla ya no alcanza.** El `.env` apuntaba a una
-> CUARTA base: `autolibre` en `127.0.0.1` — 72 usuarios, todos `clerk`, cero `native`.
-> O sea que el nombre `autolibre` **ya no identifica a producción**: hay una local que se
-> llama igual. Corolario, y es el que importa: `select current_database()` dejó de ser
-> concluyente por sí solo. **El chequeo de relevamiento es
-> `select current_database(), inet_server_addr()` — los dos, siempre.** `127.0.0.1`
-> es local aunque la base se llame `autolibre`.
+> **⚠ Corregido el 2026-09-04, segunda pasada — no existe ninguna base local.**
+>
+> Una nota anterior del mismo día concluyó que el `.env` apuntaba a una CUARTA base:
+> `autolibre` en `127.0.0.1`, local, con 72 usuarios. **Es falso, y lo que falló es el
+> método, no el dato.**
+>
+> El `.env` apunta al **pooler** de DigitalOcean (`:25061/autolibre-pool`). Se disca a
+> pgBouncer, y pgBouncer disca al Postgres real por el loopback **del host de DigitalOcean**.
+> El servidor contesta `127.0.0.1` con toda razón: es su propio loopback, no el tuyo.
+>
+> La evidencia que lo cierra, toda de la misma consulta:
+>
+> | Señal | Valor | Qué prueba |
+> |---|---|---|
+> | `inet_server_port()` | **25060** | Discamos al 25061. El salto del pooler está a la vista. |
+> | `inet_client_addr()` | `127.0.0.1` | El cliente TAMBIÉN es loopback: no somos nosotros, es pgBouncer. |
+> | `current_user` | **`doadmin`** | El rol de DigitalOcean managed. Un Docker local no lo tiene. |
+> | Puertos locales 5432–5435 y 6432 | **todos cerrados** | No hay ningún Postgres corriendo en esta máquina. |
+>
+> **Corolario, y reemplaza a la regla anterior: `inet_server_addr()` NO distingue local de
+> remoto, y detrás de un pooler miente en la dirección más peligrosa** — dice `127.0.0.1`
+> justo cuando estás parado sobre producción. Quien lea *"127.0.0.1, es local, puedo escribir
+> tranquilo"* borra datos reales.
+>
+> **La verdad está en el host que discaste, no en lo que el servidor contesta sobre sí
+> mismo.** El chequeo bueno es leer el host de `POSTGRES_DATABASE_URL`, y corroborarlo con
+> `current_user`: `doadmin` es DigitalOcean, nunca desarrollo.
+>
+> Trampa adjunta, y es la que hizo verosímil el error: en la URL del pooler el nombre
+> después de la barra es el **nombre del pool**, no el de la base. La URL dice
+> `…/autolibre-pool` y `current_database()` dice `autolibre`. Las dos cadenas son
+> distintas y las dos son correctas.
 
 Reglas que salen de esto y no son negociables:
 
-1. **Ningún número de este repo significa nada sin decir contra qué base se sacó.** Toda consulta de
-   relevamiento arranca por `select current_database(), inet_server_addr()`. Los nombres de base son
-   DISTINTOS (`autolibre_ai_hex` vs `autolibre`), así que el chequeo es barato y concluyente.
+1. **Ningún número de este repo significa nada sin decir contra qué base se sacó.** El chequeo es
+   **el host de `POSTGRES_DATABASE_URL`**, corroborado con `select current_database(), current_user`.
+   **`inet_server_addr()` no sirve para esto** — detrás del pooler devuelve `127.0.0.1` para
+   producción, que es el falso negativo más caro posible. `current_user = doadmin` es DigitalOcean;
+   desarrollo nunca lo es.
 2. **`ops.schema_migrations` es por base.** Aplicar en DEV no aplica en PROD. Una migración nueva se
    prueba en DEV y recién después se aplica en PROD, a mano y a sabiendas.
+   **Y a PROD se migra por el puerto DIRECTO (`:25060`), nunca por el pooler.**
+   `scripts/migrate.mjs:258` toma un `pg_advisory_lock`, que es **de sesión** — el propio código lo
+   dice en la línea 362. pgBouncer en modo transacción reparte las sentencias de una sesión entre
+   conexiones distintas, así que el lock se toma en una y el `unlock` puede caer en otra: queda un
+   lock colgado y, peor, dos deploys simultáneos dejan de serializarse. Al 2026-09-04 las 7
+   migraciones ya están aplicadas en producción y no hay pendientes — la próxima es la que hay que
+   cuidar.
 3. **La tabla del censo nunca debió vivir en un `.md`.** El número ahora se calcula solo:
    `adoptionPulse()` en `src/server/ops.repo.ts` devuelve `legacyNativeAdmins` y la pantalla de
    Inicio lo muestra — contra la base a la que el panel esté conectado, sea cual sea. Regla general:
