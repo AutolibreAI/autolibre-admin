@@ -63,8 +63,44 @@ if (!process.env.POSTGRES_DATABASE_URL) {
   process.exit(1);
 }
 
+// TLS igual que src/server/db.ts: el certificado viaja como CONTENIDO en
+// POSTGRES_CA_CERT, nunca como ruta en `sslrootcert=` de la URL.
+function targetsLocalhost(url) {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
+function resolveSsl(url) {
+  if (targetsLocalhost(url)) return undefined;
+  const raw = process.env.POSTGRES_CA_CERT?.trim();
+  if (!raw) return { rejectUnauthorized: true };
+  const ca = raw.includes('-----BEGIN CERTIFICATE-----')
+    ? raw.replace(/\\n/g, '\n')
+    : Buffer.from(raw, 'base64').toString('utf8');
+  return { ca, rejectUnauthorized: true };
+}
+
+function withoutUrlSslParams(url) {
+  try {
+    const parsed = new URL(url);
+    for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey']) {
+      parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+const connectionString = process.env.POSTGRES_DATABASE_URL;
+
 const pool = new pg.Pool({
-  connectionString: process.env.POSTGRES_DATABASE_URL,
+  connectionString: withoutUrlSslParams(connectionString),
+  ssl: resolveSsl(connectionString),
 });
 
 try {
