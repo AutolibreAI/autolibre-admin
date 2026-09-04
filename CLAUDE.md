@@ -41,6 +41,19 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 > `.claude/rules/ops-write-actions.md`. **Antes de escribir un SP nuevo hay que verificar que el
 > backend realmente no tenga el camino** — la excepción se gana con un `grep`, no se asume.
 
+> **El 2026-09-04 ese `grep` dio POSITIVO por primera vez, y el resultado es el opuesto.** Para
+> cargar el manual de un vehículo el backend SÍ tiene el camino: existe el bounded context entero
+> `vehicle-management/vehicle-catalog-manual`, con `POST /vehicle-catalog-manuals` bajo `AdminGuard`
+> y `POST /files` para el archivo. Así que ahí **no** se escribe un SP: el panel llama al endpoint
+> por HTTP, con el token de Clerk del admin logueado (misma instancia de Clerk, el token sirve tal
+> cual).
+>
+> Y aunque el backend no lo tuviera, un SP tampoco alcanzaría: **el PDF va a DigitalOcean Spaces**,
+> y ninguna cantidad de SQL pone un archivo en un bucket.
+>
+> Eso hace de `/catalogo` la ÚNICA pantalla del panel cuyas escrituras no son SQL, y el único
+> consumidor HTTP del backend. → `.claude/rules/vehicle-manuals.md`
+
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
 > El que manda es el `-hex`. Si una ruta te lleva al otro, estás mirando el lugar equivocado.
 
@@ -73,9 +86,28 @@ el único momento donde el panel puede aplicar sus migraciones. Migra **sólo en
 producción**: las previews también buildean, y sin esa compuerta una rama sin mergear le escribiría
 el schema a producción. → `.claude/rules/ai-costs.md`
 
+> **Pendiente abierto el 2026-09-04, y toca justo acá.** Ese `--on-deploy` migra contra el
+> `POSTGRES_DATABASE_URL` que tenga cargado el proyecto de Vercel, sea cual sea. Si esa
+> variable apunta al **pooler** (`:25061/autolibre-pool`), el `pg_advisory_lock` de sesión
+> del runner deja de proteger nada — ver la regla 2 más abajo. **Hay que verificar en el
+> dashboard de Vercel que la variable use el puerto directo `:25060`.** No se puede
+> verificar desde este repo.
+
 **`pnpm db:migrate` migra SOLO `ops`**, el schema que este panel posee. `public` es del backend y lo
 migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.schema_migrations` es
 **por base**: aplicar en desarrollo no aplica en producción. → `.claude/rules/ai-costs.md`
+
+### Variables de entorno
+
+| Var | Para qué | Si falta |
+|---|---|---|
+| `POSTGRES_DATABASE_URL` | Todo el SQL del panel | Falla en la primera consulta, no al arrancar |
+| `AUTOLIBRE_BACKEND_URL` | Subir manuales al backend hex. **Con el prefijo `/api/v1` incluido** | En dev usa `http://localhost:3005/api/v1`; en producción **falla** — adivinar una URL de producción es peor que fallar |
+
+Las dos fallan en el **primer uso**, nunca al cargar el módulo. En Vercel el entry serverless
+importa todos los handlers de ruta por adelantado, así que un `throw` en scope de módulo se lleva
+puesto el cold start entero — incluidas `/login` y `/api/health`, las únicas superficies que podían
+decirte qué falta. → `src/server/db.ts`
 
 Consultar la base (solo lectura, desde la raíz del repo):
 
@@ -134,6 +166,7 @@ src/
 │   └── middleware.ts        # request/function middleware (sesión, roles)
 ├── server/                  # SERVER-ONLY. Acceso a datos y secretos.
 │   ├── db.ts                #   pool de pg — todo el SQL pasa por acá
+│   ├── backend.ts           #   el ÚNICO cliente HTTP al backend hex (manuales)
 │   └── session.ts           #   Clerk (quién) + users.role (qué puede)
 ├── lib/                     # Contratos compartidos: types, schemas de search, format, cn
 ├── components/
@@ -155,6 +188,11 @@ pantalla no va todavía.
 | `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
 | `/partners` | `true` | El listado del directorio, la carga manual de rubros y **la ficha** (estado, coordenadas, contacto) |
 | `/leads` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/usuarios` | `true` | El `select * from users where email ilike '%…%'` de cada reclamo de soporte, más las dos columnas que no están en él: cuántos vehículos tiene y cuándo fue su última señal de vida |
+| `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
+| `/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra 83 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
+| `/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
+| `/escaneres` | `true` | **La consulta que no se corría porque no se te ocurre**: con qué versión de auto —`TOYOTA COROLLA XEI 1.8 M/T 2013`, no "un Corolla"— funcionó cada escáner y con cuáles no. Cruza `driving_sessions` → `vehicles` → `vehicle_catalog_specs` → `vehicle_catalogs`, y separa los intentos que trajeron datos de los que engancharon y no trajeron nada. Lo que sí pasaba: contestar "¿le recomiendo este escáner a un Vento?" de memoria |
 | `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
 | `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
 | `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
@@ -216,6 +254,46 @@ Lo que esto **no** habilita:
 
 → `.claude/rules/ai-costs.md`
 
+### 4. Los manuales de vehículos se cargan por HTTP contra el backend hex
+
+**Decidido el 2026-09-04.** Es la excepción a la decisión 1 (*"el panel habla con Postgres directo"*)
+y la única que hay. Dos motivos, y cualquiera de los dos alcanza:
+
+1. **El PDF va a DigitalOcean Spaces, no a Postgres.** El panel no tiene ese adapter, ni las
+   credenciales, ni el sniffing de magic bytes con el que el backend rechaza un `.zip` renombrado a
+   `.pdf`. Ninguna cantidad de SQL sube un archivo a un bucket.
+2. **El backend ya tiene el camino completo**, a diferencia de partners y leads: el bounded context
+   `vehicle-management/vehicle-catalog-manual` existe entero, con `POST /vehicle-catalog-manuals`
+   bajo `AdminGuard`.
+
+El acceso vive en `src/server/backend.ts` (server-only, igual que `db.ts`). Autentica con el session
+token de Clerk del admin logueado — misma instancia de Clerk que la app, sin JWT template.
+
+> **Corregido el 2026-09-04, después de que fallara en producción.** El panel PROXEABA el PDF a
+> `POST /files` y Vercel lo cortaba: sus Serverless Functions limitan el cuerpo de una request a
+> **4.5MB**, y es de plataforma — no se configura. Un manual de 300 páginas no llegaba ni al
+> backend, y subir el límite de 10MB del backend tampoco lo habría arreglado.
+>
+> **El archivo ya no pasa por ningún servidor nuestro.** Se implementó subida directa (presigned
+> PUT) en los dos repos: el panel pide una URL firmada, el NAVEGADOR sube a DigitalOcean Spaces, y
+> recién después el backend confirma el objeto —verificando sus magic bytes, que la subida directa
+> saltearía— y crea la fila. Son cuatro llamadas y sólo el PDF queda fuera de Vercel.
+>
+> Requiere **CORS en el bucket de Spaces**, que es configuración de DigitalOcean y no está
+> versionada en ningún repo. → `.claude/rules/vehicle-manuals.md`
+
+Lo que esto **no** habilita:
+
+- **Ninguna cuenta de servicio.** La request va con la identidad del admin real, así que
+  `files.user_id` queda a su nombre. Es la única auditoría que hay de quién subió cada manual —
+  mismo criterio que `p_actor_id` en los SP de `ops`.
+- **Ningún `INSERT INTO vehicle_catalog_manuals` desde el panel.** Si aparece uno, está mal: sería
+  una fila apuntando a un `file_id` que el panel no puede crear, o un manual sin PDF.
+- **No resuelve la descarga entre admins.** `GET /files/:id/url` está acotado al DUEÑO del archivo,
+  así que el admin que subió es el único que puede bajarlo. No se arregla desde este repo.
+
+→ `.claude/rules/vehicle-manuals.md`
+
 ## ⚠ Riesgo abierto: admins `native` heredados
 
 Relevado el 2026-08-26 sobre la base real:
@@ -231,11 +309,51 @@ El 28% de la base figuraba como admin, todos `native` (era pre-Clerk). Huele a d
 no a decisión.
 
 **Hoy no pueden entrar**: el lookup está acotado a `auth_provider = 'clerk'` y una fila native nunca
-matchea una identidad de Clerk. Eso es un **efecto colateral, no una salvaguarda** — el día que
-alguien migre una cuenta native a Clerk, hereda admin.
+matchea una identidad de Clerk.
 
-No lo "arregles" ampliando la query. El arreglo es una auditoría de datos del lado del backend, y no
-es decisión de este repo.
+### Corregido el 2026-09-04 — el mecanismo que decía esta nota no existe
+
+Esta sección decía *"el día que alguien migre una cuenta native a Clerk, hereda admin"*. **Eso está
+mal**, y se relevó contra el schema y contra `autolibre-backend-hex`:
+
+**1. Una persona tiene exactamente UNA identidad.** `public.users` tiene dos índices únicos:
+
+```
+idx_users_email_unique              UNIQUE (email)
+idx_users_external_identity_unique  UNIQUE (auth_provider, external_auth_id)
+```
+
+Una fila = una persona = una identidad. No puede existir una fila `native` y otra `clerk` para el
+mismo email. *(Ojo: se crearon con `CREATE UNIQUE INDEX`, así que **no aparecen en `pg_constraint`**
+— hay que preguntarle a `pg_indexes`. Mirar sólo `pg_constraint` devuelve el falso negativo de
+"`users` sólo tiene PK".)*
+
+**2. Los dos caminos de provisioning del backend RECHAZAN la migración.** Ninguno toca jamás
+`auth_provider`, `external_auth_id` ni `role`:
+
+| Camino | Qué hace si el email ya es de una fila `native` |
+|---|---|
+| Webhook — `HandleIdentityWebhookHandler.provision()` | `logger.warn(...)` y **`return`**. Devuelve 2xx a propósito para que Clerk no reintente. Fila no creada. |
+| Perezoso — `AuthenticateUserHandler.provision()` | `throw ApplicationException(CONFLICT)` → 409. Fila no creada. |
+
+Y `sync()` / `syncEmailFromProvider()` sólo escriben email, nombre y teléfono.
+
+**Conclusión: la herencia automática de admin no puede pasar.** El único camino que queda es un
+`UPDATE` manual y deliberado sobre la fila existente — una sentencia, hecha a mano, a sabiendas.
+
+### Lo que SÍ pasa, y nadie lo había escrito
+
+El riesgo real es el opuesto y es de cara al usuario: **quien tenga una fila `native` heredada no
+puede sacar cuenta de AutoLibre por Clerk.** Se registra en Clerk, el provisioning encuentra el email
+tomado y no crea nada. Termina con sesión válida de Clerk y **sin usuario de AutoLibre** — o sea, sin
+app. Por el webhook la evidencia es un `logger.warn` y nada más; por el camino perezoso, un 409 en la
+primera request autenticada.
+
+Eso hace que `/usuarios?onlyLegacyNative=true` valga más de lo que decía: **esa lista no es "posibles
+admins heredados", es "los emails cuyo registro por Clerk va a fallar en silencio"**.
+
+No lo "arregles" ampliando la query del lookup. El arreglo es una auditoría de datos del lado del
+backend, y no es decisión de este repo.
 
 ### Revisado el 2026-08-30 — el censo era de DEV, y producción está limpia
 
@@ -258,23 +376,66 @@ Dos conclusiones, y son opuestas entre sí:
    usuarios reales — pero es la data contra la que se prueba el panel, así que toda pantalla tiene
    que sobrevivir a 876 admins sin romperse ni mentir.
 
-#### Cómo se distinguen los dos destinos
+#### Cómo se distinguen los destinos
 
-`POSTGRES_DATABASE_URL` en `.env` tiene tres candidatas y se elige descomentando una:
+`POSTGRES_DATABASE_URL` en `.env` tiene cuatro candidatas y se elige descomentando una:
 
 | Destino | Base | Qué es |
 |---|---|---|
 | `localhost:5435` (Docker) | `autolibre_ai_hex` | **DEV.** Es acá donde se desarrolla y se prueban las migraciones de `ops`. |
-| `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN.** No se toca para explorar. |
+| `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN, directo.** No se toca para explorar. |
+| `db-pgsql-nyc1-…ondigitalocean.com:25061/autolibre-pool` | `autolibre` | **PRODUCCIÓN, por el pooler (pgBouncer).** Es la que el `.env` usa hoy. Ver la trampa de abajo. |
 | `…neon.tech` | `neondb` | sin relevar |
+
+> **⚠ Corregido el 2026-09-04, segunda pasada — no existe ninguna base local.**
+>
+> Una nota anterior del mismo día concluyó que el `.env` apuntaba a una CUARTA base:
+> `autolibre` en `127.0.0.1`, local, con 72 usuarios. **Es falso, y lo que falló es el
+> método, no el dato.**
+>
+> El `.env` apunta al **pooler** de DigitalOcean (`:25061/autolibre-pool`). Se disca a
+> pgBouncer, y pgBouncer disca al Postgres real por el loopback **del host de DigitalOcean**.
+> El servidor contesta `127.0.0.1` con toda razón: es su propio loopback, no el tuyo.
+>
+> La evidencia que lo cierra, toda de la misma consulta:
+>
+> | Señal | Valor | Qué prueba |
+> |---|---|---|
+> | `inet_server_port()` | **25060** | Discamos al 25061. El salto del pooler está a la vista. |
+> | `inet_client_addr()` | `127.0.0.1` | El cliente TAMBIÉN es loopback: no somos nosotros, es pgBouncer. |
+> | `current_user` | **`doadmin`** | El rol de DigitalOcean managed. Un Docker local no lo tiene. |
+> | Puertos locales 5432–5435 y 6432 | **todos cerrados** | No hay ningún Postgres corriendo en esta máquina. |
+>
+> **Corolario, y reemplaza a la regla anterior: `inet_server_addr()` NO distingue local de
+> remoto, y detrás de un pooler miente en la dirección más peligrosa** — dice `127.0.0.1`
+> justo cuando estás parado sobre producción. Quien lea *"127.0.0.1, es local, puedo escribir
+> tranquilo"* borra datos reales.
+>
+> **La verdad está en el host que discaste, no en lo que el servidor contesta sobre sí
+> mismo.** El chequeo bueno es leer el host de `POSTGRES_DATABASE_URL`, y corroborarlo con
+> `current_user`: `doadmin` es DigitalOcean, nunca desarrollo.
+>
+> Trampa adjunta, y es la que hizo verosímil el error: en la URL del pooler el nombre
+> después de la barra es el **nombre del pool**, no el de la base. La URL dice
+> `…/autolibre-pool` y `current_database()` dice `autolibre`. Las dos cadenas son
+> distintas y las dos son correctas.
 
 Reglas que salen de esto y no son negociables:
 
-1. **Ningún número de este repo significa nada sin decir contra qué base se sacó.** Toda consulta de
-   relevamiento arranca por `select current_database(), inet_server_addr()`. Los nombres de base son
-   DISTINTOS (`autolibre_ai_hex` vs `autolibre`), así que el chequeo es barato y concluyente.
+1. **Ningún número de este repo significa nada sin decir contra qué base se sacó.** El chequeo es
+   **el host de `POSTGRES_DATABASE_URL`**, corroborado con `select current_database(), current_user`.
+   **`inet_server_addr()` no sirve para esto** — detrás del pooler devuelve `127.0.0.1` para
+   producción, que es el falso negativo más caro posible. `current_user = doadmin` es DigitalOcean;
+   desarrollo nunca lo es.
 2. **`ops.schema_migrations` es por base.** Aplicar en DEV no aplica en PROD. Una migración nueva se
    prueba en DEV y recién después se aplica en PROD, a mano y a sabiendas.
+   **Y a PROD se migra por el puerto DIRECTO (`:25060`), nunca por el pooler.**
+   `scripts/migrate.mjs:258` toma un `pg_advisory_lock`, que es **de sesión** — el propio código lo
+   dice en la línea 362. pgBouncer en modo transacción reparte las sentencias de una sesión entre
+   conexiones distintas, así que el lock se toma en una y el `unlock` puede caer en otra: queda un
+   lock colgado y, peor, dos deploys simultáneos dejan de serializarse. Al 2026-09-04 las 7
+   migraciones ya están aplicadas en producción y no hay pendientes — la próxima es la que hay que
+   cuidar.
 3. **La tabla del censo nunca debió vivir en un `.md`.** El número ahora se calcula solo:
    `adoptionPulse()` en `src/server/ops.repo.ts` devuelve `legacyNativeAdmins` y la pantalla de
    Inicio lo muestra — contra la base a la que el panel esté conectado, sea cual sea. Regla general:
@@ -299,6 +460,8 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ai-costs.md` | El schema `ops`: migraciones, costo NULL vs 0, precios con vigencia, qué NO se mide |
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
+| `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
+| `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, la subida directa a Spaces en cuatro llamadas (y por qué proxear el archivo era el error), el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, el límite de plataforma que sólo aparece en producción, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
 
 ## Cómo mantener esto vivo
 

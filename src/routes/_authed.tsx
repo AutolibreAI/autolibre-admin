@@ -2,12 +2,15 @@ import { Link, Outlet, createFileRoute, redirect } from '@tanstack/react-router'
 import { SignOutButton } from '@clerk/tanstack-react-start'
 import {
   Activity,
+  BookOpen,
   Coins,
   Handshake,
   Inbox,
   LayoutDashboard,
   LogOut,
+  ScanLine,
   Store,
+  Users,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '~/components/ui/button'
@@ -74,6 +77,37 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * contiguos en el menú es lo que mantiene esa distinción a la vista.
    */
   { to: '/leads', label: 'Leads', icon: Handshake },
+  /**
+   * `Usuarios` cierra el bloque de dominio y va después de `Leads` a propósito:
+   * es el OTRO extremo del mismo marketplace. Un lead sale de un usuario y
+   * llega a un partner, así que las tres pantallas contiguas cubren el
+   * recorrido entero — y desde la ficha del usuario se salta al partner que
+   * administra, si administra alguno.
+   */
+  { to: '/usuarios', label: 'Usuarios', icon: Users },
+  /**
+   * `Catálogo` cierra el bloque de dominio, y va último de ese bloque porque es
+   * el único que NO es marketplace: es `vehicle-management`, el bounded context
+   * de los vehículos. Las cuatro de arriba cubren el recorrido taller ↔ usuario;
+   * ésta cubre el auto.
+   *
+   * Es también la ÚNICA pantalla del panel cuyas escrituras no son SQL: sube
+   * PDFs por HTTP contra el backend hex, porque el archivo va a DigitalOcean
+   * Spaces y ninguna cantidad de SQL lo pone ahí.
+   * → `.claude/rules/vehicle-manuals.md`
+   */
+  { to: '/catalogo', label: 'Catálogo', icon: BookOpen },
+  /**
+   * `Escáneres` va pegada a `Catálogo` porque comparte su eje vertical: las
+   * filas de esa matriz SON los modelos del catálogo. Las dos contestan sobre
+   * el auto, no sobre el marketplace ni sobre la persona.
+   *
+   * Es la única pantalla del panel que no mira un estado que alguien mueve,
+   * sino un hecho acumulado: qué hardware enganchó con qué auto. Por eso no
+   * tiene ni una acción — no hay nada que corregir en una sesión que ya pasó.
+   * → `.claude/rules/scanner-compatibility.md`
+   */
+  { to: '/escaneres', label: 'Escáneres', icon: ScanLine },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son

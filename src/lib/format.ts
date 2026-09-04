@@ -14,3 +14,18 @@ const date = new Intl.DateTimeFormat('es-AR', {
 
 export const formatInt = (n: number) => int.format(n)
 export const formatDate = (iso: string) => date.format(new Date(iso))
+
+/**
+ * Tamaño de archivo en MB, con un decimal.
+ *
+ * Se corta en MB y no escala a GB porque el único archivo que este panel
+ * muestra es un manual en PDF, y el backend los corta en 10MB
+ * (`MAX_UPLOAD_FILE_SIZE_BYTES`). Un formateador que sepa hablar de terabytes
+ * es código para un caso que no existe.
+ *
+ * Se usa 1024 y no 1000 a propósito: es la misma base con la que el backend
+ * calcula su límite, así que un PDF que acá se lee "10.4 MB" es exactamente el
+ * que allá rebota con 413. Con base 1000 los dos números discrepan justo en el
+ * borde, que es el único lugar donde el número importa.
+ */
+export const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`

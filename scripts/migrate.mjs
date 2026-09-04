@@ -179,13 +179,24 @@ function withoutUrlSslParams(url) {
  * Se usa padding de 3 dígitos porque un `10_x.sql` ordenaría antes que `9_x.sql`
  * en comparación de strings, y ese bug aparece recién en la décima migración —
  * cuando ya nadie se acuerda de esta decisión.
+ *
+ * ── `*.test.sql` NO es una migración ──────────────────────────────────────
+ *
+ * Las suites de prueba de los stored procedures viven al lado de la migración
+ * que prueban, porque es donde se van a buscar. Pero son otra cosa: empiezan en
+ * `BEGIN` y terminan en `ROLLBACK`, y aplicarlas no deja nada.
+ *
+ * Sin este filtro, `008_x.test.sql` parsea la MISMA versión `008` que
+ * `008_x.sql` y el runner las trata como dos migraciones con el mismo número:
+ * la segunda choca por checksum contra la primera ya aplicada. El error habla
+ * de "drift", que manda a investigar una migración corrupta que no existe.
  */
 function readMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) return []
 
   return fs
     .readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => f.endsWith('.sql') && !f.endsWith('.test.sql'))
     .sort()
     .map((file) => {
       const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')
@@ -199,7 +210,30 @@ function readMigrations() {
         version,
         file,
         sql,
-        checksum: crypto.createHash('sha256').update(sql).digest('hex'),
+        /**
+         * El checksum se calcula sobre el contenido NORMALIZADO a LF.
+         *
+         * Sobre los bytes crudos es dependiente de la plataforma, y eso rompe
+         * de verdad: con `core.autocrlf=true` (el default de Git en Windows)
+         * los `.sql` se registran en LF y se hacen checkout en CRLF. Una
+         * migración aplicada desde Linux —el build de Vercel, por ejemplo—
+         * guarda el hash de la versión LF, y la misma migración leída después
+         * desde Windows hashea distinto sin que UNA SOLA LÍNEA de SQL haya
+         * cambiado.
+         *
+         * Verificado el 2026-09-04 contra producción: las 7 migraciones
+         * aplicadas daban drift desde Windows, y las 7 coincidían exactamente
+         * con el hash de su versión LF. El mensaje que sale de ahí —"la base ya
+         * no coincide con el archivo"— manda a investigar una corrupción que no
+         * existe, y peor, entrena a ignorar la advertencia que sí importa.
+         *
+         * Normalizar sólo cambia el FINGERPRINT. El SQL que se ejecuta sigue
+         * siendo `sql`, tal cual está en disco.
+         */
+        checksum: crypto
+          .createHash('sha256')
+          .update(sql.replace(/\r\n/g, '\n'))
+          .digest('hex'),
       }
     })
 }
@@ -222,6 +256,65 @@ async function bootstrap(client) {
       duration_ms integer
     )
   `)
+}
+
+/**
+ * Corta si la conexión pasa por un connection pooler.
+ *
+ * ── ESTO NO ES TEÓRICO: PASÓ EN PRODUCCIÓN EL 2026-09-04 ──────────────────
+ *
+ * `pg_advisory_lock()` es de SESIÓN, y detrás de pgBouncer en modo transacción
+ * "la sesión" no es una conexión estable: el pooler reparte las sentencias
+ * entre varias conexiones de SERVIDOR. El lock se toma en una y el
+ * `pg_advisory_unlock` del `finally` puede caer en otra, donde no hay nada que
+ * soltar.
+ *
+ * Lo que quedó: un advisory lock tomado para siempre sobre una conexión de
+ * servidor que el pooler después le entregó a la API de producción. Cada
+ * `pnpm db:migrate` posterior se colgaba esperándolo, y `vercel-build` habría
+ * colgado el deploy. Liberarlo requiere terminar una conexión ajena o esperar a
+ * que el pooler la recicle — ninguna de las dos es algo que quieras estar
+ * decidiendo en medio de un deploy.
+ *
+ * ── CÓMO SE DETECTA ──────────────────────────────────────────────────────
+ *
+ * Comparando el puerto al que DISCAMOS contra el que el servidor dice tener.
+ * Con pgBouncer no coinciden: se disca al 25061 y el Postgres real contesta
+ * 25060. Es barato y concluyente.
+ *
+ * `inet_server_port()` puede venir NULL sobre un socket unix — ahí no hay
+ * pooler de por medio y se sigue de largo.
+ */
+async function assertNotBehindPooler(client) {
+  let dialedPort
+  try {
+    const parsed = new URL(connectionString)
+    dialedPort = parsed.port ? Number(parsed.port) : 5432
+  } catch {
+    // URL ilegible: no hay con qué comparar. No se inventa un veredicto.
+    return
+  }
+
+  const { rows } = await client.query(
+    'SELECT inet_server_port() AS port, current_database() AS db',
+  )
+  const serverPort = rows[0]?.port
+
+  if (serverPort === null || serverPort === undefined) return
+  if (Number(serverPort) === dialedPort) return
+
+  console.error(
+    '\n  La conexión pasa por un connection pooler y este runner no puede migrar así.\n\n' +
+      `    discamos al puerto ${dialedPort}, el Postgres real contesta ${serverPort}\n` +
+      `    base: ${rows[0]?.db}\n\n` +
+      '  El lock que evita dos migraciones simultáneas es de SESIÓN, y detrás de\n' +
+      '  pgBouncer la sesión no es una conexión estable: el lock se toma en una\n' +
+      '  conexión de servidor y el unlock puede caer en otra. Queda tomado para\n' +
+      '  siempre, y a partir de ahí toda migración se cuelga esperándolo.\n\n' +
+      '  Usá el puerto DIRECTO de la base en POSTGRES_DATABASE_URL. En DigitalOcean\n' +
+      '  es el 25060; el 25061 (…/nombre-pool) es el pooler.\n',
+  )
+  process.exit(1)
 }
 
 async function main() {
@@ -247,6 +340,8 @@ async function main() {
   await client.connect()
 
   try {
+    await assertNotBehindPooler(client)
+
     /**
      * Lock de sesión antes de tocar nada.
      *
@@ -254,6 +349,11 @@ async function main() {
      * leerían los mismos pendientes y los aplicarían dos veces. La segunda
      * corrida no falla prolijamente: revienta a mitad de camino con un
      * "already exists" y deja el registro inconsistente con la realidad.
+     *
+     * ── Y por eso el chequeo del pooler está JUSTO ARRIBA ────────────────────
+     *
+     * Este lock es de SESIÓN, y una sesión detrás de pgBouncer no es una
+     * conexión de servidor estable. Ver `assertNotBehindPooler()`.
      */
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [
       'autolibre-admin:ops:migrations',

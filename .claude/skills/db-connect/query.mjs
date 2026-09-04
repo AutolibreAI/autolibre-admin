@@ -63,13 +63,67 @@ if (!process.env.POSTGRES_DATABASE_URL) {
   process.exit(1);
 }
 
+// TLS igual que src/server/db.ts: el certificado viaja como CONTENIDO en
+// POSTGRES_CA_CERT, nunca como ruta en `sslrootcert=` de la URL.
+function targetsLocalhost(url) {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
+function resolveSsl(url) {
+  if (targetsLocalhost(url)) return undefined;
+  const raw = process.env.POSTGRES_CA_CERT?.trim();
+  if (!raw) return { rejectUnauthorized: true };
+  const ca = raw.includes('-----BEGIN CERTIFICATE-----')
+    ? raw.replace(/\\n/g, '\n')
+    : Buffer.from(raw, 'base64').toString('utf8');
+  return { ca, rejectUnauthorized: true };
+}
+
+function withoutUrlSslParams(url) {
+  try {
+    const parsed = new URL(url);
+    for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey']) {
+      parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+const connectionString = process.env.POSTGRES_DATABASE_URL;
+
 const pool = new pg.Pool({
-  connectionString: process.env.POSTGRES_DATABASE_URL_PROD,
+  connectionString: withoutUrlSslParams(connectionString),
+  ssl: resolveSsl(connectionString),
 });
 
 try {
-  const { rows } = await pool.query(sql);
-  console.log(JSON.stringify(rows, null, 2));
+  const result = await pool.query(sql);
+
+  // Un script de varias sentencias (una suite de `*.test.sql`, por ejemplo)
+  // usa el protocolo simple y `pg` devuelve UN ARRAY de resultados, no uno
+  // solo. Leer `.rows` de ese array da `undefined`, así que la suite corría
+  // entera y no imprimía nada — el modo de falla que se lee como "no pasó nada"
+  // cuando en realidad pasó todo.
+  const sets = Array.isArray(result) ? result : [result];
+  const withRows = sets.filter((r) => r?.rows?.length);
+
+  if (withRows.length === 0) {
+    console.log('[]');
+  } else if (withRows.length === 1) {
+    console.log(JSON.stringify(withRows[0].rows, null, 2));
+  } else {
+    for (const [i, set] of withRows.entries()) {
+      console.log(`\n── resultado ${i + 1} de ${withRows.length} ──`);
+      console.log(JSON.stringify(set.rows, null, 2));
+    }
+  }
 } catch (err) {
   console.error('Query failed:', err.message || err);
   process.exitCode = 1;
