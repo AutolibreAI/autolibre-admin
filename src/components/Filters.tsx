@@ -1,4 +1,11 @@
 import { cn } from '~/lib/utils'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '~/components/ui/select'
 import type { ReactNode } from 'react'
 
 /**
@@ -62,5 +69,95 @@ export function Chip({
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * Un rango [min, max] para una columna numérica o de fecha. Los dos extremos
+ * son independientes — cargar sólo uno filtra de un lado, igual que
+ * `pushIntRange`/`pushDateRange` del lado del servidor.
+ *
+ * `''` (vacío) es "sin tope", nunca `0`: un input numérico vacío que se leyera
+ * como cero excluiría de silencio todo lo que tenga menos de cero, que es
+ * nada — el bug se notaría tarde porque el filtro "funcionaría" igual.
+ */
+export function RangeFilter({
+  label,
+  type,
+  min,
+  max,
+  onChange,
+}: {
+  label: string
+  type: 'number' | 'date'
+  min: string
+  max: string
+  onChange: (next: { min?: string; max?: string }) => void
+}) {
+  return (
+    <div className="space-y-1.5">
+      <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <input
+          type={type}
+          value={min}
+          onChange={(e) => onChange({ min: e.currentTarget.value })}
+          placeholder="Min"
+          className={cn(
+            'h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            type === 'number' ? 'w-20' : 'w-[9.5rem]',
+          )}
+        />
+        <span className="text-muted-foreground" aria-hidden>
+          –
+        </span>
+        <input
+          type={type}
+          value={max}
+          onChange={(e) => onChange({ max: e.currentTarget.value })}
+          placeholder="Max"
+          className={cn(
+            'h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            type === 'number' ? 'w-20' : 'w-[9.5rem]',
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** Un dropdown de valor único con "Todos" como opción para volver a `undefined`. */
+export function SelectFilter({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder = 'Todos',
+}: {
+  label: string
+  value: string | undefined
+  onChange: (value: string | undefined) => void
+  options: ReadonlyArray<string>
+  placeholder?: string
+}) {
+  return (
+    <div className="space-y-1.5">
+      <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
+      <Select value={value ?? '__all'} onValueChange={(v) => onChange(v === '__all' ? undefined : v)}>
+        <SelectTrigger size="sm" className="h-8 w-40 bg-card text-sm">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__all">{placeholder}</SelectItem>
+          {options.map((o) => (
+            <SelectItem key={o} value={o}>
+              {o}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   )
 }

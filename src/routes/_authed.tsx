@@ -8,6 +8,7 @@ import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
   BookOpen,
+  Car,
   Coins,
   Handshake,
   Inbox,
@@ -92,10 +93,18 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/usuarios", label: "Usuarios", icon: Users },
   /**
-   * `Catálogo` cierra el bloque de dominio, y va último de ese bloque porque es
-   * el único que NO es marketplace: es `vehicle-management`, el bounded context
-   * de los vehículos. Las cuatro de arriba cubren el recorrido taller ↔ usuario;
-   * ésta cubre el auto.
+   * `Vehículos` sigue a `Usuarios` y no a `Catálogo` a propósito: es el AUTO
+   * de alguien, no el modelo abstracto — `vehicle-management`, igual que
+   * `Catálogo`, pero la instancia (`vehicles`) en vez del molde
+   * (`vehicle_catalogs`). Desde acá se salta al catálogo del auto y al
+   * usuario dueño; desde `Catálogo` nunca se llega a un vehículo concreto.
+   * → `.claude/rules/vehicles.md`
+   */
+  { to: "/vehiculos", label: "Vehículos", icon: Car },
+  /**
+   * `Catálogo` cierra el bloque de dominio: junto con `Vehículos`, son las
+   * dos pantallas de `vehicle-management` — el molde y la instancia. Las
+   * cuatro de arriba son marketplace; estas dos cubren el auto.
    *
    * Es también la ÚNICA pantalla del panel cuyas escrituras no son SQL: sube
    * PDFs por HTTP contra el backend hex, porque el archivo va a DigitalOcean
