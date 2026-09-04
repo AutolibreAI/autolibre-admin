@@ -52,23 +52,25 @@ Contraste con partners y leads, donde el grep dio negativo (`IPartnerRepository`
 está mal.** Significa que alguien está creando una fila que apunta a un `file_id` que el panel no
 puede crear, o un manual sin PDF.
 
-## El flujo son DOS llamadas HTTP, y no son atómicas
+## El flujo son CUATRO llamadas, y la secuencia no es atómica
 
-```
-POST /api/v1/files                  (multipart, sólo sesión)   → { fileId }
-POST /api/v1/vehicle-catalog-manuals (JSON, AdminGuard)         → 201 sin body
-```
+Ver la trampa 2 para el detalle completo. El punto operativo: si un paso posterior a la subida
+falla, **el PDF ya está en Spaces** y no hay `DELETE /files` en el backend para limpiarlo.
 
-Si la segunda falla, **el PDF ya está en Spaces** y no hay `DELETE /files` en el backend para
-limpiarlo.
+La respuesta no es esconderlo. `ManualUploader` guarda en el estado `uploaded` el `fileId` del PDF
+ya subido, y el botón de reintento vuelve a llamar a `submit()`, que ve ese id y **saltea los pasos
+1 y 2**. Con un manual de 80MB, esa es la diferencia entre reintentar y rendirse.
 
-La respuesta no es esconderlo: `uploadCatalogManual` re-tira el error como
-`LINK_FAILED:<fileId>:<motivo>`, la UI extrae el id con `orphanFileId()` y ofrece
-**"Reintentar sin volver a subir"** → `retryLinkCatalogManual`. Es la única mitad recuperable.
+`uploaded` se limpia en cuanto el operador elige OTRO archivo: reintentar con un id que no
+corresponde al archivo elegido asociaría el PDF equivocado.
 
-**No agregues un reintento automático del segundo paso.** Los dos motivos por los que falla
-—catálogo inexistente, rol insuficiente— no se arreglan solos: reintentar sólo agrega latencia
-antes del mismo error.
+Antes esto vivía en un server function aparte (`retryLinkCatalogManual`), porque cuando el panel
+proxeaba el archivo re-subirlo costaba la transferencia entera. Con la subida directa el ahorro es
+el mismo y el código es uno solo — se borró.
+
+**No agregues un reintento automático.** Los motivos por los que falla el paso 4 —catálogo
+inexistente, rol insuficiente— no se arreglan solos: reintentar sólo agrega latencia antes del
+mismo error.
 
 ## Auth: el token de Clerk del admin, sin cuenta de servicio
 
@@ -109,25 +111,109 @@ Ojo con el precedente tentador: `CreateVehicleCatalogManualHandler` llama a `fin
 userId**, con un comentario que dice que los manuales no tienen dueño. O sea que el backend YA sabe
 que un manual es dato de referencia — pero esa excepción vive en el alta, no en la descarga.
 
-### 2. Límite de 10MB, y los manuales reales suelen pasarlo
+### 2. Proxear el archivo era la arquitectura equivocada — RESUELTO el 2026-09-04
 
-`MAX_UPLOAD_FILE_SIZE_BYTES = 10MB` en `upload-limits.ts`, aplicado por `@fastify/multipart`. Un
-manual de usuario en PDF pesa típicamente entre 5 y 30MB.
+Esta sección decía que el techo eran los 10MB del backend. Era falso, y el modo de falla fue el
+peor posible: producción devolvió `FUNCTION_PAYLOAD_TOO_LARGE` (región `gru1`) y el PDF **nunca
+llegó al backend**.
 
-Se valida **tres veces** y no es paranoia:
+Había TRES límites y ganaba el más bajo:
 
-| Dónde | Para qué |
-|---|---|
-| `ManualUploader` (browser) | Que el operador se entere ANTES de transferir 40MB |
-| `parseManualUpload` (server fn) | Que no se pueda saltear el form |
-| `@fastify/multipart` (backend) | La autoridad |
+| Salto | Límite | Configurable |
+|---|---|---|
+| browser → server function del panel | **4.5MB** | **NO.** Vercel Serverless Functions, límite de plataforma |
+| server fn → `POST /files` | 10MB | sí, en el backend |
+| backend → Spaces | sin límite práctico | — |
 
-El del browser es el que importa en la práctica: el 413 del backend llega recién **después** de
-haber transferido el archivo entero.
+**En local no aparecía.** El preset es `node-server`, que no tiene ese techo; sólo `vercel` lo
+tiene. Por eso el bug sobrevivió al build, al typecheck y al SQL verificado, y salió recién en el
+primer deploy.
 
-**Si el PDF no entra, el arreglo es del backend (subir la constante), no del panel.** No trocear
-del lado del cliente —requeriría un endpoint que no existe— ni comprimir en el browser, que
-degrada un manual escaneado hasta volverlo ilegible.
+> **Regla general que sale de esto:** un límite de plataforma no se verifica en desarrollo. Se
+> releva leyendo la doc del target de deploy, y se escribe acá antes de que muerda.
+
+#### El arreglo NO fue un número más grande
+
+Un manual de 300 páginas no entra en 4.5MB ni en 10MB. **Lo que estaba mal era que el archivo
+pasara por un servidor nuestro.** Se implementó subida directa con presigned PUT, en los dos repos.
+
+El flujo hoy son cuatro llamadas, y el archivo va en la que no toca ningún servidor propio:
+
+```
+1. POST /api/v1/files/upload-url        → { fileId, uploadUrl, expiresAt }   (JSON, ~200 bytes)
+2. PUT  <uploadUrl>                     → el NAVEGADOR sube a Spaces   ← el archivo va POR ACÁ
+3. POST /api/v1/files/confirm           → verifica y crea la fila `files`     (JSON)
+4. POST /api/v1/vehicle-catalog-manuals → asocia el manual al catálogo        (JSON)
+```
+
+El backend ya tenía la mitad: `IFileStorageProvider.getSignedUploadUrl()` existía para
+`driving-session` y sus chunks de telemetría, con este mismo argumento escrito en su comentario.
+`GetDrivingSessionChunkUploadUrlHandler` fue el precedente que se espejó.
+
+**`POST /files` (multipart) NO se deprecó.** Para una foto de cédula sacada con el celular, una
+sola request sigue siendo más simple que tres. Los dos caminos conviven.
+
+#### Las cuatro decisiones del flujo directo
+
+1. **La fila de `files` se crea en el CONFIRM, no al pedir la URL.** Hay FKs apuntando a `files.id`
+   (`vehicle_catalog_manuals`, `insurances`), así que una fila sin objeto es un dato corrupto
+   **referenciable** — un manual apuntando a un archivo que no existe. Un objeto sin fila es basura
+   invisible en el bucket. Entre los dos huérfanos posibles, se eligió el barato.
+
+2. **Entre los dos pasos el backend NO guarda estado.** La key se deriva de
+   `(fileId, originalName)`, y por eso `buildFileObjectKey` tiene su propio spec que fija que es
+   determinística. Corolario: el confirm tiene que recibir el MISMO `originalName`; otro nombre
+   apunta a una key que no existe y vuelve 404.
+
+3. **El `ContentLength` se firma DENTRO de la URL.** Sin eso, una URL pedida para un PDF de 6MB
+   sirve para subir 5GB: el presigned PUT no tiene límite propio y el archivo ya no pasa por
+   `@fastify/multipart`, que era quien lo aplicaba. En el adapter hace falta además
+   `signableHeaders: new Set(['content-length'])` — sin eso el SDK **no** lo firma, y la condición
+   queda escrita en el código pero ausente de la URL, que es el peor resultado posible porque
+   parece aplicada.
+
+4. **El sniffing de magic bytes se recupera en el confirm. ESTO NO SE PUEDE OMITIR.** El presigned
+   PUT saltea `UploadFileHandler`, que era el único lugar del sistema donde se verificaba el tipo
+   real; sin el confirm, un `.zip` renombrado a `.pdf` entraría sin que nada lo note — una
+   regresión de seguridad cambiada por comodidad. El backend lee los primeros 8KB con
+   `IFileStorageProvider.peek()` (método nuevo) y exige lo mismo que exigía el otro camino. **No se
+   usa `download()`**: bajar un PDF de 80MB para mirarle el principio sería volver a proxear el
+   archivo, que es justo lo que este flujo vino a evitar.
+
+De regalo, `peek()` devuelve el tamaño REAL del objeto guardado, así que `files.size_bytes` es
+ahora mejor dato que en el flujo multipart: no depende de lo que el cliente declaró.
+
+#### Lo que hay que configurar FUERA del código
+
+**CORS en el bucket de DigitalOcean Spaces.** El `PUT` del paso 2 sale del navegador hacia
+`*.digitaloceanspaces.com`, así que el bucket tiene que permitir el origen del panel (método `PUT`,
+headers `content-type` y `content-length`). Sin eso **todas** las subidas fallan igual, y el
+navegador no da detalle a propósito — por eso `readableManualError` traduce `STORAGE_PUT_FAILED:`
+nombrando CORS como causa probable en vez de mostrar "Failed to fetch".
+
+Es configuración de DigitalOcean, no está versionada en ningún repo. Si un día las subidas empiezan
+a fallar todas juntas sin que nadie haya tocado código, mirá ahí primero.
+
+> Dato relacionado, verificado el mismo día: **el backend no tiene CORS** (cero `enableCors`, cero
+> `@fastify/cors` en todo `src/`). No hace falta para este flujo —el navegador sólo habla con
+> Spaces, no con el backend— pero descarta el camino alternativo de llamar a `POST /files` directo
+> desde el browser.
+
+#### El límite que queda
+
+`MAX_DIRECT_UPLOAD_FILE_SIZE_BYTES = 100MB`, en
+`autolibre-backend-hex/src/files/file/application/direct-upload.ts`. Es una constante **distinta**
+de `MAX_UPLOAD_FILE_SIZE_BYTES` (10MB) y no es duplicación: esa mide cuánto está dispuesto a
+bufferizar nuestro servidor en un multipart, y acá el archivo no pasa por nuestro servidor.
+
+Existe igual porque una URL de subida sin tope es una invitación a que cualquier usuario
+autenticado llene el bucket. Se aplica dos veces: al firmar (como `ContentLength`, impide que el
+objeto llegue a existir) y al confirmar (contra el tamaño real, que no depende de que el proveedor
+respete la condición).
+
+Sigue estando mal, y por los mismos motivos de siempre: trocear del lado del cliente (necesitaría
+multipart upload, que el backend no expone) y comprimir en el browser (degrada un manual escaneado
+hasta volverlo ilegible).
 
 ### 3. `vehicles` NO apunta al catálogo: apunta al SPEC
 

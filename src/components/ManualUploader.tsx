@@ -10,10 +10,10 @@ import {
   type ManualLanguage,
 } from '~/lib/manuals'
 import {
+  finishManualUpload,
   orphanFileId,
   readableManualError,
-  retryLinkCatalogManual,
-  uploadCatalogManual,
+  requestManualUploadUrl,
 } from '~/fn/manuals'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
@@ -24,19 +24,29 @@ import { cn } from '~/lib/utils'
 /**
  * Cargar el manual de un modelo.
  *
- * ── Este formulario NO escribe SQL, y es el único del panel ─────────────────
+ * ── El PDF NO pasa por ningún servidor nuestro ──────────────────────────────
  *
- * Manda un `FormData` a un server function que hace DOS llamadas HTTP contra
- * `autolibre-backend-hex`: `POST /files` (el PDF a DigitalOcean Spaces) y
- * `POST /vehicle-catalog-manuals` (la fila). No hay stored procedure de `ops`
- * acá y no debería haberlo — ver `.claude/rules/vehicle-manuals.md`.
+ * Es la única pantalla del panel que sube un archivo, y lo hace en tres pasos:
  *
- * ── Por qué el archivo se manda sin comprimir ni trocear ────────────────────
+ *   1. `requestManualUploadUrl` → server fn, JSON de doscientos bytes
+ *   2. **`PUT` del navegador a DigitalOcean Spaces** ← el archivo va POR ACÁ
+ *   3. `finishManualUpload` → server fn, JSON: confirma y asocia al catálogo
  *
- * Porque el backend corta en 10MB de una y no tiene subida por partes. Trocear
- * del lado del cliente requeriría un endpoint que no existe; comprimir un PDF
- * en el browser degrada un manual escaneado hasta volverlo ilegible. Si el PDF
- * no entra, entra el problema al backend, no un workaround acá.
+ * El paso 2 es el punto entero. Hasta el 2026-09-04 este componente mandaba el
+ * PDF a un server function que lo reenviaba al backend, y producción devolvía
+ * `FUNCTION_PAYLOAD_TOO_LARGE`: Vercel corta el cuerpo de una Serverless
+ * Function en 4.5MB, límite de plataforma que no se configura. El archivo ni
+ * llegaba al backend.
+ *
+ * Subir los límites no era el arreglo — un manual de 300 páginas tampoco
+ * entraba en los 10MB del backend. Lo que estaba mal era proxear el archivo.
+ * → `.claude/rules/vehicle-manuals.md`
+ *
+ * ── Sigue sin comprimirse ni trocearse, y por los mismos motivos ────────────
+ *
+ * Comprimir un PDF en el browser degrada un manual escaneado hasta volverlo
+ * ilegible, y trocear necesitaría multipart upload, que el backend no expone.
+ * Con el techo en 100MB ninguna de las dos hace falta.
  */
 export function ManualUploader({
   catalogId,
@@ -52,7 +62,16 @@ export function ManualUploader({
   const [language, setLanguage] = useState<ManualLanguage | ''>('es')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [orphan, setOrphan] = useState<string | null>(null)
+  /**
+   * El `fileId` de un PDF que YA está en storage y sólo falta terminar de
+   * registrar o asociar.
+   *
+   * Es lo que hace que un fallo del paso 3 no obligue a volver a subir 80MB.
+   * Se limpia en cuanto el operador elige otro archivo: reintentar el paso 3
+   * con un id que no corresponde al archivo elegido asociaría el PDF
+   * equivocado.
+   */
+  const [uploaded, setUploaded] = useState<string | null>(null)
 
   /**
    * El `<input type="file">` es NO CONTROLADO — React no puede setear su value
@@ -66,14 +85,17 @@ export function ManualUploader({
   function reset() {
     setFile(null)
     setVersion('')
-    setOrphan(null)
+    setUploaded(null)
     if (fileInput.current) fileInput.current.value = ''
   }
 
   /**
-   * El chequeo local del tamaño se hace acá Y en el validator del server
-   * function Y en el backend. Tres veces no es paranoia: éste es el único que
-   * evita transferir 40MB para escuchar un 413 tres minutos después.
+   * El chequeo local del tamaño.
+   *
+   * El techo ahora lo pone SÓLO el backend, en su constante del flujo directo
+   * (`MAX_DIRECT_UPLOAD_FILE_SIZE_BYTES`), porque el archivo ya no atraviesa
+   * Vercel. Este chequeo sigue valiendo igual: sin él el operador transfiere el
+   * PDF entero a Spaces para que el `confirm` lo rechace después.
    */
   const tooLarge = file !== null && file.size > MAX_MANUAL_FILE_SIZE_BYTES
 
@@ -82,49 +104,83 @@ export function ManualUploader({
 
     setBusy(true)
     setError(null)
-    setOrphan(null)
-
-    const form = new FormData()
-    form.append('file', file, file.name)
-    form.append('catalogId', catalogId)
-    form.append('version', version)
-    form.append('language', language)
 
     try {
-      await uploadCatalogManual({ data: form })
+      /**
+       * Si ya hay un PDF subido para este archivo, se saltea el paso caro.
+       * Pasa cuando el paso 3 falló y el operador reintenta: el objeto sigue
+       * en storage y la URL firmada ya se consumió.
+       */
+      const fileId = uploaded ?? (await uploadToStorage(file))
+      setUploaded(fileId)
+
+      await finishManualUpload({
+        data: { catalogId, fileId, originalName: file.name, version, language },
+      })
+
       // Lo que quedó guardado lo sabe Postgres, no el cliente: el `created_at`,
-      // el `size_bytes` sniffeado, el `id` generado. Recargar es preguntar;
+      // el `size_bytes` real del objeto, el `id`. Recargar es preguntar;
       // agregar una fila optimista sería inventar un dato que puede no
       // coincidir con el que la base grabó.
       await router.invalidate()
       reset()
     } catch (cause) {
       setError(readableManualError(cause))
-      // Si el PDF subió pero no se pudo atar, el id del archivo huérfano es lo
-      // único que permite reintentar sin volver a transferirlo.
-      setOrphan(orphanFileId(cause))
+      // Si el fallo fue después de registrar el archivo, el id viaja en el
+      // error y sirve igual para reintentar sin volver a subir.
+      setUploaded((prev) => orphanFileId(cause) ?? prev)
     } finally {
       setBusy(false)
     }
   }
 
-  async function retry() {
-    if (!orphan) return
+  /**
+   * Los pasos 1 y 2. Devuelve el `fileId` del objeto ya subido.
+   *
+   * El `PUT` sale del NAVEGADOR, no de un server function, y ese es el motivo
+   * de ser de todo este flujo. `fetch` con el `File` como body manda el binario
+   * tal cual — nada de `FormData`, que lo envolvería en un multipart y le
+   * cambiaría el `Content-Length`, invalidando la firma.
+   *
+   * Los dos headers son obligatorios: el backend firma `ContentType` y
+   * `ContentLength` DENTRO de la URL, así que un PUT que no los mande exactos
+   * lo rechaza Spaces con un 403 que no explica nada.
+   */
+  async function uploadToStorage(pdf: File): Promise<string> {
+    const { fileId, uploadUrl } = await requestManualUploadUrl({
+      data: {
+        originalName: pdf.name,
+        mimeType: MANUAL_MIME_TYPE,
+        sizeBytes: pdf.size,
+      },
+    })
 
-    setBusy(true)
-    setError(null)
-
+    let response: Response
     try {
-      await retryLinkCatalogManual({
-        data: { catalogId, fileId: orphan, version, language },
+      response = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'content-type': MANUAL_MIME_TYPE,
+          'content-length': String(pdf.size),
+        },
+        body: pdf,
       })
-      await router.invalidate()
-      reset()
     } catch (cause) {
-      setError(readableManualError(cause))
-    } finally {
-      setBusy(false)
+      /**
+       * Un `fetch` que TIRA (en vez de devolver un status feo) contra un origen
+       * cruzado es, casi siempre, CORS. Se distingue del error de red porque el
+       * navegador no da detalle a propósito — así que el mensaje nombra la causa
+       * probable en vez de decir "Failed to fetch", que no le sirve a nadie.
+       */
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      throw new Error(`STORAGE_PUT_FAILED:${detail}`)
     }
+
+    if (!response.ok) {
+      throw new Error(`STORAGE_PUT_FAILED:HTTP ${response.status}`)
+    }
+
+    return fileId
   }
 
   return (
@@ -159,7 +215,9 @@ export function ManualUploader({
                 const picked = e.currentTarget.files?.[0] ?? null
                 setFile(picked)
                 setError(null)
-                setOrphan(null)
+                // Otro archivo invalida el PDF ya subido: reintentar con ese id
+                // asociaría el manual equivocado.
+                setUploaded(null)
               }}
               className="text-xs file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-2 file:py-1 file:text-xs file:text-foreground"
             />
@@ -178,6 +236,21 @@ export function ManualUploader({
                 Sólo PDF, hasta {MAX_MANUAL_FILE_SIZE_MB}MB.
               </p>
             )}
+
+            {/*
+              El techo se explica cuando el archivo NO entra, no siempre.
+              Decir de quién es el límite cambia a quién hay que reclamarle.
+              Hasta el 2026-09-04 acá había una rama para Vercel, con su límite
+              de 4.5MB: se borró porque el archivo ya no pasa por Vercel.
+            */}
+            {tooLarge ? (
+              <p className="text-xs leading-relaxed text-destructive">
+                El techo lo pone el backend, en{' '}
+                <code className="font-mono">MAX_DIRECT_UPLOAD_FILE_SIZE_BYTES</code>.
+                Un manual que no entra en {MAX_MANUAL_FILE_SIZE_MB}MB es un caso
+                que nadie previó: avisá antes de comprimirlo.
+              </p>
+            ) : null}
           </div>
 
           <div className="space-y-1">
@@ -263,23 +336,25 @@ export function ManualUploader({
             </p>
 
             {/*
-              El reintento aparece SÓLO cuando el PDF ya está en storage. Es la
-              mitad recuperable de una falla en dos pasos: el archivo costó una
-              transferencia entera y no hay `DELETE /files` para limpiarlo, así
-              que reintentar el atado es más barato y deja una fila huérfana
-              menos en el bucket.
+              El reintento aparece SÓLO cuando el PDF ya está en storage.
+
+              Reintenta el submit ENTERO, no un endpoint especial: `submit()`
+              ve `uploaded` seteado y saltea los pasos 1 y 2. Cuando el panel
+              proxeaba el archivo esto necesitaba su propio server function
+              (`retryLinkCatalogManual`), porque re-subir costaba la
+              transferencia; ahora el ahorro es el mismo y el código es uno solo.
             */}
-            {orphan ? (
+            {uploaded ? (
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 disabled={busy}
-                onClick={() => void retry()}
+                onClick={() => void submit()}
                 className="mt-2 gap-1.5"
               >
                 <RotateCcw className="size-3.5" aria-hidden />
-                Reintentar sin volver a subir
+                Reintentar sin volver a subir el PDF
               </Button>
             ) : null}
           </div>

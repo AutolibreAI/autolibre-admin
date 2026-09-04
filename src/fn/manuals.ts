@@ -8,15 +8,15 @@ import {
   manualUploadFieldsSchema,
 } from '~/lib/manuals'
 import { findCatalog, listCatalogs } from '~/server/catalog.repo'
-import { fileSignedUrl, linkManualToCatalog, uploadFile } from '~/server/backend'
+import {
+  confirmUpload,
+  fileSignedUrl,
+  linkManualToCatalog,
+  requestUploadUrl,
+} from '~/server/backend'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type {
-  CatalogDetail,
-  CatalogListItem,
-  ManualUploadFields,
-  ManualUploadResult,
-} from '~/lib/manuals'
+import type { CatalogDetail, CatalogListItem } from '~/lib/manuals'
 
 /**
  * Todo pasa por `adminMiddleware`, las lecturas incluidas.
@@ -24,9 +24,10 @@ import type {
  * Un server function es un endpoint HTTP público: cualquiera con una sesión
  * válida de la app mobile lo llama con `fetch`, y el guard de `_authed` no lo
  * cubre porque sólo modela lo que la UI ofrece. El catálogo no es secreto, pero
- * `getManualDownloadUrl` sí devuelve una URL firmada a un archivo de storage —
- * y la simetría es lo que hace que nadie tenga que decidir caso por caso cuál
- * de estas funciones era la delicada.
+ * `requestManualUploadUrl` devuelve una credencial de ESCRITURA contra nuestro
+ * bucket y `getManualDownloadUrl` una de lectura — la simetría es lo que hace
+ * que nadie tenga que decidir caso por caso cuál de estas funciones era la
+ * delicada.
  */
 
 export const listVehicleCatalogs = createServerFn({ method: 'GET' })
@@ -45,131 +46,95 @@ export const getVehicleCatalog = createServerFn({ method: 'GET' })
     return found
   })
 
-// ── La carga ─────────────────────────────────────────────────────────────────
+// ── La carga, en tres pasos ──────────────────────────────────────────────────
+//
+// EL PDF NO PASA POR ACÁ. Es el cambio del 2026-09-04 y el motivo de todo lo
+// demás: mientras el panel proxeaba el archivo, Vercel cortaba el cuerpo de la
+// request en 4.5MB (límite de plataforma, no configurable) y un manual de 300
+// páginas no llegaba ni al backend.
+//
+//   1. requestManualUploadUrl  → server fn, JSON chico → { fileId, uploadUrl }
+//   2. PUT del navegador a Spaces                       ← el archivo va POR ACÁ
+//   3. finishManualUpload      → server fn, JSON chico → confirma y asocia
+//
+// Los pasos 1 y 3 pasan por Vercel y pesan bytes. El 2 no pasa por ningún
+// servidor nuestro. → `.claude/rules/vehicle-manuals.md`
 
 /**
- * El validator del upload, a mano y no con zod.
+ * El archivo, descrito. No el archivo.
  *
- * zod no puede describir el binario: en el servidor `File` es el global de
- * Node y en el cliente el del DOM, y `z.instanceof(File)` compila contra uno
- * solo de los dos. Así que el archivo se valida acá y los otros tres campos
- * pasan por `manualUploadFieldsSchema`, que es el mismo schema que la pantalla
- * usa para armar el form.
- *
- * ── Los tres chequeos, y por qué ninguno es la autoridad ────────────────────
- *
- * El backend vuelve a validar los tres, y su versión es más fuerte: sniffea los
- * magic bytes, así que un .zip renombrado a .pdf no le pasa. Estos chequeos
- * existen para NO gastar una subida de 10MB antes de decir que no — y el del
- * tamaño especialmente, porque el 413 del backend llega recién después de haber
- * transferido el archivo entero.
+ * `sizeBytes` no es informativo: el backend lo firma DENTRO de la URL como
+ * `ContentLength` exacto, así que el navegador tiene que subir exactamente ese
+ * tamaño o Spaces lo rechaza. Por eso sale de `file.size` y nunca de un input.
  */
-function parseManualUpload(input: unknown): ManualUploadFields & { file: File } {
-  if (!(input instanceof FormData)) {
-    throw new Error('BAD_REQUEST:Se esperaba un formulario con el archivo')
-  }
-
-  const file = input.get('file')
-
-  if (!(file instanceof File) || file.size === 0) {
-    throw new Error('NO_FILE')
-  }
-
-  /**
-   * El tipo se mira sobre `file.type`, que lo declara el navegador a partir de
-   * la extensión. Es exactamente el dato en el que el backend NO confía, y con
-   * razón. Acá alcanza igual: si miente, el sniffing del backend lo caza y el
-   * único costo es una subida perdida.
-   */
-  if (file.type !== MANUAL_MIME_TYPE) {
-    throw new Error('NOT_A_PDF')
-  }
-
-  if (file.size > MAX_MANUAL_FILE_SIZE_BYTES) {
-    throw new Error('TOO_LARGE')
-  }
-
-  const fields = manualUploadFieldsSchema.parse({
-    catalogId: input.get('catalogId'),
-    version: input.get('version') ?? '',
-    language: input.get('language') ?? '',
-  })
-
-  return { ...fields, file }
-}
+const uploadRequestSchema = z.object({
+  originalName: z.string().trim().min(1).max(255),
+  mimeType: z.literal(MANUAL_MIME_TYPE),
+  sizeBytes: z.number().int().positive().max(MAX_MANUAL_FILE_SIZE_BYTES),
+})
 
 /**
- * Subir un manual: las DOS llamadas al backend, en orden.
+ * Paso 1 — pedir la URL firmada.
  *
- * ── Por qué esto no es atómico, y qué se hace al respecto ───────────────────
- *
- * Son dos endpoints y no hay transacción que los abarque: `POST /files` deja el
- * PDF en DigitalOcean Spaces y `POST /vehicle-catalog-manuals` graba la fila.
- * Si el segundo falla, **el archivo ya está subido** y no hay `DELETE /files`
- * en el backend para limpiarlo.
- *
- * La respuesta honesta no es esconderlo: es devolver el `fileId` con
- * `linked: false`, para que el operador pueda reintentar el atado SIN volver a
- * subir 8MB, y para que el archivo huérfano tenga un id anotado en algún lado
- * en vez de quedar sólo en el bucket.
- *
- * Lo que NO se hizo, a propósito: un reintento automático del segundo paso. Los
- * dos motivos por los que falla —catálogo inexistente, rol insuficiente— no se
- * arreglan solos, así que reintentar sólo agrega latencia antes del mismo
- * error.
+ * El `mimeType` es `z.literal('application/pdf')` y no un enum abierto: el
+ * panel sólo carga manuales, y un `.png` como manual es un dato roto que nadie
+ * va a poder leer en la app. `POST /files` del backend acepta imágenes; esta
+ * pantalla decide no hacerlo.
  */
-export const uploadCatalogManual = createServerFn({ method: 'POST' })
+export const requestManualUploadUrl = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .validator(parseManualUpload)
-  .handler(async ({ data }): Promise<ManualUploadResult> => {
-    const fileId = await uploadFile(data.file)
+  .validator(uploadRequestSchema)
+  .handler(async ({ data }): Promise<{ fileId: string; uploadUrl: string }> =>
+    requestUploadUrl(data),
+  )
+
+/**
+ * Paso 3 — confirmar el objeto y asociarlo al catálogo.
+ *
+ * Son DOS llamadas al backend y no son atómicas, igual que antes. Lo que
+ * cambió es cuál es la mitad cara: ahora la transferencia del PDF ya ocurrió y
+ * ninguna de estas dos llamadas la repite. Un fallo acá se reintenta con
+ * `finishManualUpload` de nuevo, y sale gratis — `POST /files/confirm` es
+ * idempotente del lado del backend.
+ *
+ * Por eso ya NO existe un `retryLinkCatalogManual` aparte: cuando el panel
+ * proxeaba, reintentar el atado sin volver a subir 8MB era una optimización que
+ * valía su propio endpoint. Ahora reintentar todo el paso 3 cuesta dos JSON.
+ */
+export const finishManualUpload = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(
+    manualUploadFieldsSchema.extend({
+      fileId: z.uuid(),
+      originalName: z.string().trim().min(1).max(255),
+    }),
+  )
+  .handler(async ({ data }): Promise<{ fileId: string }> => {
+    await confirmUpload({
+      fileId: data.fileId,
+      originalName: data.originalName,
+      mimeType: MANUAL_MIME_TYPE,
+    })
 
     try {
       await linkManualToCatalog({
         catalogId: data.catalogId,
-        fileId,
+        fileId: data.fileId,
         version: data.version,
         language: data.language,
       })
     } catch (cause) {
       /**
-       * Se re-tira con el `fileId` pegado al mensaje, no se traga.
-       *
-       * Devolver `{ linked: false }` como éxito dejaría la pantalla diciendo
-       * "listo" sobre un manual que no existe. El id viaja EN el error para que
-       * la UI pueda ofrecer el reintento barato, que es la única parte
-       * recuperable de esto.
+       * El archivo YA quedó confirmado y registrado: existe como fila de
+       * `files`, sólo que no lo referencia ningún manual. Se re-tira con el id
+       * pegado para que la UI pueda ofrecer el reintento sabiendo que el paso
+       * caro no hay que repetirlo.
        */
       const raw = cause instanceof Error ? cause.message : String(cause)
-      throw new Error(`LINK_FAILED:${fileId}:${raw}`)
+      throw new Error(`LINK_FAILED:${data.fileId}:${raw}`)
     }
 
-    return { fileId, linked: true }
-  })
-
-/**
- * Reintentar SÓLO el segundo paso, con un archivo que ya está en storage.
- *
- * Existe por el caso de arriba y nada más. No es un endpoint de propósito
- * general para atar cualquier archivo a cualquier catálogo: el `fileId` que
- * recibe salió de un `uploadCatalogManual` que falló en esta misma sesión.
- *
- * Igual va con `adminMiddleware` y el backend vuelve a exigir `AdminGuard`, así
- * que aunque alguien lo llamara con un id arbitrario, lo peor que consigue es
- * atar un archivo suyo a un catálogo — que es exactamente lo que el endpoint
- * hace de todos modos.
- */
-export const retryLinkCatalogManual = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
-  .validator(manualUploadFieldsSchema.extend({ fileId: z.uuid() }))
-  .handler(async ({ data }): Promise<ManualUploadResult> => {
-    await linkManualToCatalog({
-      catalogId: data.catalogId,
-      fileId: data.fileId,
-      version: data.version,
-      language: data.language,
-    })
-    return { fileId: data.fileId, linked: true }
+    return { fileId: data.fileId }
   })
 
 /**
@@ -205,16 +170,28 @@ export function readableManualError(cause: unknown): string {
   const raw = cause instanceof Error ? cause.message : String(cause)
 
   if (raw.startsWith('LINK_FAILED:')) {
-    // `LINK_FAILED:<fileId>:<motivo>` — se muestra el motivo, y el fileId lo
-    // usa la UI aparte para ofrecer el reintento.
     const reason = raw.split(':').slice(2).join(':')
-    return `El PDF se subió, pero no se pudo asociar al modelo: ${readableManualError(new Error(reason))}`
+    return `El PDF se subió y quedó registrado, pero no se pudo asociar al modelo: ${readableManualError(new Error(reason))}`
   }
 
   if (raw === 'NO_FILE') return 'Elegí un archivo PDF antes de subir.'
-  if (raw === 'NOT_A_PDF') return 'Sólo se aceptan PDFs. Un manual en imagen no se puede leer en la app.'
+  if (raw === 'NOT_A_PDF')
+    return 'Sólo se aceptan PDFs. Un manual en imagen no se puede leer en la app.'
   if (raw === 'TOO_LARGE')
-    return `El PDF supera los ${MAX_MANUAL_FILE_SIZE_MB}MB que acepta el backend. Ese límite es del backend, no del panel: hay que subirlo allá o comprimir el PDF.`
+    return `El PDF supera los ${MAX_MANUAL_FILE_SIZE_MB}MB que acepta la subida directa. Ese límite es del backend (MAX_DIRECT_UPLOAD_FILE_SIZE_BYTES).`
+
+  /**
+   * El PUT del navegador contra Spaces falló.
+   *
+   * La causa más probable NO es el archivo: es **CORS del bucket**. El PUT sale
+   * del navegador hacia `*.digitaloceanspaces.com`, así que el bucket tiene que
+   * permitir el origen del panel. Es configuración de DigitalOcean, no código,
+   * y sin ella todas las subidas fallan igual — por eso el mensaje lo nombra.
+   */
+  if (raw.startsWith('STORAGE_PUT_FAILED:')) {
+    const detail = raw.slice('STORAGE_PUT_FAILED:'.length)
+    return `El navegador no pudo subir el PDF a storage (${detail}). Si esto falla siempre y no sólo con este archivo, lo más probable es que falte configurar CORS en el bucket de DigitalOcean Spaces para el dominio del panel.`
+  }
 
   if (raw === 'FILE_NOT_YOURS')
     return 'No podés descargar este PDF: el backend sólo se lo entrega a quien lo subió. Pedíselo a quien figura como responsable de la carga.'
@@ -228,10 +205,13 @@ export function readableManualError(cause: unknown): string {
 
   if (raw.startsWith('BACKEND_ERROR:')) {
     const [, status, ...rest] = raw.split(':')
+    // El 404 del confirm casi siempre significa lo mismo, y el texto crudo del
+    // backend no lo dice: el objeto no llegó a storage.
+    if (status === '404')
+      return `El backend no encontró el archivo subido. Puede que el PUT haya fallado o que la URL de subida haya vencido — probá de nuevo desde cero. (${rest.join(':')})`
     return `El backend respondió ${status}: ${rest.join(':')}`
   }
 
-  if (raw.startsWith('BAD_REQUEST:')) return raw.slice('BAD_REQUEST:'.length)
   if (raw.startsWith('NOT_FOUND:')) return 'Ese modelo ya no existe. Recargá la pantalla.'
 
   if (raw === 'UNAUTHENTICATED') return 'Tu sesión expiró. Volvé a iniciar sesión.'
@@ -242,12 +222,18 @@ export function readableManualError(cause: unknown): string {
 
   // `AbortSignal.timeout` tira un DOMException llamado TimeoutError.
   if (raw.includes('timed out') || raw.includes('TimeoutError'))
-    return 'El backend tardó demasiado. Si el PDF es grande, probá de nuevo; si sigue, fijate que el backend esté arriba.'
+    return 'El backend tardó demasiado. Probá de nuevo; si sigue, fijate que el backend esté arriba.'
 
   return raw
 }
 
-/** Saca el `fileId` de un `LINK_FAILED:` para poder ofrecer el reintento. */
+/**
+ * Saca el `fileId` de un `LINK_FAILED:` para poder ofrecer el reintento barato.
+ *
+ * Sigue existiendo aunque el reintento ya no ahorre una transferencia: ahorra
+ * volver a pedir una URL firmada y volver a subir el PDF, que con un manual de
+ * 80MB es la diferencia entre reintentar y rendirse.
+ */
 export function orphanFileId(cause: unknown): string | null {
   const raw = cause instanceof Error ? cause.message : String(cause)
   if (!raw.startsWith('LINK_FAILED:')) return null
