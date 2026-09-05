@@ -25,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
+import { formatUsd } from '~/lib/ai-usage'
 import { formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
@@ -60,6 +61,7 @@ const TYPE_FILTER_LABELS: Record<ChatTypeFilter, string> = {
 }
 
 const MESSAGE_FILTER_LABELS: Record<ChatMessageFilter, string> = {
+  withMessages: 'Con mensajes',
   all: 'Todos',
   noAiReply: 'Sin respuesta de IA',
   empty: 'Sin mensajes',
@@ -82,17 +84,26 @@ function ChatsList() {
   const setSearch = (next: Partial<ChatSearch>) =>
     navigate({ search: { ...search, ...next }, replace: true })
 
-  const filtered =
-    search.q ||
+  /**
+   * "Angostado" = el operador tocó algo. El default (`withMessages` y nada
+   * más) NO cuenta como filtro puesto, pero SÍ oculta las conversaciones
+   * vacías — así que el subtítulo lo dice en vez de mentir con "en total".
+   */
+  const narrowed =
+    Boolean(search.q) ||
     search.type !== 'all' ||
-    (search.model && search.model.length > 0) ||
-    search.messages !== 'all'
+    (search.model?.length ?? 0) > 0 ||
+    search.messages !== 'withMessages'
 
   return (
     <>
       <PageHeader
         title="Chats de IA"
-        subtitle={`${formatInt(chats.length)} ${filtered ? 'con este filtro' : 'en total'}`}
+        subtitle={
+          narrowed
+            ? `${formatInt(chats.length)} con este filtro`
+            : `${formatInt(chats.length)} con mensajes · las conversaciones vacías se ocultan`
+        }
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 
@@ -179,6 +190,7 @@ function ChatsList() {
                 <SortableHeader label="Vehículo" sortKey="vehicle" search={search} />
                 <SortableHeader label="Modelo" sortKey="model" search={search} />
                 <SortableHeader label="Mensajes" sortKey="userMessages" search={search} align="right" />
+                <SortableHeader label="Costo" sortKey="cost" search={search} align="right" />
                 <SortableHeader label="Título" sortKey="title" search={search} />
                 <SortableHeader label="Fecha" sortKey="startedAt" search={search} />
               </TableRow>
@@ -270,6 +282,10 @@ function ChatRow({ chat: c }: { chat: ChatListItem }) {
         </span>
       </TableCell>
 
+      <TableCell className="text-right text-sm tabular-nums">
+        <CostCell usd={c.costUsd} unpriced={c.unpricedMessages} />
+      </TableCell>
+
       <TableCell className="max-w-[280px] text-sm">
         {c.title ? (
           <Link
@@ -295,6 +311,44 @@ function ChatRow({ chat: c }: { chat: ChatListItem }) {
         {formatDate(c.startedAt)}
       </TableCell>
     </TableRow>
+  )
+}
+
+/**
+ * El costo de IA de la conversación, con la misma disciplina que `/ai-costos`:
+ * el número NUNCA se muestra solo. `null` (sin mensajes de IA medidos, o todos
+ * sin tarifa) rinde "—", nunca "US$ 0" — cero es un precio, null es "no
+ * sabemos". Si hay mensajes sin tarifa, el costo mostrado los deja afuera y el
+ * "+N" ámbar lo dice.
+ */
+function CostCell({ usd, unpriced }: { usd: number | null; unpriced: number }) {
+  if (usd === null) {
+    return unpriced > 0 ? (
+      <span
+        className="text-status-yellow"
+        title={`${unpriced} ${unpriced === 1 ? 'mensaje' : 'mensajes'} de IA sin tarifa cargada para su modelo — no se puede costear`}
+      >
+        —
+      </span>
+    ) : (
+      <span className="text-muted-foreground/50" title="Sin mensajes de IA medidos">
+        —
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={cn(unpriced > 0 && 'text-status-yellow')}
+      title={
+        unpriced > 0
+          ? `No incluye ${unpriced} ${unpriced === 1 ? 'mensaje' : 'mensajes'} de IA sin tarifa`
+          : undefined
+      }
+    >
+      {formatUsd(usd)}
+      {unpriced > 0 ? <span className="text-muted-foreground"> +{unpriced}</span> : null}
+    </span>
   )
 }
 

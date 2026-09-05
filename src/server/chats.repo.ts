@@ -13,9 +13,23 @@ import type {
  * Chats de IA — solo lectura, igual que `users.repo.ts` y por el mismo
  * motivo: `conversations`/`conversation_messages` son dominio del backend
  * (`assistant/`), este repo sólo consulta.
+ *
+ * El listado además LEE `ops.v_ai_usage_costed` para el costo por chat. Sigue
+ * siendo solo lectura, y sigue el mismo criterio que `ops.repo.ts`: el SQL que
+ * cruza a `ops` vive en el repo, no en una función. El costeo NO se
+ * reimplementa acá — la vista es la única definición.
  */
 
 const toInt = (value: unknown): number => Number(value ?? 0)
+
+/**
+ * Para PLATA: preserva el `null`. `pg` devuelve `numeric` como string, así que
+ * `Number()` directo daría `NaN` sobre null y `0` sobre "0" — y acá `null`
+ * ("no sabemos el costo") NO es `0` ("costó cero"). Mismo par `toInt`/`toNum`
+ * que `ai-usage.repo.ts`.
+ */
+const toNum = (value: unknown): number | null =>
+  value === null || value === undefined ? null : Number(value)
 
 const toIso = (value: unknown): string | null =>
   value instanceof Date ? value.toISOString() : value === null || value === undefined ? null : String(value)
@@ -37,6 +51,8 @@ interface ChatListRow {
   model: string | null
   user_message_count: number | string
   ai_message_count: number | string
+  cost_usd: string | null
+  unpriced_messages: number | string
   title: string | null
   status: string
   started_at: Date | string
@@ -55,6 +71,7 @@ const SORT_COLUMNS: Record<ChatSortKey, string> = {
   model: 'model',
   userMessages: 'user_message_count',
   aiMessages: 'ai_message_count',
+  cost: 'cost_usd',
   title: 'title',
   startedAt: 'started_at',
 }
@@ -99,7 +116,9 @@ export async function listChats(
     outerWhere.push(`model = $${params.length}`)
   }
 
-  if (search.messages === 'noAiReply') {
+  if (search.messages === 'withMessages') {
+    outerWhere.push('(user_message_count > 0 or ai_message_count > 0)')
+  } else if (search.messages === 'noAiReply') {
     outerWhere.push('user_message_count > 0 and ai_message_count = 0')
   } else if (search.messages === 'empty') {
     outerWhere.push('user_message_count = 0 and ai_message_count = 0')
@@ -136,7 +155,30 @@ export async function listChats(
         -- una columna de título en el dominio.
         (select m.content from conversation_messages m
            where m.conversation_id = c.id and m.author = 'user'
-           order by m.sent_at asc limit 1) as title
+           order by m.sent_at asc limit 1) as title,
+        -- Costo de IA de la conversación entera: la suma de total_usd de sus
+        -- mensajes de IA, ya costeados por ops.v_ai_usage_costed (uso × tarifa
+        -- vigente al MOMENTO de cada llamada). Es la MISMA fuente que
+        -- /ai-costos — el costeo se define una sola vez, en la vista, no acá.
+        --
+        -- La vista expone event_id (= conversation_messages.id) pero no
+        -- conversation_id, así que se mapea con un join de vuelta a
+        -- conversation_messages por PK. Barato, y no toca el schema de ops.
+        --
+        -- sum() saltea los NULL: un modelo sin tarifa no rompe el total, pero
+        -- tampoco lo infla — queda contado aparte en unpriced_messages. Si NO
+        -- hay ningun mensaje de IA medido (o todos son unpriced), sum() da NULL,
+        -- que es lo correcto: "no sabemos", nunca "costo 0". Por eso el mapeo
+        -- usa toNum y no toInt.
+        (select sum(vuc.total_usd)
+           from ops.v_ai_usage_costed vuc
+           join conversation_messages cm on cm.id = vuc.event_id
+          where vuc.surface = 'assistant' and cm.conversation_id = c.id) as cost_usd,
+        (select count(*)::int
+           from ops.v_ai_usage_costed vuc
+           join conversation_messages cm on cm.id = vuc.event_id
+          where vuc.surface = 'assistant' and cm.conversation_id = c.id
+            and vuc.unpriced) as unpriced_messages
       from conversations c
       join users u on u.id = c.user_id
       left join vehicles v on v.id = c.vehicle_id
@@ -165,6 +207,8 @@ export async function listChats(
       model: r.model,
       userMessageCount: toInt(r.user_message_count),
       aiMessageCount: toInt(r.ai_message_count),
+      costUsd: toNum(r.cost_usd),
+      unpricedMessages: toInt(r.unpriced_messages),
       title: r.title,
       status: r.status,
       startedAt: toIsoRequired(r.started_at),
