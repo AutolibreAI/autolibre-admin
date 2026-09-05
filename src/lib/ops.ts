@@ -67,6 +67,64 @@ export interface AdoptionPulse {
   vehiclesPerUser: number | null
 }
 
+// ── Serie de adopción (pantalla /graficos) ──────────────────────────────────
+
+/**
+ * La granularidad temporal de los gráficos de crecimiento. Conjunto cerrado
+ * `as const` + `Record` de labels, mismo patrón que `OPS_WINDOWS` — un enum que
+ * `validateSearch` necesita fijo en tiempo de compilación.
+ */
+export const GROWTH_UNITS = ['dia', 'semana', 'mes', 'anio'] as const
+export type GrowthUnit = (typeof GROWTH_UNITS)[number]
+
+export const GROWTH_UNIT_LABELS: Record<GrowthUnit, string> = {
+  dia: 'Día',
+  semana: 'Semana',
+  mes: 'Mes',
+  anio: 'Año',
+}
+
+/** Plural, para ejes y textos ("altas por {mes}s" no, "altas por mes"). */
+export const GROWTH_UNIT_SINGULAR: Record<GrowthUnit, string> = {
+  dia: 'día',
+  semana: 'semana',
+  mes: 'mes',
+  anio: 'año',
+}
+
+export const growthSearchSchema = z.object({
+  /**
+   * `.catch` y `.default` al mismo valor: un `?unit=quincena` de un link viejo
+   * renderiza el default, no una pantalla de error (criterio de `search.ts`).
+   * Default `dia` porque es la única unidad con una tendencia visible sobre los
+   * pocos días de historia que hay al 2026-09-05.
+   */
+  unit: z.enum(GROWTH_UNITS).catch('dia').default('dia'),
+})
+
+export type GrowthSearch = z.infer<typeof growthSearchSchema>
+
+/**
+ * Un punto de la serie: un período con cuántas altas hubo en él (`added`) y
+ * cuántas acumuladas hasta el final del período (`total`).
+ *
+ * `bucket` es `'YYYY-MM-DD'` (el primer día del período, truncado en UTC del
+ * lado de Postgres). String y no `Date` a propósito — un `date` de `pg` llega a
+ * medianoche local del proceso y `toISOString()` corre la serie un día si el
+ * proceso está al este de UTC (la trampa que documenta `ai-costs.md`).
+ */
+export interface GrowthPoint {
+  bucket: string
+  added: number
+  total: number
+}
+
+export interface GrowthSeries {
+  unit: GrowthUnit
+  users: Array<GrowthPoint>
+  vehicles: Array<GrowthPoint>
+}
+
 // ── Marketplace ──────────────────────────────────────────────────────────────
 
 /**

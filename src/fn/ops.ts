@@ -1,11 +1,13 @@
 import { createServerFn } from '@tanstack/react-start'
 import {
   excludedDomainSchema,
+  growthSearchSchema,
   opsSearchSchema,
   removeExcludedDomainSchema,
 } from '~/lib/ops'
 import {
   adoptionPulse,
+  adoptionSeries,
   catalogGaps,
   excludedDomains,
   failureReasons,
@@ -21,6 +23,7 @@ import type {
   CatalogGap,
   ExcludedDomain,
   FailureReason,
+  GrowthSeries,
   OpsPulse,
   QueueHealth,
 } from '~/lib/ops'
@@ -64,6 +67,18 @@ export const getOpsPulse = createServerFn({ method: 'GET' })
     ])
     return { adoption, marketplace, leads }
   })
+
+/**
+ * Las dos series de crecimiento (`/graficos`). Mismo `adminMiddleware` que el
+ * resto: publica el tamaño y la velocidad de crecimiento del negocio, que no se
+ * le contesta a cualquiera con una sesión de la app.
+ */
+export const getAdoptionSeries = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(growthSearchSchema)
+  .handler(async ({ data }): Promise<GrowthSeries> =>
+    adoptionSeries(data.unit, { signal: requestSignal() }),
+  )
 
 export const getQueueHealth = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])

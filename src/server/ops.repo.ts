@@ -7,6 +7,9 @@ import type {
   CatalogGap,
   ExcludedDomain,
   FailureReason,
+  GrowthPoint,
+  GrowthSeries,
+  GrowthUnit,
   LeadFunnel,
   MarketplaceHealth,
   OpsWindow,
@@ -155,6 +158,110 @@ export async function adoptionPulse(
     // "tienen cuenta y no cargaron el auto", que es una afirmación distinta.
     vehiclesPerUser: usersTotal === 0 ? null : vehiclesActive / usersTotal,
   }
+}
+
+// ── Serie de adopción (pantalla /graficos) ──────────────────────────────────
+
+/**
+ * `GrowthUnit → unidad de Postgres`. Viaja como PARÁMETRO en la consulta, nunca
+ * interpolado: `date_trunc()` acepta text como primer argumento, así que no hace
+ * falta meterlo en el string.
+ */
+const PG_UNIT: Record<GrowthUnit, string> = {
+  dia: 'day',
+  semana: 'week',
+  mes: 'month',
+  anio: 'year',
+}
+
+interface SeriesRow {
+  bucket: string
+  added: number | string
+  total: number | string
+}
+
+/**
+ * Una serie de altas por período. `tsColumn` y `fromWhere` son literales del
+ * código (`'u.created_at'` / `'v.created_at'`, y el FROM con su WHERE), nunca
+ * entrada de usuario — la única variable que viene de afuera es `unit`, y va
+ * parametrizada.
+ *
+ * `generate_series` entre el primer y el último bucket rellena los períodos
+ * vacíos con 0. Sin eso, una semana sin altas DESAPARECE del eje y la curva
+ * miente por omisión — un hueco se lee como "no hay dato", no como "no entró
+ * nadie". (`ai_usage_daily` no rellena y su chart lo tolera porque es consumo,
+ * no crecimiento acumulado; acá no se tolera.)
+ *
+ * En UTC (`at time zone 'UTC'`) por el mismo motivo que `ai_usage_daily`: los
+ * formatters del panel pinean UTC, y agrupar en otra zona haría que el último
+ * bucket no cierre con el total.
+ */
+async function growthSeries(
+  tsColumn: string,
+  fromWhere: string,
+  unit: GrowthUnit,
+): Promise<Array<GrowthPoint>> {
+  const rows = await sql<SeriesRow>(
+    `
+    with counts as (
+      select date_trunc($1, ${tsColumn} at time zone 'UTC') as bucket, count(*)::int as added
+      ${fromWhere}
+      group by 1
+    ),
+    span as (select min(bucket) as lo, max(bucket) as hi from counts),
+    buckets as (
+      select generate_series(span.lo, span.hi, ('1 ' || $1)::interval) as bucket from span
+    )
+    select
+      to_char(b.bucket, 'YYYY-MM-DD') as bucket,
+      coalesce(c.added, 0) as added,
+      (sum(coalesce(c.added, 0)) over (order by b.bucket))::int as total
+    from buckets b
+    left join counts c using (bucket)
+    order by b.bucket
+    `,
+    [PG_UNIT[unit]],
+  )
+
+  return rows.map((r) => ({ bucket: r.bucket, added: toInt(r.added), total: toInt(r.total) }))
+}
+
+/**
+ * Las dos series que pide `/graficos`: altas de `users` y de `vehicles` por
+ * período.
+ *
+ * Vive acá y no en un repo nuevo porque es la misma data de adopción que
+ * `adoptionPulse`, sobre las mismas tablas de `public`, y usa
+ * `INTERNAL_PREDICATE` — que es privado de este archivo a propósito
+ * (`ops-metrics.md`: el predicado de "cuenta interna" no se duplica).
+ *
+ * ── Dos diferencias con `adoptionPulse`, las dos deliberadas ─────────────────
+ *
+ *  1. VEHÍCULOS también se filtran por cuenta interna. `adoptionPulse` cuenta
+ *     los vehículos crudos; acá el gráfico es "crecimiento real", así que un
+ *     auto cuyo dueño es una cuenta de test no cuenta. Se join a `users` por
+ *     `user_id` y se aplica el mismo predicado.
+ *  2. Se cuenta por `created_at` sin mirar `archived`. Un vehículo que después
+ *     se archivó fue un registro real en su momento; la curva de crecimiento no
+ *     lo borra hacia atrás. Consecuencia: el último `total` de la serie de
+ *     vehículos = activos + archivados, NO el "Vehículos activos" de Inicio.
+ */
+export async function adoptionSeries(
+  unit: GrowthUnit,
+  opts: { signal?: AbortSignal } = {},
+): Promise<GrowthSeries> {
+  void opts.signal
+
+  const [users, vehicles] = await Promise.all([
+    growthSeries('u.created_at', `from users u where not ${INTERNAL_PREDICATE}`, unit),
+    growthSeries(
+      'v.created_at',
+      `from vehicles v join users u on u.id = v.user_id where not ${INTERNAL_PREDICATE}`,
+      unit,
+    ),
+  ])
+
+  return { unit, users, vehicles }
 }
 
 // ── Marketplace ──────────────────────────────────────────────────────────────

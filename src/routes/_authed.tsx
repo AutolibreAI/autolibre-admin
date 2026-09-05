@@ -17,6 +17,7 @@ import {
   MessageSquare,
   ScanLine,
   Store,
+  TrendingUp,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -134,9 +135,14 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/chats", label: "Chats de IA", icon: MessageSquare },
   /**
-   * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
+   * Las tres últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son
-   * operación del panel.
+   * operación / analítica del panel.
+   *
+   * `Gráficos` es la curva de crecimiento —usuarios y vehículos período a
+   * período— agregada a mano sobre `users`/`vehicles` de `public`, mismo
+   * criterio que `Operación`. Es lo que `Inicio` no muestra: la tendencia, no
+   * el snapshot.
    *
    * `Operación` lee tablas de `public` y no escribe ninguna: muestra colas
    * colgadas y motivos de falla, y manda a la pantalla donde se arregla. Su
@@ -144,6 +150,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    *
    * `Costos de IA` vive entero en `ops` — el schema que este repo migra.
    */
+  { to: "/graficos", label: "Gráficos", icon: TrendingUp },
   { to: "/operacion", label: "Operación", icon: Activity },
   { to: "/ai-costos", label: "Costos de IA", icon: Coins },
 ];
