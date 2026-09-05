@@ -27,5 +27,11 @@ export const formatDate = (iso: string) => date.format(new Date(iso))
  * calcula su límite, así que un PDF que acá se lee "10.4 MB" es exactamente el
  * que allá rebota con 413. Con base 1000 los dos números discrepan justo en el
  * borde, que es el único lugar donde el número importa.
+ *
+ * Debajo de 1 MB se muestra en KB: `/documentos` lista fotos de cédula y
+ * registro que pesan cientos de KB, y "0.2 MB" para todas se lee como ruido.
  */
-export const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+export const formatBytes = (bytes: number) =>
+  bytes < 1024 * 1024
+    ? `${Math.round(bytes / 1024)} KB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`

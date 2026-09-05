@@ -9,6 +9,7 @@ import {
   Activity,
   BookOpen,
   Coins,
+  FileText,
   Handshake,
   Inbox,
   LayoutDashboard,
@@ -114,6 +115,15 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * → `.claude/rules/scanner-compatibility.md`
    */
   { to: "/escaneres", label: "Escáneres", icon: ScanLine },
+  /**
+   * `Documentos` cierra el bloque de `vehicle-management`: son los cuatro
+   * aggregates de documento —Insurance, RegistrationCard, DriverLicense,
+   * VehicleInspection— cuyos campos el backend llena por OCR. La pantalla es de
+   * REVISIÓN, no un CRUD: el OCR falla y hay que poder verlo contra los datos
+   * reales del vehículo. Editar desde el panel es un paso aparte (necesita un
+   * SP de `ops` con auditoría), así que hoy es read-only.
+   */
+  { to: "/documentos", label: "Documentos", icon: FileText },
   /**
    * `Chats de IA` es el último bloque de dominio y no encaja en ninguno de
    * los dos de arriba: `conversations` cuelga de `assistant/`, un bounded
