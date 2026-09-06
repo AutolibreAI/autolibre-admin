@@ -154,7 +154,8 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
     {
       key: 'leads',
       icon: Handshake,
-      to: '/leads',
+      // Directo a la pestaña con datos: `/leads` es sólo el layout y redirige acá.
+      to: '/leads/talleres',
       value: formatInt(leads.won),
       label: 'Leads ganados',
       hint:

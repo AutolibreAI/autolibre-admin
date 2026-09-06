@@ -187,7 +187,10 @@ pantalla no va todavía.
 | `/dashboard` | `true` + streaming | El censo por `(role, auth_provider)`, el `count(*)` de partners y el `group by status` de leads, sueltos |
 | `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
 | `/partners` | `true` | El listado del directorio, la carga manual de rubros y **la ficha** (estado, coordenadas, contacto) |
-| `/leads` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/leads` | — | Layout de pestañas de las líneas de captación. Redirige a `/leads/talleres`. → `.claude/rules/leads.md` |
+| `/leads/talleres` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/leads/seguros` | `true` | El `select … from insurances where expiration_date < now() + interval '30 days'` que hoy nadie corre — la cola de pólizas por vencer para ofrecer alternativas |
+| `/leads/contactos` · `/leads/financiacion` · `/leads/pedidos` | — | **Nada todavía.** Pestañas "próximamente": la excepción relevada el 2026-09-06 a "una pantalla que no reemplaza una consulta no va". Se decidió mostrarlas como plan visible. → `.claude/rules/leads.md` |
 | `/usuarios` | `true` | El `select * from users where email ilike '%…%'` de cada reclamo de soporte, más las dos columnas que no están en él: cuántos vehículos tiene y cuándo fue su última señal de vida |
 | `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
 | `/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra 83 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
@@ -465,6 +468,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
 | `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, la subida directa a Spaces en cuatro llamadas (y por qué proxear el archivo era el error), el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, el límite de plataforma que sólo aparece en producción, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
 | `chats.md` | Chats de IA: por qué `type` y `title` no son columnas y cómo se derivan, por qué el modelo es texto libre y no un enum, por qué `q` va en el `where` de afuera, y las tres patas `LEFT` del join al vehículo |
+| `leads.md` | Las pestañas de `/leads`: por qué "sección" acá es vista de producto y no el `Lead` del backend, qué pestaña tiene datos y por qué las otras tres son "próximamente", por qué Contactos no se puede arrancar desde este repo, y las trampas de Seguros (días del vencimiento y no de `status`, `JOIN` y no `LEFT`, aseguradora cruda, PDF no descargable) |
 
 ## Cómo mantener esto vivo
 
