@@ -11,10 +11,11 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  * "Talleres". Las otras cuatro NO son `Lead`s y su código no dice `Lead`.
  * → `.claude/rules/leads.md`
  *
- * ── Al 2026-09-06 sólo dos pestañas tienen datos ────────────────────────────
+ * ── Al 2026-09-06 tres pestañas tienen datos ───────────────────────────────
  *
- * "Talleres" (los `leads` del marketplace) y "Seguros" (`insurances` por
- * vencer). Las otras tres son pestañas "todavía no" A PROPÓSITO: la decisión
+ * "Talleres" (los `leads` del marketplace), "Seguros" (`insurances` por vencer)
+ * y "Multas" (`fines` por vehículo consultado). Las otras tres son pestañas
+ * "todavía no" A PROPÓSITO: la decisión
  * fue mostrarlas, no esconderlas hasta que existan, para que quede a la vista
  * qué líneas hay como plan y qué falta para cada una. Ver `.claude/rules/leads.md`.
  *
@@ -36,6 +37,7 @@ interface Tab {
 const TABS: ReadonlyArray<Tab> = [
   { to: '/leads/talleres', label: 'Talleres' },
   { to: '/leads/seguros', label: 'Seguros' },
+  { to: '/leads/multas', label: 'Multas' },
   { to: '/leads/contactos', label: 'Contactos', soon: true },
   { to: '/leads/financiacion', label: 'Financiación', soon: true },
   { to: '/leads/pedidos', label: 'Pedidos', soon: true },

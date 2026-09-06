@@ -1,14 +1,15 @@
 # Leads: las pestañas de `/leads`
 
 Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
-`leads.talleres.tsx`, `leads.seguros.tsx`, `leads.contactos.tsx`,
-`leads.financiacion.tsx`, `leads.pedidos.tsx`, `src/lib/insurance.ts`,
-`src/server/insurance.repo.ts`, `src/fn/insurance.ts`,
+`leads.talleres.tsx`, `leads.seguros.tsx`, `leads.multas.tsx`,
+`leads.contactos.tsx`, `leads.financiacion.tsx`, `leads.pedidos.tsx`,
+`src/lib/insurance.ts`, `src/lib/fines.ts`, `src/server/insurance.repo.ts`,
+`src/server/fines.repo.ts`, `src/fn/insurance.ts`, `src/fn/fines.ts`,
 `src/components/ComingSoonPipeline.tsx`.
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
-regla es `.claude/rules/ops-write-actions.md`. Seguros y las otras tres pestañas
-no escriben nada.
+regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas y las tres
+pestañas "todavía no" no escriben nada.
 
 ## `/leads` es un layout, no una pantalla
 
@@ -43,6 +44,7 @@ está mal.
 |---|---|---|
 | **Talleres** | `leads` | Real. Es `leads.talleres.tsx`, movido tal cual del viejo `leads.tsx`. En producción hoy tiene **0 filas** (el embudo todavía no se usó). |
 | **Seguros** | `insurances` | Real. 16 pólizas vivas en producción, 3 vencen en <30 días. |
+| **Multas** | `vehicle_fine_syncs` + `fines` | Real. 51 vehículos con multas consultadas, 38 con deuda, ~$69M adeudados. Ver abajo. |
 | **Contactos** | — | No hay tabla. Ver abajo. |
 | **Financiación** | — | El producto no existe. |
 | **Pedidos** | — | El flujo no existe. |
@@ -158,6 +160,74 @@ son un panorama, no el resultado del filtro.
 Una póliza es un hecho que el backend escribe cuando el usuario la carga en la
 app. Mismo criterio que `driving_sessions` y `conversations`. Si aparece un
 `UPDATE`/`INSERT` en `insurance.repo.ts`, está mal.
+
+## Multas (`/leads/multas`)
+
+Alcance: `src/lib/fines.ts`, `src/server/fines.repo.ts`, `src/fn/fines.ts`,
+`src/routes/_authed/leads.multas.tsx`.
+
+### Qué reemplaza, y por qué no es lo mismo que las columnas de `/usuarios`
+
+Las columnas «Multas consultadas» / «Monto adeudado» de `users.md` contestan
+"¿qué debe ESTE auto?" dentro de la ficha de UN usuario. Esta pestaña es la
+vista **transversal**: todos los autos con multas consultadas, ordenables por
+deuda. La consulta que nadie corre porque cruza `vehicle_fine_syncs` → `fines` →
+`vehicles` → `users`.
+
+### El grano es el VEHÍCULO consultado, no la multa
+
+Se parte de `vehicle_fine_syncs` (1:1 por vehículo, PK `vehicle_id`): las filas
+son "los autos a los que se les consultó". Un auto consultado sin multas es una
+fila con `debtAmount = 0` — se muestra, no se esconde: acá **todas** las filas
+fueron consultadas, así que `$0` significa inequívocamente "consultado, sin
+deuda" (el `null` de la ficha de usuario no existe en esta pantalla).
+
+### El predicado de "adeudado" es el mismo que en `users.repo.ts`
+
+`sum(fines.amount)` con `status = 'pending'`. Si este corte y el de
+`listUserVehicleSummaries` divergen, el panel dice dos montos distintos para el
+mismo auto. Al 2026-09-06 las 240 multas de producción están todas `pending`.
+
+### `round(sum(amount))::bigint` — no `::bigint` a secas
+
+`fines.amount` es `numeric`. `::bigint` directo trunca; `round()` primero. Las
+multas argentinas son enteras de pesos, así que redondear no pierde nada real y
+evita un `$2.315.337,6` fantasma.
+
+### El `ORDER BY` sale de un `Record` cerrado
+
+El pedido fue "ordenar por todas las columnas". `SORT_COLUMNS` en `fines.repo.ts`
+mapea cada `FineSortKey` (enum de zod) a una expresión SQL. Es lo único que hace
+seguro interpolar la columna y `dir` en el `ORDER BY` — mismo patrón exacto que
+`SORT_COLUMNS` de `listUsers`. Un `ORDER BY $1` con parámetro no existe en `pg`.
+
+### El envoltorio `select * from (...) s`
+
+`debt_amount`, `fine_count`, `jurisdictions`, `days_since_consult` y
+`oldest_infraction` son subconsultas del SELECT. Todos los filtros —y el orden
+por `jurisdictions`, que es un `text[]`— van en el `where`/`order by` de AFUERA,
+sobre el alias. Mismo motivo que `users.repo.ts` y `chats.repo.ts`: no repetir
+cada subconsulta en el filtro.
+
+### Los chips de jurisdicción salen de la base
+
+`listFineJurisdictions()` hace `select distinct jurisdiction` — hardcodear las 9
+del enum `fine_jurisdiction` mostraría chips que nunca filtran nada (en
+producción hay 7). Mismo patrón que `listDistinctChatModels` en `chats.md`.
+
+### `daysSinceConsult` y "desactualizada" son lectura NUESTRA del reloj
+
+Una consulta vieja no vio las multas nuevas: la deuda mostrada puede ser de
+menos. Pasado `FINE_STALE_AFTER_DAYS` (30) la fila lo dice en voz alta y el chip
+"Desactualizada" filtra por eso. Es la misma forma que `stuck` en `/operacion` y
+`noData` en `/escaneres`: una señal derivada no se presenta como dato del
+dominio.
+
+### Ni una escritura
+
+Una multa la escribe el backend al sincronizar con el proveedor. Es un hecho, no
+un estado que el admin mueva. Si aparece un `UPDATE`/`INSERT` en `fines.repo.ts`,
+está mal.
 
 ## Cómo verificar un cambio acá
 

@@ -29,7 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
-import { formatDate, formatInt } from '~/lib/format'
+import { formatArs, formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
 export const Route = createFileRoute('/_authed/usuarios/')({
@@ -612,13 +612,15 @@ function VehicleSummaryPanel({ state }: { state: VehicleSummaryState | undefined
 
   return (
     <div className="overflow-x-auto p-3">
-      <table className="w-full min-w-[1180px] text-xs">
+      <table className="w-full min-w-[1400px] text-xs">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
             <th className="px-2 py-1.5 text-left font-medium">Vehículo</th>
             <th className="px-2 py-1.5 text-left font-medium">VTV</th>
             <th className="px-2 py-1.5 text-right font-medium">Chats IA diagnóstico</th>
             <th className="px-2 py-1.5 text-left font-medium">Deuda de patente</th>
+            <th className="px-2 py-1.5 text-left font-medium">Multas consultadas</th>
+            <th className="px-2 py-1.5 text-right font-medium">Monto adeudado</th>
             <th className="px-2 py-1.5 text-left font-medium">Seguro</th>
             <th className="px-2 py-1.5 text-right font-medium">Escaneos</th>
             <th className="px-2 py-1.5 text-right font-medium">DTCs activos</th>
@@ -661,6 +663,18 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
 
       <td className="px-2 py-1.5">
         <LastQueryCell status={v.taxDebtQueryStatus} at={v.taxDebtQueryAt} />
+      </td>
+
+      <td className="px-2 py-1.5">
+        {v.fineQueryAt ? (
+          formatDate(v.fineQueryAt)
+        ) : (
+          <span className="text-muted-foreground/50">nunca</span>
+        )}
+      </td>
+
+      <td className="px-2 py-1.5 text-right tabular-nums">
+        <FineDebtCell amount={v.fineDebtAmount} />
       </td>
 
       <td className="px-2 py-1.5">
@@ -785,6 +799,31 @@ function CountOrNeverCell({ value, title }: { value: number | null; title: strin
   return (
     <span className="font-medium text-status-yellow" title={title}>
       {formatInt(value)}
+    </span>
+  )
+}
+
+/**
+ * Monto adeudado en multas. Mismo criterio de tres estados que
+ * `CountOrNeverCell`: `null` (multas nunca consultadas) no es lo mismo que `$0`
+ * (consultadas, sin deuda), y una deuda real va en ámbar porque es plata que el
+ * usuario debe. El `$0` NO se pinta de verde: "sin deuda hoy" no es un logro
+ * del panel, es sólo un dato.
+ */
+function FineDebtCell({ amount }: { amount: number | null }) {
+  if (amount === null) {
+    return (
+      <span className="text-muted-foreground/50" title="Multas nunca consultadas">
+        —
+      </span>
+    )
+  }
+  if (amount === 0) {
+    return <span title="Consultado — sin multas pendientes">{formatArs(0)}</span>
+  }
+  return (
+    <span className="font-medium text-status-yellow" title="Suma de multas con estado pendiente">
+      {formatArs(amount)}
     </span>
   )
 }

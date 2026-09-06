@@ -95,6 +95,7 @@ interface AdoptionRow {
   admins: number
   legacy_native_admins: number
   vehicles_active: number
+  vehicles_unique: number
   vehicles_archived: number
   vehicles_last_30d: number
 }
@@ -133,6 +134,12 @@ export async function adoptionPulse(
       count(*) FILTER (WHERE NOT internal AND role = 'admin')::int AS admins,
       count(*) FILTER (WHERE role = 'admin' AND auth_provider = 'native')::int AS legacy_native_admins,
       (SELECT count(*) FROM vehicles WHERE NOT archived)::int AS vehicles_active,
+      -- Deduplicado por patente: mas de un usuario puede cargar el mismo auto.
+      -- upper(btrim(...)) normaliza aunque hoy las patentes ya vienen limpias
+      -- (0 en minuscula, 0 en blanco al 2026-09-06); nullif(...,'') deja una
+      -- patente vacia fuera del distinct si algun dia aparece.
+      (SELECT count(DISTINCT nullif(btrim(upper(plate)), ''))
+         FROM vehicles WHERE NOT archived)::int AS vehicles_unique,
       (SELECT count(*) FROM vehicles WHERE archived)::int      AS vehicles_archived,
       (SELECT count(*) FROM vehicles WHERE created_at >= now() - interval '30 days')::int AS vehicles_last_30d
     FROM flagged
@@ -149,6 +156,7 @@ export async function adoptionPulse(
     admins: toInt(row?.admins),
     legacyNativeAdmins: toInt(row?.legacy_native_admins),
     vehiclesActive,
+    vehiclesUnique: toInt(row?.vehicles_unique),
     vehiclesArchived: toInt(row?.vehicles_archived),
     vehiclesLast30d: toInt(row?.vehicles_last_30d),
     // Sin usuarios reales la razón es indefinida, no cero. Cero se leería como

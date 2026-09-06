@@ -12,8 +12,26 @@ const date = new Intl.DateTimeFormat('es-AR', {
   timeZone: 'UTC',
 })
 
+/**
+ * Pesos argentinos, sin centavos.
+ *
+ * Los montos que muestra el panel (multas, deuda de patente) son enteros de
+ * pesos — el proveedor los devuelve así. Un `$ 2.315.338,00` sobre una multa de
+ * dos millones es ruido, no precisión.
+ *
+ * No confundir con `formatUsd` de `~/lib/ai-usage`: ese vive junto a Costos de
+ * IA porque es dato de ESE contexto (le pagamos al proveedor en dólares). Este
+ * es transversal.
+ */
+const ars = new Intl.NumberFormat('es-AR', {
+  style: 'currency',
+  currency: 'ARS',
+  maximumFractionDigits: 0,
+})
+
 export const formatInt = (n: number) => int.format(n)
 export const formatDate = (iso: string) => date.format(new Date(iso))
+export const formatArs = (n: number) => ars.format(n)
 
 /**
  * Tamaño de archivo en MB, con un decimal.

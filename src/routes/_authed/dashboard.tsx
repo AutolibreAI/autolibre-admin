@@ -135,6 +135,9 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
       key: 'vehicles',
       icon: Car,
       value: formatInt(adoption.vehiclesActive),
+      // El crudo cuenta dos veces un auto que cargaron dos usuarios. El número
+      // chico es la flota real, deduplicada por patente.
+      secondary: `${formatInt(adoption.vehiclesUnique)} únicos por patente`,
       label: 'Vehículos activos',
       hint:
         adoption.vehiclesPerUser === null
@@ -182,6 +185,8 @@ interface PulseTile {
   /** Ausente cuando el número no tiene una pantalla detrás. Ver `tiles`. */
   to?: string
   value: string
+  /** Un segundo número, más chico, debajo del principal. Hoy sólo lo usa Vehículos. */
+  secondary?: string
   label: string
   hint: string
   alert: boolean
@@ -200,7 +205,7 @@ interface PulseTile {
  * desde el token, con `focus-visible` para que no aparezca al clickear.
  */
 function PulseCard({ tile }: { tile: PulseTile }) {
-  const { icon: Icon, to, value, label, hint, alert } = tile
+  const { icon: Icon, to, value, secondary, label, hint, alert } = tile
 
   const base = cn(
     'block rounded-lg border p-4',
@@ -214,6 +219,9 @@ function PulseCard({ tile }: { tile: PulseTile }) {
         <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
       </div>
       <div className="mt-2 font-heading text-2xl font-bold tracking-tight">{value}</div>
+      {secondary ? (
+        <div className="mt-0.5 text-sm text-muted-foreground tabular-nums">{secondary}</div>
+      ) : null}
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hint}</p>
     </>
   )

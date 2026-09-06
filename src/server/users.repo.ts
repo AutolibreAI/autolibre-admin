@@ -725,6 +725,8 @@ interface VehicleSummaryRow {
   diagnostic_chat_count: number | string
   tax_debt_query_status: string | null
   tax_debt_query_at: Date | string | null
+  fine_query_at: Date | string | null
+  fine_debt_amount: number | string | null
   insurance_expires_at: Date | string | null
   scans_ok: number | string
   scans_total: number | string
@@ -739,18 +741,19 @@ interface VehicleSummaryRow {
 /**
  * El "qué está haciendo" por auto, para el toggle de cada fila en `/usuarios`.
  *
- * A propósito NO vive en `findUserDetail`: es una consulta cara (dos LEFT JOIN
- * más ocho subconsultas por vehículo) que sólo tiene sentido pedir cuando un
+ * A propósito NO vive en `findUserDetail`: es una consulta cara (tres LEFT JOIN
+ * más varias subconsultas por vehículo) que sólo tiene sentido pedir cuando un
  * operador abre esa fila puntual — no en el `loader` del listado, que puede
  * traer 500 usuarios, ni en la ficha, que ya tiene su propia noción de
  * "vehículo" (`UserVehicle`, trámites) y no necesita ésta también.
  *
- * `lds` y la subconsulta de `dta` son LEFT JOIN y no subconsultas escalares
- * —única excepción al estilo del resto del archivo—, y es a propósito: los
- * dos son 1:1 garantizados (`vehicle_last_dtc_scans` tiene PK `vehicle_id`; la
- * subconsulta de `dta` elige un único `id`), así que no hay riesgo de
- * fan-out, y unirlos evita repetir la misma subconsulta dos veces para sacar
- * "el estado" y "cuándo" del mismo evento.
+ * `lds`, `vfs` y la subconsulta de `dta` son LEFT JOIN y no subconsultas
+ * escalares —única excepción al estilo del resto del archivo—, y es a
+ * propósito: los tres son 1:1 garantizados (`vehicle_last_dtc_scans` y
+ * `vehicle_fine_syncs` tienen PK `vehicle_id`; la subconsulta de `dta` elige un
+ * único `id`), así que no hay riesgo de fan-out, y unirlos evita repetir la
+ * misma subconsulta dos veces para sacar "el estado" y "cuándo" del mismo
+ * evento.
  */
 export async function listUserVehicleSummaries(
   userId: string,
@@ -779,6 +782,19 @@ export async function listUserVehicleSummaries(
        (select coalesce(q.completed_at, q.created_at) from vehicle_data_queries q
           where q.vehicle_id = v.id and 'tax_debt' = any(q.requested_modules)
           order by q.created_at desc limit 1) as tax_debt_query_at,
+
+       -- Multas: la ULTIMA consulta (vehicle_fine_syncs, 1:1 por PK) y el monto
+       -- adeudado que dejo en la tabla fines. El gate por vfs.vehicle_id
+       -- distingue "nunca se consulto" (null) de "se consulto, no debe nada"
+       -- (0) — mismo criterio null-vs-0 que activeDtcCount. "Adeudado" =
+       -- status='pending' (paid esta saldada, appealed en disputa). round()
+       -- porque amount es numeric y las multas son enteras de pesos.
+       vfs.last_synced_at as fine_query_at,
+       case when vfs.vehicle_id is null then null
+            else coalesce((select round(sum(f.amount))::bigint
+                             from fines f
+                            where f.vehicle_id = v.id and f.status = 'pending'), 0)
+       end as fine_debt_amount,
 
        -- Seguro: el documento, no la consulta.
        (select i.expiration_date from insurances i where i.vehicle_id = v.id
@@ -816,6 +832,7 @@ export async function listUserVehicleSummaries(
      join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
      join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
      left join vehicle_last_dtc_scans lds on lds.vehicle_id = v.id
+     left join vehicle_fine_syncs vfs on vfs.vehicle_id = v.id
      left join driving_telemetry_analysis dta on dta.id = (
        select a.id from driving_telemetry_analysis a
         where a.vehicle_id = v.id order by a.created_at desc limit 1
@@ -838,6 +855,8 @@ export async function listUserVehicleSummaries(
       diagnosticChatCount: toInt(r.diagnostic_chat_count),
       taxDebtQueryStatus: r.tax_debt_query_status,
       taxDebtQueryAt: toIso(r.tax_debt_query_at),
+      fineQueryAt: toIso(r.fine_query_at),
+      fineDebtAmount: toIntOrNull(r.fine_debt_amount),
       insuranceExpiresAt: toIso(r.insurance_expires_at),
       scansOk: toInt(r.scans_ok),
       scansTotal: toInt(r.scans_total),

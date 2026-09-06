@@ -361,6 +361,25 @@ export interface UserVehicleSummary {
   taxDebtQueryStatus: string | null
   taxDebtQueryAt: string | null
 
+  /**
+   * Multas — la última CONSULTA (`vehicle_fine_syncs.last_synced_at`, 1:1 por
+   * vehículo), y el monto adeudado que esa consulta dejó en `fines`.
+   *
+   * El par cuándo/cuánto respeta el mismo criterio de null-vs-0 que
+   * `activeDtcCount`:
+   *  - `fineQueryAt = null` ⇒ nunca se consultaron las multas de este auto.
+   *  - `fineDebtAmount = null` ⇒ lo mismo: no hay consulta, no hay respuesta.
+   *  - `fineDebtAmount = 0` ⇒ SÍ se consultó y no hay nada adeudado. Distinto
+   *    de `null`, y confundirlos diría "sin deuda" sobre un auto que nadie
+   *    miró.
+   *
+   * "Adeudado" = suma de `fines.amount` con `status = 'pending'` (una multa
+   * `paid` está saldada; una `appealed` está en disputa — ninguna es deuda a
+   * cobrar). En pesos, entero.
+   */
+  fineQueryAt: string | null
+  fineDebtAmount: number | null
+
   /** Seguro — el documento (`insurances`), no la consulta. */
   insuranceExpiresAt: string | null
 

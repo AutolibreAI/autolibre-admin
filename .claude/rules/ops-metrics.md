@@ -73,6 +73,16 @@ calculadas se agregan sin que nadie revise el cast.
 `toNum()` PRESERVA el null. Cero es un valor; null es "no sabemos". `vehiclesPerUser` es `null` sin
 usuarios reales, nunca `0` — que se leería como "tienen cuenta y no cargaron el auto".
 
+### 4b. `vehiclesActive` está inflado — el número real es `vehiclesUnique`
+
+Más de un usuario puede cargar el mismo auto, y hoy pasa (al 2026-09-06: 115 filas activas, 106
+patentes). `adoptionPulse` devuelve las dos: la card de Inicio muestra el crudo grande y el
+deduplicado por patente en un número más chico. El dedup usa
+`count(DISTINCT nullif(btrim(upper(plate)), ''))` — `upper(btrim())` normaliza aunque hoy las
+patentes ya vienen limpias, y `nullif(...,'')` deja una patente vacía fuera del distinct en vez de
+contarla como "un auto único". `vehiclesPerUser` sigue calculándose sobre el crudo a propósito: es
+una razón de relaciones usuario↔auto, no de autos.
+
 ### 5. `coalesce(x,'') = ''`, no `x IS NULL`
 
 El import del `legacy_sheet` escribió strings vacíos donde no había dato. `IS NULL` cuenta de menos y
