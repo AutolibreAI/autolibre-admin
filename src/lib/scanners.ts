@@ -203,6 +203,89 @@ export interface CompatibilityMatrix {
   totals: CompatibilityTotals
 }
 
+// ── El detalle de una conexión ───────────────────────────────────────────────
+
+/**
+ * El cubo de una sesión, derivado de `status` + `total_readings`.
+ *
+ * ⚠ Es la TERCERA expresión del mismo corte: las otras dos son las cadenas SQL
+ * `OK` / `NO_DATA` / `FAILED` / `PENDING` de `scanners.repo.ts` (que la matriz
+ * agrega con `GROUPING SETS`) y el predicado de la columna «Escaneos» en
+ * `users.repo.ts`. **Las tres se tocan juntas.** No se puede compartir con las
+ * de SQL —son SQL—, así que la única defensa es que estén al lado en la rule y
+ * que esta función sea la única forma en que el panel clasifica una sesión en
+ * JavaScript. → `.claude/rules/scanner-compatibility.md`
+ */
+export type SessionBucket = 'ok' | 'noData' | 'failed' | 'pending'
+
+export function sessionBucket(status: string, totalReadings: number): SessionBucket {
+  if (status === 'failed') return 'failed'
+  if (status === 'pending_chunks') return 'pending'
+  // `completed`: sirvió sólo si trajo al menos una lectura.
+  return totalReadings > 0 ? 'ok' : 'noData'
+}
+
+export const SESSION_BUCKET_LABELS: Record<SessionBucket, string> = {
+  ok: 'Trajo datos',
+  noData: 'Enganchó sin traer nada',
+  failed: 'Falló (según el backend)',
+  pending: 'Subiendo todavía',
+}
+
+/**
+ * Todo lo que el panel sabe de una conexión: la sesión, quién la hizo, sobre
+ * qué auto, y qué produjo. Sale de `driving_sessions` más los joins a `users` y
+ * al catálogo, más contadores de las tablas que cuelgan de `session_id`.
+ */
+export interface ScannerSessionDetail {
+  id: string
+  externalSessionId: string
+  bucket: SessionBucket
+  status: string
+
+  userId: string
+  userEmail: string
+  userName: string | null
+
+  vehicleId: string
+  vehiclePlate: string
+  vehicleAlias: string | null
+  /** `BRAND MODEL TRIM YEAR` si el auto resuelve a un catálogo; si no, `null`. */
+  catalogLabel: string | null
+
+  scannerType: string
+  firmware: string | null
+  obdProtocol: string | null
+  detectedVin: string | null
+  batteryVoltage: string | null
+
+  totalReadings: number
+  totalChunks: number
+  chunkSize: number
+  chunksUploaded: number
+  distanceSinceDtcClearKm: number | null
+
+  /** Códigos DTC vistos en esta sesión (`session_dtc_snapshots.codes`). */
+  dtcCodes: Array<string>
+  /** Filas en `diagnostic_dtcs` para esta sesión — el detalle con descripción. */
+  dtcDetailCount: number
+  producedAiDiagnostic: boolean
+  producedTelemetryAnalysis: boolean
+
+  startedAt: string
+  endedAt: string | null
+  createdAt: string
+}
+
+export type ScannerSessionsMode = 'cell' | 'row' | 'variant'
+
+export interface ScannerSessionsView {
+  mode: ScannerSessionsMode
+  /** Encabezado ya armado por el repo: "TOYOTA COROLLA … con ELM327 v2.1". */
+  label: string
+  sessions: Array<ScannerSessionDetail>
+}
+
 // ── Search params ────────────────────────────────────────────────────────────
 
 /**
@@ -213,12 +296,32 @@ export interface CompatibilityMatrix {
  *
  * `.catch(undefined)` y no un throw: un `?q=` guardado en un favorito debe
  * mostrar la tabla entera, no una pantalla de error.
+ *
+ * ── Los tres de abajo abren el panel de conexiones ──────────────────────────
+ *
+ * `catalogId` y `scanner` juntos → una celda; sólo `catalogId` → la fila
+ * entera; sólo `scanner` → la columna entera. `fw` viaja siempre que viaje
+ * `scanner` (string vacío = escáner no identificado), así que "no filtro por
+ * firmware" y "firmware nulo" no se confunden. El mismo schema lo validan la
+ * ruta, `getScannerCompatibility` (que ignora estos tres) y `getScannerSessions`
+ * (que ignora `q`) — una definición, tres puntos de aplicación, regla dura 5.
  */
 export const scannerSearchSchema = z.object({
   q: z.string().trim().min(1).max(80).optional().catch(undefined),
+  /** uuid de `vehicle_catalogs`, o el literal `orphan` para la fila sin catálogo. */
+  catalogId: z.string().trim().min(1).max(40).optional().catch(undefined),
+  /** `scanner_type` (hoy sólo `elm327`). */
+  scanner: z.string().trim().min(1).max(40).optional().catch(undefined),
+  /** Firmware exacto. `''` = no identificado. Sólo se lee si `scanner` está. */
+  fw: z.string().max(120).optional().catch(undefined),
 })
 
 export type ScannerSearch = z.infer<typeof scannerSearchSchema>
+
+/** El panel de conexiones está abierto cuando hay por dónde acotarlo. */
+export function sessionsPanelOpen(search: ScannerSearch): boolean {
+  return Boolean(search.catalogId) || Boolean(search.scanner)
+}
 
 // ── Etiquetas ────────────────────────────────────────────────────────────────
 

@@ -1,9 +1,9 @@
 import { createServerFn } from '@tanstack/react-start'
 import { scannerSearchSchema } from '~/lib/scanners'
-import { compatibilityMatrix } from '~/server/scanners.repo'
+import { compatibilityMatrix, scannerSessions } from '~/server/scanners.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { CompatibilityMatrix } from '~/lib/scanners'
+import type { CompatibilityMatrix, ScannerSessionsView } from '~/lib/scanners'
 
 /**
  * Compatibilidad de escáneres — el borde RPC.
@@ -29,4 +29,19 @@ export const getScannerCompatibility = createServerFn({ method: 'GET' })
   .handler(
     async ({ data }): Promise<CompatibilityMatrix> =>
       compatibilityMatrix(data, { signal: requestSignal() }),
+  )
+
+/**
+ * El historial detrás de una celda. Mismo schema y mismo guard que la matriz —
+ * son marcas, modelos, y ahora también el email de quien hizo cada conexión y
+ * el VIN que detectó el escáner, así que el guard pesa un poco más que antes.
+ * Devuelve `null` si el schema no trae por dónde acotar (`catalogId` ni
+ * `scanner`), y ahí la ruta simplemente no muestra el panel.
+ */
+export const getScannerSessions = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(scannerSearchSchema)
+  .handler(
+    async ({ data }): Promise<ScannerSessionsView | null> =>
+      scannerSessions(data, { signal: requestSignal() }),
   )

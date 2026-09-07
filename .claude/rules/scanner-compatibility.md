@@ -146,6 +146,59 @@ La versión obvia de los totales recortaba la columna `last_ok` de `COUNTER_COLU
 reordene las columnas. Se parte en dos constantes (`COUNTER_COLUMNS` y `LAST_OK_COLUMN`) y el
 problema no existe.
 
+## El historial de una celda (`SessionsPanel` + `scannerSessions`)
+
+Cada celda de la matriz —y el Total de cada fila, y cada tarjeta de la leyenda— es un **link** que
+abre el detalle de las conexiones que hay detrás de ese número: `driving_sessions` con el join a
+`users` y al catálogo, más contadores de las tablas que cuelgan de `session_id`
+(`driving_session_chunks`, `diagnostic_dtcs`, `session_dtc_snapshots`, `ai_diagnostics`,
+`driving_telemetry_analysis`).
+
+### La selección vive en la URL, no en un `useState`
+
+`catalogId` + `scanner` + `fw` en el search param, cargados por el `loader` en paralelo con la
+matriz. Es la diferencia con el toggle de vehículos de `/usuarios`, que sí usa `useState` + fetch al
+click: **esta pantalla es de consulta**, y `/escaneres?catalogId=…&scanner=elm327` pegado en un
+ticket tiene que abrir el panel ya cargado. Tres modos según qué params haya:
+
+| Params | Modo | Qué muestra |
+|---|---|---|
+| `catalogId` + `scanner` (+`fw`) | `cell` | una celda |
+| sólo `catalogId` | `row` | ese modelo, todos los escáneres |
+| sólo `scanner` (+`fw`) | `variant` | ese escáner, todos los autos |
+
+`fw` **viaja siempre que viaje `scanner`** — string vacío = escáner no identificado. Sin eso, "no
+filtro por firmware" y "firmware nulo" se confunden, y la celda de la columna "no identificado"
+traería las conexiones de todas las demás. El filtro usa `scanner_firmware IS NOT DISTINCT FROM $x`
+porque `= NULL` no matchea `NULL`.
+
+`catalogId = 'orphan'` (literal) para la fila sin catálogo → `vc.id IS NULL`. Los joins a `users` y
+`vehicles` son `JOIN` y no `LEFT`: las dos FK son NOT NULL en `driving_sessions`, la fila huérfana
+es por el CATÁLOGO ausente.
+
+### `sessionBucket()` es la TERCERA copia del corte, y se toca con las otras dos
+
+El cubo de cada sesión del panel (`ok` / `noData` / `failed` / `pending`) lo calcula
+`sessionBucket()` en `~/lib/scanners`. Las otras dos expresiones del mismo corte son las cadenas SQL
+`OK` / `NO_DATA` de `scanners.repo.ts` (que la matriz agrega con `GROUPING SETS`) y el predicado de
+la columna «Escaneos» de `users.repo.ts`. **No se pueden unificar** —dos son SQL, una es JS— así que
+la defensa es que estén nombradas y al lado en esta rule. Si la matriz dice `0 / 4` y el panel
+muestra una sesión `ok`, es que divergieron.
+
+### Un `noData` puede haber traído un DTC, y no es contradicción
+
+Verificado el 2026-09-07: las 4 conexiones de la celda `TOYOTA COROLLA XEI 1.8 M/T 2013` × "no
+identificado" son `noData` (0 lecturas, 0 min) y **las 4 tienen un código en
+`session_dtc_snapshots`** (`P0170` / `P0171`). No se contradice con el corte: `total_readings` es el
+stream de telemetría en vivo, no la lectura de DTCs. El panel muestra el DTC en "Produjo" igual —
+era justamente lo que no se veía antes.
+
+### El panel va DEBAJO de la matriz, no en un modal
+
+La pantalla es de comparación: el operador mira la fila de arriba contra el detalle de abajo. Un
+modal taparía la matriz, que es el contexto que hace legible al detalle. Mismo criterio que el censo
+de `/usuarios`, que tampoco abre nada flotante.
+
 ## Cómo se probó
 
 `tmp/probe.mjs` **lee los fragmentos de SQL del propio `scanners.repo.ts`** y los rearma, en vez de
