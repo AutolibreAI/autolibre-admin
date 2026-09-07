@@ -142,9 +142,21 @@ export function ManualUploader({
    * tal cual — nada de `FormData`, que lo envolvería en un multipart y le
    * cambiaría el `Content-Length`, invalidando la firma.
    *
-   * Los dos headers son obligatorios: el backend firma `ContentType` y
-   * `ContentLength` DENTRO de la URL, así que un PUT que no los mande exactos
-   * lo rechaza Spaces con un 403 que no explica nada.
+   * ── `Content-Length` NO se setea acá, y no se puede ─────────────────────────
+   *
+   * La primera versión lo mandaba explícitamente, razonando que el backend lo
+   * firma dentro de la URL y por lo tanto había que reproducirlo exacto. Es
+   * inútil: **`Content-Length` es un *forbidden header name* de la Fetch API**,
+   * así que el navegador descarta lo que uno ponga y calcula el suyo a partir
+   * del body. La línea era código muerto que además mentía sobre el contrato.
+   *
+   * La firma valida igual, y por eso mismo: el `Content-Length` que el
+   * navegador pone es el tamaño real del `File`, que es exactamente el
+   * `sizeBytes` con el que se pidió la URL. No hay nada que sincronizar a mano.
+   *
+   * Consecuencia práctica para el CORS del bucket: el preflight pide sólo
+   * `content-type` en `Access-Control-Request-Headers`. `content-length` nunca
+   * aparece ahí, porque el navegador ya lo filtró.
    */
   async function uploadToStorage(pdf: File): Promise<string> {
     const { fileId, uploadUrl } = await requestManualUploadUrl({
@@ -159,10 +171,10 @@ export function ManualUploader({
     try {
       response = await fetch(uploadUrl, {
         method: 'PUT',
-        headers: {
-          'content-type': MANUAL_MIME_TYPE,
-          'content-length': String(pdf.size),
-        },
+        // El único header que hace falta declarar. Va en minúscula porque así
+        // es como el navegador lo manda en el preflight, y así tiene que estar
+        // en la config de CORS del bucket.
+        headers: { 'content-type': MANUAL_MIME_TYPE },
         body: pdf,
       })
     } catch (cause) {

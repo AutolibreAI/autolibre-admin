@@ -168,9 +168,14 @@ sola request sigue siendo más simple que tres. Los dos caminos conviven.
 3. **El `ContentLength` se firma DENTRO de la URL.** Sin eso, una URL pedida para un PDF de 6MB
    sirve para subir 5GB: el presigned PUT no tiene límite propio y el archivo ya no pasa por
    `@fastify/multipart`, que era quien lo aplicaba. En el adapter hace falta además
-   `signableHeaders: new Set(['content-length'])` — sin eso el SDK **no** lo firma, y la condición
-   queda escrita en el código pero ausente de la URL, que es el peor resultado posible porque
-   parece aplicada.
+   `signableHeaders: new Set(['content-length', 'content-type'])` — sin eso el SDK **no** los
+   firma, y la condición queda escrita en el código pero ausente de la URL, que es el peor
+   resultado posible porque parece aplicada.
+
+   > Ese `Set` **REEMPLAZA** la lista, no se suma a ella. La primera versión pasaba sólo
+   > `content-length` y una URL real de producción salió con
+   > `X-Amz-SignedHeaders=content-length;host`: el `ContentType` estaba en el comando pero fuera
+   > de la firma — declarado y no exigido. `host` no hace falta listarlo, lo agrega el SDK.
 
 4. **El sniffing de magic bytes se recupera en el confirm. ESTO NO SE PUEDE OMITIR.** El presigned
    PUT saltea `UploadFileHandler`, que era el único lugar del sistema donde se verificaba el tipo
@@ -183,13 +188,68 @@ sola request sigue siendo más simple que tres. Los dos caminos conviven.
 De regalo, `peek()` devuelve el tamaño REAL del objeto guardado, así que `files.size_bytes` es
 ahora mejor dato que en el flujo multipart: no depende de lo que el cliente declaró.
 
+#### 5. El SDK de AWS firma un checksum del VACÍO, y eso rompe todo presigned PUT
+
+Es la trampa más cara de este flujo, porque no la produce nuestro código sino un **default** del
+SDK, y sobrevive a cualquier revisión que mire sólo el diff.
+
+Desde `@aws-sdk/client-s3` v3.729 el cliente trae `requestChecksumCalculation: 'WHEN_SUPPORTED'`:
+calcula un checksum para toda operación que lo admita. Al **presignar** eso es catastrófico —
+todavía no hay body, así que calcula el checksum de cero bytes y lo **firma en la URL**. Visto en
+producción el 2026-09-05:
+
+```
+x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32
+```
+
+`AAAAAA==` en base64 es `00 00 00 00`: el CRC32 de un archivo vacío. **La URL exigía que el objeto
+subido estuviera vacío.** El navegador manda 5.8MB, el checksum no coincide y el proveedor rechaza
+el PUT.
+
+El arreglo es `requestChecksumCalculation: 'WHEN_REQUIRED'` en el `S3Client`. `DeleteObjects`, que
+sí lo exige, sigue teniendo su `Content-MD5`; `PutObject` no lo requiere, así que `upload()` no
+cambia — la integridad del transporte ya la da TLS.
+
+**Está fijado por un guardián que firma de verdad**, en
+`digitalocean-spaces.provider.spec.ts` → `describe('getSignedUploadUrl — la URL real…')`. Ese
+bloque **no mockea el presigner** a propósito: el checksum lo agrega el `S3Client` por dentro y con
+el mock puesto sería invisible. Verificado por mutación: sacando el `WHEN_REQUIRED`, ese test falla.
+
+> **Y esa es la razón por la que el guardián existe: es un default de una dependencia.** Puede
+> volver con cualquier bump de versión, sin diff que revisar y sin nada que avise.
+
 #### Lo que hay que configurar FUERA del código
 
 **CORS en el bucket de DigitalOcean Spaces.** El `PUT` del paso 2 sale del navegador hacia
-`*.digitaloceanspaces.com`, así que el bucket tiene que permitir el origen del panel (método `PUT`,
-headers `content-type` y `content-length`). Sin eso **todas** las subidas fallan igual, y el
-navegador no da detalle a propósito — por eso `readableManualError` traduce `STORAGE_PUT_FAILED:`
-nombrando CORS como causa probable en vez de mostrar "Failed to fetch".
+`*.digitaloceanspaces.com`, así que el bucket tiene que permitir el origen del panel. Sin eso
+**todas** las subidas fallan igual, y el navegador no da detalle a propósito — por eso
+`readableManualError` traduce `STORAGE_PUT_FAILED:` nombrando CORS como causa probable en vez de
+mostrar "Failed to fetch".
+
+La configuración exacta, y **`content-type` es el único header que hay que permitir**:
+
+| Campo | Valor |
+|---|---|
+| Origin | el dominio del panel (uno por línea; `http://localhost:3000` para probar en local) |
+| Allowed Methods | `PUT` |
+| Allowed Headers | `content-type` |
+
+> **Por qué NO va `content-length`, aunque el backend lo firme.** La primera versión del uploader lo
+> mandaba explícito y esta tabla lo pedía. Los dos estaban mal: **`Content-Length` es un *forbidden
+> header name* de la Fetch API**, así que el navegador descarta lo que el código ponga y calcula el
+> suyo desde el body. Nunca aparece en `Access-Control-Request-Headers` del preflight, así que
+> permitirlo en el bucket no hace nada.
+>
+> La firma valida igual y por el mismo motivo: el `Content-Length` que pone el navegador es el
+> tamaño real del `File`, o sea exactamente el `sizeBytes` con el que se pidió la URL.
+>
+> Regla general: **un header que la Fetch API prohíbe no se declara ni en el código ni en el CORS.**
+> Escribirlo no rompe nada y por eso sobrevive — pero documenta un contrato que no existe.
+
+El `PUT` con `Content-Type: application/pdf` **no** es una *simple request*, así que dispara un
+preflight `OPTIONS` que el bucket tiene que contestar. Si el CORS no está, lo que falla es el
+preflight y el `fetch` tira `Failed to fetch` sin status ni cuerpo — de ahí que el diagnóstico
+tenga que venir del mensaje del panel y no del navegador.
 
 Es configuración de DigitalOcean, no está versionada en ningún repo. Si un día las subidas empiezan
 a fallar todas juntas sin que nadie haya tocado código, mirá ahí primero.
