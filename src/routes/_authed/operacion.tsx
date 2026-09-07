@@ -476,7 +476,7 @@ function DomainsCard({ domains }: { domains: Array<ExcludedDomain> }) {
             })
           }}
         >
-          <div className="space-y-1.5">
+          <div className="w-full space-y-1.5 sm:w-auto">
             <label
               htmlFor="domain"
               className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
@@ -488,12 +488,12 @@ function DomainsCard({ domains }: { domains: Array<ExcludedDomain> }) {
               value={domain}
               onChange={(e) => setDomain(e.currentTarget.value)}
               placeholder="ejemplo.com"
-              className="w-56 font-mono"
+              className="w-full font-mono sm:w-56"
               autoComplete="off"
             />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="w-full space-y-1.5 sm:w-auto">
             <label
               htmlFor="note"
               className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
@@ -505,7 +505,7 @@ function DomainsCard({ domains }: { domains: Array<ExcludedDomain> }) {
               value={note}
               onChange={(e) => setNote(e.currentTarget.value)}
               placeholder="Por qué se excluye"
-              className="w-72"
+              className="w-full sm:w-72"
               autoComplete="off"
             />
           </div>

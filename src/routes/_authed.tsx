@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Link,
   Outlet,
@@ -13,6 +14,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  Menu,
   MessageSquare,
   ScanLine,
   Store,
@@ -21,6 +23,13 @@ import {
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Separator } from "~/components/ui/separator";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "~/components/ui/sheet";
 
 /**
  * Pathless layout route (`_authed`) — contributes no URL segment, only the
@@ -32,6 +41,13 @@ import { Separator } from "~/components/ui/separator";
  *    — the design system defines elevation as zero everywhere.
  *  - Brand green appears only on the active nav item. Everything else is the
  *    grey / Action-Dark base.
+ *
+ * Responsive contract:
+ *  - `md` and up: a fixed vertical sidebar, always visible.
+ *  - below `md`: a compact sticky top bar with a hamburger that opens the same
+ *    nav as a left drawer (`Sheet`). Twelve items do not fit a wrapping bar or
+ *    a bottom tab row without either eating the viewport or splitting the menu
+ *    in two.
  */
 export const Route = createFileRoute("/_authed")({
   /**
@@ -138,82 +154,130 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { to: "/ai-costos", label: "Costos de IA", icon: Coins },
 ];
 
+function Wordmark() {
+  return (
+    <div>
+      <div className="font-heading text-base font-bold tracking-tight text-foreground">
+        Auto<span className="text-brand">Libre</span>
+      </div>
+      <p className="text-xs text-muted-foreground">Panel de administración</p>
+    </div>
+  );
+}
+
+/**
+ * La lista de navegación, una sola definición para la sidebar y el drawer.
+ *
+ * `onNavigate` lo pasa sólo el drawer: elegir un destino tiene que cerrarlo.
+ * En la sidebar de escritorio no hay nada que cerrar, así que no se pasa.
+ */
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <nav
+      aria-label="Navegación principal"
+      className="flex flex-col gap-0.5"
+    >
+      {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+        <Link
+          key={to}
+          to={to}
+          onClick={onNavigate}
+          activeOptions={{ exact: to === "/dashboard" }}
+          activeProps={{
+            className:
+              "bg-sidebar-accent text-sidebar-accent-foreground font-medium",
+            "aria-current": "page",
+          }}
+          inactiveProps={{
+            className:
+              "text-muted-foreground hover:bg-secondary hover:text-foreground",
+          }}
+          className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors"
+        >
+          <Icon className="size-4 shrink-0" aria-hidden />
+          {label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+function UserFooter({ name, email }: { name: string; email: string }) {
+  return (
+    <div className="px-2">
+      <div className="truncate text-sm font-medium text-foreground">{name}</div>
+      <div className="mb-2 truncate text-xs text-muted-foreground">{email}</div>
+      {/* Clerk owns the session, so it owns ending it. */}
+      <SignOutButton redirectUrl="/">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-auto gap-2 px-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
+        >
+          <LogOut className="size-3.5" aria-hidden />
+          Cerrar sesión
+        </Button>
+      </SignOutButton>
+    </div>
+  );
+}
+
 function AppShell() {
   const { user } = Route.useRouteContext();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen">
-      <aside
-        className="
-          sticky top-0 flex h-screen w-56 shrink-0 flex-col
-          border-r border-border bg-sidebar
-          max-md:static max-md:h-auto max-md:w-full max-md:flex-row
-          max-md:items-center max-md:justify-between max-md:border-r-0
-          max-md:border-b max-md:px-4 max-md:py-3
-        "
-      >
-        <div className="flex min-h-0 flex-1 flex-col px-3 py-5 max-md:flex-row max-md:items-center max-md:gap-4 max-md:p-0">
-          <div className="px-2 max-md:px-0">
-            <div className="font-heading text-base font-bold tracking-tight text-foreground">
-              Auto<span className="text-brand">Libre</span>
-            </div>
-            <p className="text-xs text-muted-foreground max-md:hidden">
-              Panel de administración
-            </p>
+    <div className="flex min-h-screen flex-col md:flex-row">
+      {/* ── Sidebar (md+) ──────────────────────────────────────────────── */}
+      <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-border bg-sidebar md:flex">
+        <div className="flex min-h-0 flex-1 flex-col px-3 py-5">
+          <div className="px-2">
+            <Wordmark />
           </div>
-
-          <nav
-            aria-label="Navegación principal"
-            className="mt-6 flex flex-col gap-0.5 max-md:mt-0 max-md:flex-row max-md:flex-wrap"
-          >
-            {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-              <Link
-                key={to}
-                to={to}
-                activeOptions={{ exact: to === "/dashboard" }}
-                activeProps={{
-                  className:
-                    "bg-sidebar-accent text-sidebar-accent-foreground font-medium",
-                  "aria-current": "page",
-                }}
-                inactiveProps={{
-                  className:
-                    "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                }}
-                className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors"
-              >
-                <Icon className="size-4 shrink-0" aria-hidden />
-                {label}
-              </Link>
-            ))}
-          </nav>
+          <div className="mt-6">
+            <NavLinks />
+          </div>
         </div>
-
-        <div className="px-3 pb-5 max-md:p-0">
-          <Separator className="mb-3 max-md:hidden" />
-          <div className="px-2 max-md:px-0 max-md:text-right">
-            <div className="truncate text-sm font-medium text-foreground">
-              {user.name}
-            </div>
-            <div className="mb-2 truncate text-xs text-muted-foreground max-md:mb-0">
-              {user.email}
-            </div>
-            {/* Clerk owns the session, so it owns ending it. */}
-            <SignOutButton redirectUrl="/">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-auto gap-2 px-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
-              >
-                <LogOut className="size-3.5" aria-hidden />
-                Cerrar sesión
-              </Button>
-            </SignOutButton>
-          </div>
+        <div className="px-3 pb-5">
+          <Separator className="mb-3" />
+          <UserFooter name={user.name} email={user.email} />
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 px-7 pb-16 pt-6 max-md:px-4 max-md:pt-5">
+      {/* ── Top bar + drawer (< md) ────────────────────────────────────── */}
+      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-sidebar px-4 py-3 md:hidden">
+        <Wordmark />
+        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+          <SheetTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="border border-border text-muted-foreground hover:text-foreground"
+              aria-label="Abrir navegación"
+            >
+              <Menu className="size-5" aria-hidden />
+            </Button>
+          </SheetTrigger>
+          <SheetContent className="p-0">
+            <div className="flex h-full flex-col">
+              <div className="border-b border-border px-4 py-4">
+                <SheetTitle>
+                  Auto<span className="text-brand">Libre</span>
+                </SheetTitle>
+                <SheetDescription>Panel de administración</SheetDescription>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+                <NavLinks onNavigate={() => setMenuOpen(false)} />
+              </div>
+              <div className="border-t border-border px-3 py-4">
+                <UserFooter name={user.name} email={user.email} />
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+      </header>
+
+      <main className="min-w-0 flex-1 px-4 pb-16 pt-5 md:px-7 md:pt-6">
         <Outlet />
       </main>
     </div>

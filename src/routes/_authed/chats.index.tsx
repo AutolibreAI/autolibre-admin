@@ -97,7 +97,7 @@ function ChatsList() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
+        <div className="w-full space-y-1.5 sm:w-auto">
           <label
             htmlFor="q"
             className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
@@ -109,7 +109,7 @@ function ChatsList() {
             type="search"
             placeholder="Usuario, patente o título"
             defaultValue={search.q ?? ''}
-            className="w-64"
+            className="w-full sm:w-64"
             onChange={(e) => {
               const value = e.currentTarget.value.trim()
               setSearch({ q: value === '' ? undefined : value })
