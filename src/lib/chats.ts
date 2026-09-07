@@ -62,6 +62,22 @@ export interface ChatListItem {
   model: string | null
   userMessageCount: number
   aiMessageCount: number
+  /**
+   * Costo de IA de la conversación entera, en USD: la suma de
+   * `ops.v_ai_usage_costed.total_usd` de sus mensajes `author = 'ai'`.
+   *
+   * `null` — nunca `0` — cuando no se puede saber: la conversación no tiene
+   * ningún mensaje de IA medido, o TODOS sus mensajes usan un modelo sin tarifa
+   * cargada. Cero es un precio; null es "no sabemos". `formatUsd(null)` rinde
+   * "—". Mismo criterio que `totalUsd` en `~/lib/ai-usage`.
+   */
+  costUsd: number | null
+  /**
+   * Mensajes de IA de esta conversación cuyo modelo cayó fuera de toda vigencia
+   * de precio. Viaja al lado de `costUsd` para que el número nunca se muestre
+   * solo: si es > 0, el costo mostrado deja afuera esos mensajes.
+   */
+  unpricedMessages: number
   /** El contenido del primer mensaje del usuario, sin truncar — trunca la UI. */
   title: string | null
   status: string
@@ -102,12 +118,18 @@ export const CHAT_TYPE_FILTERS = ['all', 'diagnostico', 'general'] as const
 export type ChatTypeFilter = (typeof CHAT_TYPE_FILTERS)[number]
 
 /**
+ * "Con mensajes": la conversación tiene al menos un mensaje de cualquiera de
+ * los dos lados. Es el DEFAULT — las conversaciones vacías son la mayoría de la
+ * base (48 de 70 al relevar esto) y casi siempre ruido: se crean y quedan ahí.
+ * Quien las quiera ve las tiene a un click, pero no son lo primero que se
+ * muestra.
+ *
  * "Sin respuesta de IA": mandó mensaje(s) y el asistente nunca contestó — un
  * corte real, no uno inventado. "Sin mensajes": la conversación existe
  * (`conversations` tiene la fila) y no se escribió nada, ninguno de los dos
- * lados — son 48 de 70 al relevar esto.
+ * lados. "Todos" incluye las vacías.
  */
-export const CHAT_MESSAGE_FILTERS = ['all', 'noAiReply', 'empty'] as const
+export const CHAT_MESSAGE_FILTERS = ['withMessages', 'all', 'noAiReply', 'empty'] as const
 export type ChatMessageFilter = (typeof CHAT_MESSAGE_FILTERS)[number]
 
 export const CHAT_SORT_KEYS = [
@@ -117,6 +139,7 @@ export const CHAT_SORT_KEYS = [
   'model',
   'userMessages',
   'aiMessages',
+  'cost',
   'title',
   'startedAt',
 ] as const
@@ -137,7 +160,12 @@ export const chatSearchSchema = z.object({
    * datos (`listDistinctChatModels`), no con esta lista.
    */
   model: z.string().trim().max(120).optional(),
-  messages: z.enum(CHAT_MESSAGE_FILTERS).catch('all').default('all'),
+  /**
+   * Default `withMessages`: las conversaciones vacías se ocultan salvo que se
+   * pidan. `.catch` cae al mismo default — un `?messages=basura` de un link
+   * viejo muestra el listado útil, no un error.
+   */
+  messages: z.enum(CHAT_MESSAGE_FILTERS).catch('withMessages').default('withMessages'),
   sort: z.enum(CHAT_SORT_KEYS).catch('startedAt').default('startedAt'),
   dir: z.enum(CHAT_SORT_DIRS).catch('desc').default('desc'),
 })
