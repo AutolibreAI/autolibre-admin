@@ -78,9 +78,9 @@ function NotificationsList() {
 
   const filtered =
     Boolean(search.q) ||
-    Boolean(search.kind) ||
+    Boolean(search.notificationType) ||
     Boolean(search.channel) ||
-    Boolean(search.state) ||
+    Boolean(search.notificationState) ||
     Boolean(search.userId)
 
   // Cuando se filtra por usuario mostramos su email — sale de las propias filas,
@@ -146,11 +146,11 @@ function NotificationsList() {
 
         {facets.types.length > 0 ? (
           <FilterGroup label="Tipo">
-            <Chip active={!search.kind} onClick={() => setSearch({ kind: undefined })}>
+            <Chip active={!search.notificationType} onClick={() => setSearch({ notificationType: undefined })}>
               Todos
             </Chip>
             {facets.types.map((t) => (
-              <Chip key={t} active={search.kind === t} onClick={() => setSearch({ kind: t })}>
+              <Chip key={t} active={search.notificationType === t} onClick={() => setSearch({ notificationType: t })}>
                 {typeLabel(t)}
               </Chip>
             ))}
@@ -158,7 +158,7 @@ function NotificationsList() {
         ) : null}
 
         <FilterGroup label="Estado">
-          <Chip active={!search.state} onClick={() => setSearch({ state: undefined })}>
+          <Chip active={!search.notificationState} onClick={() => setSearch({ notificationState: undefined })}>
             Todos
           </Chip>
           {NOTIFICATION_STATE_FILTERS.map((s) => (
@@ -169,8 +169,8 @@ function NotificationsList() {
                   ? 'warn'
                   : 'brand'
               }
-              active={search.state === s}
-              onClick={() => setSearch({ state: search.state === s ? undefined : s })}
+              active={search.notificationState === s}
+              onClick={() => setSearch({ notificationState: search.notificationState === s ? undefined : s })}
             >
               {NOTIFICATION_STATE_LABELS[s]}
             </Chip>

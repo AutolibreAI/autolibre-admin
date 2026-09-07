@@ -64,32 +64,52 @@ está perdida), igual que `stuck` en `/operacion` y `noData` en `/escaneres`.
 > estado real de más de la mitad de la base, y `/operacion` ya lo estaba
 > contando como `stuck`. La pantalla lo hace visible fila por fila.
 
-## El `type` de la URL se llama `kind`, y NO es un capricho
+## Los search params se llaman `notificationType` y `notificationState`
 
-`notificationSearchSchema` usa la clave `kind` para el filtro de
-`notification_type`. `/chats` ya tiene un search param `type` que es un
-`z.enum` cerrado (`all | diagnostico | general`). TanStack Router arma un tipo
-**unión de TODOS los search params del router**, así que un `type: z.string()`
-acá ensancha el de chats a `string` y **rompe el typecheck de
-`chats.index.tsx`** en sus `<Link search={(prev) => ({ ...prev, … })}>` — un
-error en un archivo que nadie tocó.
+No es cosmética: **las dos colisiones que estos nombres esquivan ya rompieron
+un build de producción**, el 2026-09-07, al mergear esta rama contra `main`.
+
+TanStack Router arma un tipo unión de **todos** los search params del router
+(`FullSearchSchema`), y el spread `{...prev}` de un updater
+`<Link search={(prev) => ({ ...prev, … })}>` arrastra el tipo ancho. Dos rutas
+que usan la misma clave con enums distintos rompen el typecheck **en la ruta
+ajena**, no en la propia:
+
+| Clave | Quién más la usa | Síntoma exacto |
+|---|---|---|
+| `kind` | `/documentos` — `z.enum(['all','cedula','registro','seguro','vtv'])` | `Type 'string' is not assignable to '"all" \| "cedula" \| …'` en `documentos.index.tsx` |
+| `state` | `/vehiculos/listado` — `z.enum(['all','active','archived'])` | `Type '"active"' is not assignable to '"atrasada" \| "entregada" \| …'` en `notificaciones.index.tsx` |
+
+Ninguno de los dos archivos había sido tocado. Y **el build de Vercel no
+typecheckea**, así que en el merge el error salió por otro lado — sólo
+`pnpm typecheck` los muestra.
+
+Lo que hace esto especialmente traicionero: la versión anterior de esta rule
+recomendaba `kind` como el nombre SEGURO para esquivar el `type` de `/chats`.
+Lo era — hasta que `/documentos` eligió `kind` por exactamente el mismo motivo,
+en otra rama. **Esquivar un nombre tomado eligiendo otro nombre genérico sólo
+mueve la colisión de lugar.**
+
+Regla que reemplaza a la anterior: **un search param con enum o tipo propio se
+nombra CALIFICADO por su dominio** — `notificationType`, `notificationState`,
+`vehicleType`. No `type`, no `kind`, no `state`. Un nombre genérico es un
+nombre que otra pantalla va a querer.
 
 - La columna en la base y el campo de `NotificationListItem` siguen siendo
-  `type`. Sólo la llave de la URL es `kind`.
-- Vale para cualquier search param nuevo: **antes de nombrarlo, `grep` los
-  schemas de `~/lib/*.ts`** por esa clave. Si otra ruta la usa con un tipo más
-  angosto, elegí otro nombre. `q`, `sort`, `dir` se comparten sin problema
-  porque coinciden en tipo (`string` / enums que cada ruta valida por su lado);
-  el conflicto es `string` contra `enum`.
+  `type` y `state`. Sólo cambia la llave de la URL.
+- `q`, `sort`, `dir`, `userId` se comparten sin problema: coinciden en tipo
+  (`string`, o enums que cada ruta valida por su lado). El conflicto es
+  `string` contra `enum`, o dos enums disjuntos.
+- Antes de nombrar uno nuevo: `grep -rn "<clave>:" src/lib/*.ts`.
 
-## El filtro de `kind` y `channel` es data-driven; el de `state` es cerrado
+## El filtro de tipo y canal es data-driven; el de estado es cerrado
 
-- `kind` y `channel`: las opciones salen de `listNotificationFacets()` —
+- `notificationType` y `channel`: las opciones salen de `listNotificationFacets()` —
   `select distinct` sobre la base. Un valor nuevo del enum aparece en los chips
   sin tocar código, mismo criterio que `listDistinctChatModels` en
   `chats.repo.ts`. `NOTIFICATION_TYPE_LABELS` tiene los seis valores del enum a
   mano sólo para la etiqueta legible; un valor sin label se muestra CRUDO.
-- `state`: es vocabulario NUESTRO (derivado, no un enum del backend), así que la
+- `notificationState`: es vocabulario NUESTRO (derivado, no un enum del backend), así que la
   lista es cerrada en `~/lib/notifications` y los chips son fijos.
 
 `facets.channels.length > 1` esconde el grupo de canal mientras haya un solo

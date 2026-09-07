@@ -8,12 +8,8 @@ import {
 import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
-<<<<<<< HEAD
-  Car,
-=======
   Bell,
-  BookOpen,
->>>>>>> origin/notificaciones-en-admin
+  Car,
   Coins,
   FileText,
   Handshake,
@@ -157,9 +153,6 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/chats", label: "Chats de IA", icon: MessageSquare },
   /**
-<<<<<<< HEAD
-   * Las tres últimas son las excepciones DECLARADAS a la regla de arriba: no
-=======
    * `Notificaciones` cierra el bloque de dominio: espeja el bounded context
    * `notifications/` del backend, y va acá y no junto a `Operación` por eso —
    * es dominio, no operación del panel. La pregunta que contesta es "de qué le
@@ -169,8 +162,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/notificaciones", label: "Notificaciones", icon: Bell },
   /**
-   * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
->>>>>>> origin/notificaciones-en-admin
+   * Las tres últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son
    * operación / analítica del panel.
    *

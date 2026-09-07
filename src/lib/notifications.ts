@@ -212,22 +212,29 @@ export const notificationSearchSchema = z.object({
   /** Se llega así desde la ficha del usuario. `optional`, no `.catch`. */
   userId: z.uuid().optional(),
   /**
-   * El `notification_type`. La clave del search param es `kind` y no `type` a
-   * propósito: `/chats` ya tiene un `type` que es un `z.enum` cerrado, y
-   * TanStack Router arma un tipo unión de TODOS los search params del router —
-   * un `type: string` acá ensancharía el de chats y rompería sus
-   * `<Link search={(prev) => …}>`. La columna en la base y el campo de la fila
-   * siguen siendo `type`; sólo la llave de la URL cambia.
+   * El `notification_type`. La clave del search param es `notificationType`, no
+   * `type` ni `kind`, y las DOS colisiones que descarta ya pasaron de verdad:
+   * `/chats` tiene un `type` que es un `z.enum` cerrado, y `/documentos` tiene
+   * un `kind` que también lo es. TanStack Router arma un tipo unión de TODOS
+   * los search params del router, así que un `string` acá ensancha el ajeno y
+   * rompe sus `<Link search={(prev) => …}>` — un error en un archivo que nadie
+   * tocó. La columna en la base y el campo de la fila siguen siendo `type`;
+   * sólo la llave de la URL cambia.
    *
    * Texto libre, no un `z.enum`: las opciones se arman con los valores
    * presentes en la base (`listNotificationFacets`), así un valor nuevo del
    * enum aparece sin tocar código. Mismo criterio que el filtro de modelo en
    * `chats.ts`.
    */
-  kind: z.string().trim().max(60).optional(),
+  notificationType: z.string().trim().max(60).optional(),
   channel: z.string().trim().max(20).optional(),
-  /** Estado derivado — acá SÍ es lista cerrada, es vocabulario nuestro. */
-  state: z.enum(NOTIFICATION_STATE_FILTERS).optional(),
+  /**
+   * Estado derivado — acá SÍ es lista cerrada, es vocabulario nuestro.
+   *
+   * Calificado por el mismo motivo que `notificationType`: `/vehiculos/listado`
+   * ya usa `state` con su propio enum (`all | active | archived`).
+   */
+  notificationState: z.enum(NOTIFICATION_STATE_FILTERS).optional(),
   sort: z.enum(NOTIFICATION_SORT_KEYS).catch('scheduledAt').default('scheduledAt'),
   dir: z.enum(NOTIFICATION_SORT_DIRS).catch('desc').default('desc'),
 })

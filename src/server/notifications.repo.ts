@@ -149,8 +149,8 @@ export async function listNotifications(
     )
   }
 
-  if (search.kind) {
-    params.push(search.kind)
+  if (search.notificationType) {
+    params.push(search.notificationType)
     outerWhere.push(`type = $${params.length}`)
   }
 
@@ -159,8 +159,8 @@ export async function listNotifications(
     outerWhere.push(`channel = $${params.length}`)
   }
 
-  if (search.state) {
-    params.push(search.state)
+  if (search.notificationState) {
+    params.push(search.notificationState)
     outerWhere.push(`state = $${params.length}`)
   }
 
