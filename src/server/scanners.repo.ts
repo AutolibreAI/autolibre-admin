@@ -1,11 +1,15 @@
 import '@tanstack/react-start/server-only'
 
 import { sql } from './db'
+import { scannerTypeLabel, sessionBucket } from '~/lib/scanners'
 import type {
   CompatibilityMatrix,
   CompatibilityRow,
   CompatibilityTotals,
   ScannerSearch,
+  ScannerSessionDetail,
+  ScannerSessionsMode,
+  ScannerSessionsView,
   ScannerVariant,
 } from '~/lib/scanners'
 
@@ -393,4 +397,191 @@ function buildTotals(row: TotalsRow | undefined): CompatibilityTotals {
     attempts: toInt(row?.attempts),
     okVehicles: toInt(row?.ok_vehicles),
   }
+}
+
+// ── El historial de una celda ────────────────────────────────────────────────
+
+interface SessionRow {
+  id: string
+  external_session_id: string
+  status: string
+  user_id: string
+  user_email: string
+  user_name: string | null
+  vehicle_id: string
+  plate: string
+  alias: string | null
+  brand: string | null
+  model: string | null
+  trim: string | null
+  year: number | string | null
+  scanner_type: string
+  scanner_firmware: string | null
+  obd_protocol: string | null
+  detected_vin: string | null
+  battery_voltage: string | null
+  total_readings: number | string
+  total_chunks: number | string
+  chunk_size: number | string
+  chunks_uploaded: number | string
+  distance_since_dtc_clear_km: number | string | null
+  dtc_codes: Array<string> | null
+  dtc_detail_count: number | string
+  produced_ai_diagnostic: boolean
+  produced_telemetry_analysis: boolean
+  started_at: Date | string
+  ended_at: Date | string | null
+  created_at: Date | string
+}
+
+/**
+ * Las conexiones detrás de una celda (o una fila, o una columna) de la matriz.
+ *
+ * Es el drill-down de "1 / 1" y "0 / 4": qué sesiones son, quién las hizo, sobre
+ * qué auto, con qué firmware y protocolo, qué VIN detectó el escáner, cuántas
+ * lecturas trajo, y qué produjo después (un diagnóstico de IA, un análisis de
+ * telemetría, códigos DTC).
+ *
+ * El cubo de cada sesión (`bucket`) se calcula en JS con `sessionBucket()` — la
+ * MISMA regla que las cadenas `OK`/`NO_DATA` de este archivo aplican en SQL para
+ * la matriz. Si la matriz dice "0 de 4" y acá aparecen sesiones marcadas `ok`,
+ * es que las dos expresiones divergieron.
+ *
+ * El filtro por variante usa `IS NOT DISTINCT FROM` para el firmware: cuando
+ * `fw` es `''` (escáner no identificado) tiene que matchear `NULL`, y `= NULL`
+ * no lo hace. Los joins a `users` y `vehicles` son `JOIN` y no `LEFT` porque las
+ * dos FK son NOT NULL en `driving_sessions` — la fila huérfana de la matriz es
+ * por el CATÁLOGO ausente, no por el vehículo.
+ */
+export async function scannerSessions(
+  search: ScannerSearch,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ScannerSessionsView | null> {
+  void opts.signal
+
+  const hasCatalog = Boolean(search.catalogId)
+  const hasVariant = Boolean(search.scanner)
+  if (!hasCatalog && !hasVariant) return null
+
+  const params: Array<unknown> = []
+  const where: Array<string> = []
+
+  if (search.catalogId === 'orphan') {
+    where.push('vc.id is null')
+  } else if (search.catalogId) {
+    params.push(search.catalogId)
+    where.push(`vc.id = $${params.length}`)
+  }
+
+  if (search.scanner) {
+    params.push(search.scanner)
+    where.push(`ds.scanner_type::text = $${params.length}`)
+    // `fw` viaja siempre con `scanner`. `''` = no identificado = NULL en la base.
+    const fw = search.fw ?? ''
+    params.push(fw === '' ? null : fw)
+    where.push(`ds.scanner_firmware is not distinct from $${params.length}`)
+  }
+
+  const rows = await sql<SessionRow>(
+    `
+    select
+      ds.id,
+      ds.external_session_id,
+      ds.status::text                        as status,
+      ds.user_id,
+      u.email                                as user_email,
+      u.name                                 as user_name,
+      ds.vehicle_id,
+      v.plate,
+      v.alias,
+      vc.brand, vc.model, vc.trim, vc.year,
+      ds.scanner_type::text                  as scanner_type,
+      ds.scanner_firmware,
+      ds.obd_protocol,
+      ds.detected_vin,
+      ds.battery_voltage,
+      ds.total_readings,
+      ds.total_chunks,
+      ds.chunk_size,
+      ds.distance_since_dtc_clear_km,
+      (select count(*)::int from driving_session_chunks dsc where dsc.session_id = ds.id)
+                                             as chunks_uploaded,
+      coalesce(
+        (select s.codes from session_dtc_snapshots s where s.session_id = ds.id limit 1),
+        array[]::text[]
+      )                                      as dtc_codes,
+      (select count(*)::int from diagnostic_dtcs d where d.session_id = ds.id)
+                                             as dtc_detail_count,
+      exists (select 1 from ai_diagnostics a where a.session_id = ds.id)
+                                             as produced_ai_diagnostic,
+      exists (select 1 from driving_telemetry_analysis t where t.session_id = ds.id)
+                                             as produced_telemetry_analysis,
+      ds.started_at,
+      ds.ended_at,
+      ds.created_at
+    from driving_sessions ds
+    join users u on u.id = ds.user_id
+    join vehicles v on v.id = ds.vehicle_id
+    left join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+    left join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
+    ${where.length ? `where ${where.join(' and ')}` : ''}
+    order by ds.started_at desc, ds.id
+    `,
+    params,
+  )
+
+  const sessions: Array<ScannerSessionDetail> = rows.map((r) => ({
+    id: r.id,
+    externalSessionId: r.external_session_id,
+    bucket: sessionBucket(r.status, toInt(r.total_readings)),
+    status: r.status,
+    userId: r.user_id,
+    userEmail: r.user_email,
+    userName: r.user_name,
+    vehicleId: r.vehicle_id,
+    vehiclePlate: r.plate,
+    vehicleAlias: r.alias,
+    catalogLabel: r.brand
+      ? [r.brand, r.model, r.trim, r.year].filter(Boolean).join(' ')
+      : null,
+    scannerType: r.scanner_type,
+    firmware: r.scanner_firmware,
+    obdProtocol: r.obd_protocol,
+    detectedVin: r.detected_vin,
+    batteryVoltage: r.battery_voltage,
+    totalReadings: toInt(r.total_readings),
+    totalChunks: toInt(r.total_chunks),
+    chunkSize: toInt(r.chunk_size),
+    chunksUploaded: toInt(r.chunks_uploaded),
+    distanceSinceDtcClearKm:
+      r.distance_since_dtc_clear_km === null ? null : toInt(r.distance_since_dtc_clear_km),
+    dtcCodes: r.dtc_codes ?? [],
+    dtcDetailCount: toInt(r.dtc_detail_count),
+    producedAiDiagnostic: r.produced_ai_diagnostic,
+    producedTelemetryAnalysis: r.produced_telemetry_analysis,
+    startedAt: toIso(r.started_at) as string,
+    endedAt: toIso(r.ended_at),
+    createdAt: toIso(r.created_at) as string,
+  }))
+
+  const mode: ScannerSessionsMode = hasCatalog && hasVariant ? 'cell' : hasCatalog ? 'row' : 'variant'
+
+  // El encabezado del panel. El nombre del auto sale de la primera sesión (todas
+  // comparten catálogo); el del escáner, de `search`.
+  const carLabel =
+    search.catalogId === 'orphan'
+      ? 'Autos sin modelo de catálogo'
+      : (sessions[0]?.catalogLabel ?? 'Ese modelo')
+  const scannerName = search.scanner
+    ? `${scannerTypeLabel(search.scanner)} ${search.fw ? search.fw : '(no identificado)'}`.trim()
+    : null
+
+  const label =
+    mode === 'cell'
+      ? `${carLabel} · ${scannerName}`
+      : mode === 'row'
+        ? `${carLabel} · todos los escáneres`
+        : `${scannerName} · todos los vehículos`
+
+  return { mode, label, sessions }
 }

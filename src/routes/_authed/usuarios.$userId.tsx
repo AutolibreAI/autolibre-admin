@@ -1,5 +1,5 @@
 import { Link, createFileRoute, notFound } from '@tanstack/react-router'
-import { AlertTriangle, ArrowLeft, Car, CheckCircle2, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, Car, CheckCircle2, ShieldAlert } from 'lucide-react'
 import {
   CENSUS_ENTRIES,
   CENSUS_GROUPS,
@@ -705,6 +705,25 @@ function Notifications({ user }: { user: UserDetail }) {
             </ul>
           )}
         </div>
+
+        {/*
+          El censo cuenta las notificaciones; el detalle —de qué se le avisó y
+          si llegó— vive en `/notificaciones`. Se linkea con el filtro por
+          usuario ya puesto. Sólo si hay alguna: el cero ya lo dice el censo.
+        */}
+        {user.census.notifications > 0 ? (
+          <>
+            <Separator />
+            <Link
+              to="/notificaciones"
+              search={{ userId: user.id }}
+              className="inline-flex items-center gap-1 rounded text-sm text-brand outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              Ver las {formatInt(user.census.notifications)} notificaciones enviadas
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          </>
+        ) : null}
       </CardContent>
     </Card>
   )

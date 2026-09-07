@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
 import { OPS_WINDOW_HOURS, QUEUE_LABELS } from '~/lib/ops'
 import type {
   AdoptionPulse,
@@ -409,7 +410,12 @@ export async function leadFunnel(
 const STUCK_AFTER_MINUTES: Record<QueueKey, number> = {
   // `notification-delivery.cron` corre CADA MINUTO. Media hora sin un solo
   // intento registrado no es lentitud: es el cron caído.
-  notifications: 30,
+  //
+  // El número se importa de `~/lib/notifications` — `/notificaciones` lo usa
+  // para marcar una fila como `atrasada`, y las dos pantallas TIENEN que decir
+  // lo mismo sobre la misma notificación. Una sola definición, no dos que
+  // divergen. → `.claude/rules/notifications.md`
+  notifications: NOTIFICATION_DELAYED_AFTER_MIN,
   // `vehicle-data-query-reconciliation.cron` barre cada 5 min lo no sellado.
   // Una hora sin sellar ya pasó por doce barridos.
   vehicle_data_queries: 60,

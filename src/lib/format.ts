@@ -3,35 +3,39 @@
  * markup byte-matches the client's first render — the usual cause of hydration
  * mismatches in a table full of dates and numbers.
  */
-const int = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 })
+const int = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 });
 
-const date = new Intl.DateTimeFormat('es-AR', {
-  day: '2-digit',
-  month: 'short',
-  year: 'numeric',
-  timeZone: 'UTC',
-})
+const date = new Intl.DateTimeFormat("es-AR", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
 
 /**
- * Pesos argentinos, sin centavos.
+ * Fecha + hora, para cuando el día no alcanza — una notificación programada y
+ * enviada el mismo día sólo se distingue por la hora.
  *
- * Los montos que muestra el panel (multas, deuda de patente) son enteros de
- * pesos — el proveedor los devuelve así. Un `$ 2.315.338,00` sobre una multa de
- * dos millones es ruido, no precisión.
- *
- * No confundir con `formatUsd` de `~/lib/ai-usage`: ese vive junto a Costos de
- * IA porque es dato de ESE contexto (le pagamos al proveedor en dólares). Este
- * es transversal.
+ * `timeZone: 'UTC'` por el mismo motivo que `date`: el markup del servidor
+ * tiene que coincidir byte a byte con el primer render del cliente, y una hora
+ * en zona local produce dos strings distintos. La consecuencia es que la hora
+ * que se ve es UTC, no ART — se asume y se documenta acá, no se "arregla" con
+ * la zona del navegador.
  */
-const ars = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0,
-})
+const dateTime = new Intl.DateTimeFormat("es-AR", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: "UTC",
+});
 
-export const formatInt = (n: number) => int.format(n)
-export const formatDate = (iso: string) => date.format(new Date(iso))
-export const formatArs = (n: number) => ars.format(n)
+export const formatInt = (n: number) => int.format(n);
+export const formatDate = (iso: string) => date.format(new Date(iso));
+/** Sin sufijo de zona — la hora es UTC y el llamador lo aclara una vez, no por celda. */
+export const formatDateTime = (iso: string) => dateTime.format(new Date(iso));
 
 /**
  * Tamaño de archivo en MB, con un decimal.
@@ -52,4 +56,4 @@ export const formatArs = (n: number) => ars.format(n)
 export const formatBytes = (bytes: number) =>
   bytes < 1024 * 1024
     ? `${Math.round(bytes / 1024)} KB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;

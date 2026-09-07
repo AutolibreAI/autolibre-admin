@@ -58,14 +58,12 @@ export const VEHICLE_DATA_QUERY_STATUS_LABELS: Record<string, string> = {
   failed: 'la consulta falló',
 }
 
-export const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
-  document_expiration: 'Vencimiento de documento',
-  maintenance_reminder: 'Recordatorio de mantenimiento',
-  diagnostic_available: 'Diagnóstico disponible',
-  fine_pending: 'Multa pendiente',
-  dtc_active: 'DTC activo',
-  vehicle_data_ready: 'Datos del vehículo listos',
-}
+/**
+ * El vocabulario de tipos de notificación vive en `~/lib/notifications` — es su
+ * dueño. Se re-exporta acá para no romper los imports de la ficha de usuario,
+ * que lo usa en el bloque de preferencias.
+ */
+export { NOTIFICATION_TYPE_LABELS } from './notifications'
 
 // ── Censo ────────────────────────────────────────────────────────────────────
 
