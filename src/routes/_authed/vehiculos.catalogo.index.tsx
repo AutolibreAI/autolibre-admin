@@ -22,7 +22,7 @@ import {
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
-export const Route = createFileRoute('/_authed/catalogo/')({
+export const Route = createFileRoute('/_authed/vehiculos/catalogo/')({
   /**
    * SSR completo (el default de `start.ts`).
    *
@@ -37,7 +37,7 @@ export const Route = createFileRoute('/_authed/catalogo/')({
   loader: ({ deps, abortController }) =>
     listVehicleCatalogs({ data: deps, signal: abortController.signal }),
 
-  head: () => ({ meta: [{ title: 'Catálogo — AutoLibre' }] }),
+  head: () => ({ meta: [{ title: 'Vehículos · Catálogo — AutoLibre' }] }),
   component: CatalogList,
 })
 
@@ -46,21 +46,18 @@ export const Route = createFileRoute('/_authed/catalogo/')({
  *
  * ── Qué consulta de DBeaver reemplaza ───────────────────────────────────────
  *
- * Ninguna, y eso es el punto. Al 2026-09-04 `vehicle_catalog_manuals` tiene
- * CERO filas contra 83 catálogos: nadie corría esa consulta porque no había
- * nada que consultar. Lo que reemplaza es el `INSERT` a mano que iba a hacer
- * falta apenas apareciera el primer PDF — y ese `INSERT` era imposible de todos
+ * Ninguna, y eso es el punto. `vehicle_catalog_manuals` arrancó con CERO filas
+ * contra ~80 catálogos: nadie corría esa consulta porque no había nada que
+ * consultar. Lo que reemplaza es el `INSERT` a mano que iba a hacer falta
+ * apenas apareciera el primer PDF — y ese `INSERT` era imposible de todos
  * modos, porque `file_id` referencia una fila de `files` que sólo se puede
  * crear subiendo el archivo a DigitalOcean Spaces.
- *
- * O sea: sin esta pantalla, cargar un manual no era "incómodo". Era imposible
- * sin escribir un script contra el bucket.
  *
  * ── Las tres columnas de conteo no son adorno ───────────────────────────────
  *
  * `Manuales` es la acción. `Variantes` y `Vehículos` son el contexto que
- * decide a CUÁL de los 83 le cargás el manual primero: un modelo que 12
- * usuarios tienen en la app vale más que uno que nadie cargó todavía.
+ * decide a CUÁL le cargás el manual primero: un modelo que 12 usuarios tienen
+ * en la app vale más que uno que nadie cargó todavía.
  */
 function CatalogList() {
   const catalogs = Route.useLoaderData()
@@ -162,7 +159,7 @@ function CatalogRow({ catalog }: { catalog: CatalogListItem }) {
     <TableRow>
       <TableCell>
         <Link
-          to="/catalogo/$catalogId"
+          to="/vehiculos/catalogo/$catalogId"
           params={{ catalogId: catalog.id }}
           className="font-medium text-foreground hover:text-brand hover:underline"
         >

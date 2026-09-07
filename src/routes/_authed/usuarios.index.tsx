@@ -29,7 +29,8 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
-import { formatArs, formatDate, formatInt } from '~/lib/format'
+import { CountOrNeverCell, ExpiryCell, FineDebtCell } from '~/components/VehicleCells'
+import { formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
 export const Route = createFileRoute('/_authed/usuarios/')({
@@ -721,52 +722,6 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
   )
 }
 
-/**
- * "Tiempo hasta vencimiento" — VTV y seguro comparten esta celda porque
- * comparten la misma pregunta: ¿cuántos días quedan del DOCUMENTO cargado?
- *
- * Compara por día calendario en UTC, no por instante: `expiration_date` es un
- * `date` sin hora, así que un vencimiento "hoy" no puede leerse como "vencida
- * hace unas horas" sólo porque ya pasó el mediodía. Sin este redondeo, la
- * misma fecha diría "vencida" en Argentina a la tarde y "vigente" a la mañana
- * según cuándo se abra el panel.
- */
-function daysUntilUtc(iso: string): number {
-  const now = new Date()
-  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  const target = new Date(iso)
-  const targetUtc = Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate())
-  return Math.round((targetUtc - todayUtc) / 86_400_000)
-}
-
-function ExpiryCell({ iso }: { iso: string | null }) {
-  if (!iso) return <span className="text-muted-foreground/50">no cargado</span>
-
-  const days = daysUntilUtc(iso)
-
-  if (days < 0) {
-    return (
-      <span className="text-status-yellow" title={formatDate(iso)}>
-        vencida hace {formatInt(Math.abs(days))} día{Math.abs(days) === 1 ? '' : 's'}
-      </span>
-    )
-  }
-
-  if (days === 0) {
-    return (
-      <span className="text-status-yellow" title={formatDate(iso)}>
-        vence hoy
-      </span>
-    )
-  }
-
-  return (
-    <span title={formatDate(iso)}>
-      vence en {formatInt(days)} día{days === 1 ? '' : 's'}
-    </span>
-  )
-}
-
 function LastQueryCell({ status, at }: { status: string | null; at: string | null }) {
   if (!status) return <span className="text-muted-foreground/50">nunca</span>
 
@@ -780,50 +735,3 @@ function LastQueryCell({ status, at }: { status: string | null; at: string | nul
   )
 }
 
-/**
- * DTCs y anomalías comparten esta celda: los dos son "lo encontrado en el
- * evento más reciente", no un estado que el dominio afirme como resuelto. Los
- * tres valores posibles se distinguen a propósito: `null` (gris, nunca pasó)
- * no es lo mismo que `0` (texto plano, pasó y no encontró nada), y ninguno de
- * los dos es lo mismo que encontrar algo (ámbar).
- */
-function CountOrNeverCell({ value, title }: { value: number | null; title: string }) {
-  if (value === null) {
-    return (
-      <span className="text-muted-foreground/50" title={`Nunca — ${title}`}>
-        —
-      </span>
-    )
-  }
-  if (value === 0) return <span title={title}>0</span>
-  return (
-    <span className="font-medium text-status-yellow" title={title}>
-      {formatInt(value)}
-    </span>
-  )
-}
-
-/**
- * Monto adeudado en multas. Mismo criterio de tres estados que
- * `CountOrNeverCell`: `null` (multas nunca consultadas) no es lo mismo que `$0`
- * (consultadas, sin deuda), y una deuda real va en ámbar porque es plata que el
- * usuario debe. El `$0` NO se pinta de verde: "sin deuda hoy" no es un logro
- * del panel, es sólo un dato.
- */
-function FineDebtCell({ amount }: { amount: number | null }) {
-  if (amount === null) {
-    return (
-      <span className="text-muted-foreground/50" title="Multas nunca consultadas">
-        —
-      </span>
-    )
-  }
-  if (amount === 0) {
-    return <span title="Consultado — sin multas pendientes">{formatArs(0)}</span>
-  }
-  return (
-    <span className="font-medium text-status-yellow" title="Suma de multas con estado pendiente">
-      {formatArs(amount)}
-    </span>
-  )
-}

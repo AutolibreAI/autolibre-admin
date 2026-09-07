@@ -230,7 +230,7 @@ export const SCANNER_TYPE_LABELS: Record<string, string> = {
 /**
  * Primer uso de estos dos enums en el panel, así que viven acá.
  *
- * Si `/catalogo` termina necesitándolos, **se mueven a un módulo compartido, no
+ * Si `/vehiculos` termina necesitándolos, **se mueven a un módulo compartido, no
  * se copian**: un mapa de etiquetas duplicado no se ve mal el día uno, se ve mal
  * el día que el backend agrega `plug_in_hybrid` y sólo una de las dos copias se
  * entera. Es la misma lección que `components/Filters.tsx`.
