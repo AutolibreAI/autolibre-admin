@@ -17,12 +17,33 @@ import { z } from 'zod'
  * padrón entero de autos, con dueño, ordenable y filtrable.
  */
 
+// ── Tipo de vehículo (enum `vehicle_type` del backend) ─────────────────────
+//
+// Vivía en `~/lib/manuals`. Se movió acá cuando el Listado y las Métricas lo
+// necesitaron: `~/lib/manuals` ahora lo re-exporta, así que sus consumidores no
+// cambian. Mismo criterio que el comentario de `scanners.ts` sobre no copiar un
+// mapa de etiquetas.
+
+export const VEHICLE_TYPES = ['car', 'motorcycle'] as const
+export type VehicleType = (typeof VEHICLE_TYPES)[number]
+
+export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
+  car: 'Auto',
+  motorcycle: 'Moto',
+}
+
+/** Tolerante a un valor nuevo del enum del backend: lo muestra crudo. */
+export function vehicleTypeLabel(value: string): string {
+  return (VEHICLE_TYPE_LABELS as Record<string, string>)[value] ?? value
+}
+
 // ── Listado ────────────────────────────────────────────────────────────────
 
 export const VEHICLE_SORT_KEYS = [
   'plate',
   'owner',
   'model',
+  'type',
   'odometer',
   'vtv',
   'fineDebt',
@@ -46,6 +67,16 @@ export const vehicleSearchSchema = z.object({
   q: z.string().trim().max(80).optional(),
   /** "Listado total" ⇒ el default los muestra todos, archivados incluidos. */
   state: z.enum(VEHICLE_STATE_FILTERS).catch('all').default('all'),
+  /**
+   * Auto / moto. Ausente = ambos.
+   *
+   * Se llama `vehicleType` y NO `type` a propósito: `/chats` ya usa `type` como
+   * search param con otro enum, y TanStack unifica los nombres de search params
+   * entre rutas para el spread `{...prev}` de los updaters — dos `type` con
+   * enums distintos rompen el typecheck de una pantalla que no tiene nada que
+   * ver.
+   */
+  vehicleType: z.enum(VEHICLE_TYPES).optional(),
   /** Sólo autos con VTV vencida (documento cargado y `expiration_date` pasada). */
   vtvExpired: z.coerce.boolean().catch(false).default(false),
   /** Sólo autos con deuda de multas pendiente. */
@@ -68,6 +99,9 @@ export interface VehicleListRow {
   model: string
   trim: string
   year: number
+
+  /** `car` | `motorcycle` (crudo del enum del backend). */
+  vehicleType: string
 
   userId: string
   userName: string | null
@@ -120,11 +154,14 @@ export const FLEET_SORT_KEYS = [
   'fineDebt',
   'scanned',
   'model',
+  'type',
 ] as const
 export type FleetSortKey = (typeof FLEET_SORT_KEYS)[number]
 
 export const fleetSearchSchema = z.object({
   q: z.string().trim().max(80).optional(),
+  /** Auto / moto. Ausente = ambos. `vehicleType` y no `type` — ver `vehicleSearchSchema`. */
+  vehicleType: z.enum(VEHICLE_TYPES).optional(),
   sort: z.enum(FLEET_SORT_KEYS).catch('vehicles').default('vehicles'),
   dir: z.enum(['asc', 'desc']).catch('desc').default('desc'),
 })

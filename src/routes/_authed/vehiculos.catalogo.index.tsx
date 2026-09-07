@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { BookOpen, BookX } from 'lucide-react'
 import {
+  VEHICLE_TYPES,
   VEHICLE_TYPE_LABELS,
   catalogSearchSchema,
   catalogTitle,
@@ -9,16 +10,10 @@ import {
 import { listVehicleCatalogs } from '~/fn/manuals'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
+import { SortHeader } from '~/components/SortHeader'
 import { Badge } from '~/components/ui/badge'
 import { Input } from '~/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table'
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '~/components/ui/table'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
@@ -92,25 +87,42 @@ function CatalogList() {
           autoComplete="off"
         />
 
-        <FilterGroup label="Manual">
-          <Chip
-            active={!search.onlyWithoutManual}
-            onClick={() => setSearch({ onlyWithoutManual: false })}
-          >
-            Todos
-          </Chip>
-          {/*
-            `warn` y no `brand`: acota a filas PROBLEMÁTICAS. Pintarlo de verde
-            diría "seleccionado y todo bien", que es lo contrario.
-          */}
-          <Chip
-            active={search.onlyWithoutManual}
-            tone="warn"
-            onClick={() => setSearch({ onlyWithoutManual: true })}
-          >
-            Sin manual ({formatInt(withoutManual)})
-          </Chip>
-        </FilterGroup>
+        <div className="flex flex-wrap gap-5">
+          <FilterGroup label="Tipo">
+            <Chip active={!search.vehicleType} onClick={() => setSearch({ vehicleType: undefined })}>
+              Todos
+            </Chip>
+            {VEHICLE_TYPES.map((t) => (
+              <Chip
+                key={t}
+                active={search.vehicleType === t}
+                onClick={() => setSearch({ vehicleType: search.vehicleType === t ? undefined : t })}
+              >
+                {VEHICLE_TYPE_LABELS[t]}
+              </Chip>
+            ))}
+          </FilterGroup>
+
+          <FilterGroup label="Manual">
+            <Chip
+              active={!search.onlyWithoutManual}
+              onClick={() => setSearch({ onlyWithoutManual: false })}
+            >
+              Todos
+            </Chip>
+            {/*
+              `warn` y no `brand`: acota a filas PROBLEMÁTICAS. Pintarlo de verde
+              diría "seleccionado y todo bien", que es lo contrario.
+            */}
+            <Chip
+              active={search.onlyWithoutManual}
+              tone="warn"
+              onClick={() => setSearch({ onlyWithoutManual: true })}
+            >
+              Sin manual ({formatInt(withoutManual)})
+            </Chip>
+          </FilterGroup>
+        </div>
       </div>
 
       {catalogs.length === 0 ? (
@@ -122,11 +134,11 @@ function CatalogList() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Modelo</TableHead>
-                <TableHead>Tipo</TableHead>
-                <TableHead className="text-right">Manuales</TableHead>
-                <TableHead className="text-right">Variantes</TableHead>
-                <TableHead className="text-right">Vehículos</TableHead>
+                <SortHeader label="Modelo" sortKey="model" active={search.sort === 'model'} dir={search.dir} to="/vehiculos/catalogo" firstClick="asc" />
+                <SortHeader label="Tipo" sortKey="type" active={search.sort === 'type'} dir={search.dir} to="/vehiculos/catalogo" firstClick="asc" />
+                <SortHeader label="Manuales" sortKey="manuals" active={search.sort === 'manuals'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
+                <SortHeader label="Variantes" sortKey="specs" active={search.sort === 'specs'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
+                <SortHeader label="Vehículos" sortKey="vehicles" active={search.sort === 'vehicles'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
               </TableRow>
             </TableHeader>
             <TableBody>

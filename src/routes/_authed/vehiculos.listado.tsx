@@ -2,7 +2,10 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import {
   VEHICLE_STATE_FILTERS,
   VEHICLE_STATE_FILTER_LABELS,
+  VEHICLE_TYPES,
+  VEHICLE_TYPE_LABELS,
   vehicleSearchSchema,
+  vehicleTypeLabel,
   type VehicleListRow,
 } from '~/lib/vehicles'
 import { listVehiclesFn } from '~/fn/vehicles'
@@ -59,7 +62,11 @@ function VehiculosListado() {
     navigate({ search: { ...search, ...next }, replace: true })
 
   const filtered =
-    Boolean(search.q) || search.state !== 'all' || search.vtvExpired || search.fineDebt
+    Boolean(search.q) ||
+    search.state !== 'all' ||
+    Boolean(search.vehicleType) ||
+    search.vtvExpired ||
+    search.fineDebt
 
   return (
     <>
@@ -98,6 +105,21 @@ function VehiculosListado() {
           ))}
         </FilterGroup>
 
+        <FilterGroup label="Tipo">
+          <Chip active={!search.vehicleType} onClick={() => setSearch({ vehicleType: undefined })}>
+            Todos
+          </Chip>
+          {VEHICLE_TYPES.map((t) => (
+            <Chip
+              key={t}
+              active={search.vehicleType === t}
+              onClick={() => setSearch({ vehicleType: search.vehicleType === t ? undefined : t })}
+            >
+              {VEHICLE_TYPE_LABELS[t]}
+            </Chip>
+          ))}
+        </FilterGroup>
+
         <FilterGroup label="Alertas">
           <Chip
             tone="warn"
@@ -122,11 +144,12 @@ function VehiculosListado() {
         </p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[1500px]">
+          <Table className="min-w-[1580px]">
             <TableHeader>
               <TableRow>
                 <SortHeader label="Vehículo" sortKey="plate" active={search.sort === 'plate'} dir={search.dir} to="/vehiculos/listado" />
                 <SortHeader label="Dueño" sortKey="owner" active={search.sort === 'owner'} dir={search.dir} to="/vehiculos/listado" />
+                <SortHeader label="Tipo" sortKey="type" active={search.sort === 'type'} dir={search.dir} to="/vehiculos/listado" firstClick="asc" />
                 <SortHeader label="Km" sortKey="odometer" active={search.sort === 'odometer'} dir={search.dir} to="/vehiculos/listado" align="right" firstClick="desc" />
                 <SortHeader label="VTV" sortKey="vtv" active={search.sort === 'vtv'} dir={search.dir} to="/vehiculos/listado" firstClick="asc" />
                 <TableHead>Seguro</TableHead>
@@ -186,6 +209,8 @@ function Row({ v }: { v: VehicleListRow }) {
           <div className="truncate text-xs text-muted-foreground">{v.userEmail}</div>
         ) : null}
       </TableCell>
+
+      <TableCell className="text-muted-foreground">{vehicleTypeLabel(v.vehicleType)}</TableCell>
 
       <TableCell className="text-right tabular-nums">{formatInt(v.odometerKm)}</TableCell>
 

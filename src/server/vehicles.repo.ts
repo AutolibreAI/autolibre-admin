@@ -52,6 +52,7 @@ interface ListRow {
   model: string
   trim: string
   year: number | string
+  vehicle_type: string
   user_id: string
   user_name: string | null
   user_email: string
@@ -79,6 +80,7 @@ const LIST_SORT_COLUMNS: Record<VehicleSortKey, string> = {
   plate: 'plate',
   owner: 'user_email',
   model: 'model_sort',
+  type: 'vehicle_type',
   odometer: 'odometer_km',
   vtv: 'vtv_expires_at',
   fineDebt: 'fine_debt_amount',
@@ -116,6 +118,11 @@ export async function listVehicles(
   if (search.state === 'active') outerWhere.push('NOT archived')
   else if (search.state === 'archived') outerWhere.push('archived')
 
+  if (search.vehicleType) {
+    params.push(search.vehicleType)
+    outerWhere.push(`vehicle_type = $${params.length}`)
+  }
+
   if (search.q) {
     params.push(`%${search.q}%`)
     const p = `$${params.length}`
@@ -139,6 +146,7 @@ export async function listVehicles(
         v.id, v.plate, v.alias, v.color, v.archived,
         v.odometer_value as odometer_km, v.created_at,
         vc.brand, vc.model, vc.trim, vc.year,
+        vc.vehicle_type::text as vehicle_type,
         lower(vc.brand || ' ' || vc.model || ' ' || vc.trim) as model_sort,
         u.id as user_id, u.name as user_name, u.email as user_email,
 
@@ -211,6 +219,7 @@ export async function listVehicles(
       model: r.model,
       trim: r.trim,
       year: toInt(r.year),
+      vehicleType: r.vehicle_type,
       userId: r.user_id,
       userName: r.user_name,
       userEmail: r.user_email,
@@ -260,6 +269,7 @@ const FLEET_SORT_COLUMNS: Record<FleetSortKey, string> = {
   fineDebt: 'fine_debt_total',
   scanned: 'scanned_ok',
   model: 'model_sort',
+  type: 'vehicle_type',
 }
 
 /**
@@ -281,6 +291,11 @@ export async function fleetMetrics(
 
   const params: Array<unknown> = []
   const outerWhere: Array<string> = ['vehicle_count > 0']
+
+  if (search.vehicleType) {
+    params.push(search.vehicleType)
+    outerWhere.push(`vehicle_type = $${params.length}`)
+  }
 
   if (search.q) {
     params.push(`%${search.q}%`)

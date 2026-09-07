@@ -78,6 +78,33 @@ Un `vehicle` lo crea el usuario en la app. `driving_sessions`, `fines`,
 esto lo mueve el admin. Si aparece un `UPDATE`/`INSERT` en `vehicles.repo.ts`,
 está mal.
 
+## Ordenar y filtrar
+
+Las tres pestañas son ordenables por columna (headers = `<SortHeader>`, o sea
+links: el orden ES la URL) y filtrables:
+
+- **Catálogo**: buscar (marca/modelo/versión), filtro Tipo (auto/moto), "sin
+  manual". Sort por las 5 columnas. El default `sort=model asc` reproduce el
+  orden histórico (marca+modelo, año desc como desempate).
+- **Listado**: buscar (patente/alias/modelo/dueño), Estado, Tipo, "VTV vencida",
+  "con deuda de multas". Sort por 10 columnas.
+- **Métricas**: buscar, Tipo. Sort por casi todas.
+
+### ⚠ El filtro de tipo se llama `vehicleType`, NO `type`
+
+`/chats` ya usa `type` como search param (`diagnostico | general | all`), y
+**TanStack unifica los nombres de search params entre rutas** para el spread
+`{...prev}` de los updaters de `<Link search={...}>`. Dos params llamados `type`
+con enums distintos rompen el typecheck de `chats.index.tsx` —una pantalla que
+no tiene nada que ver— con `Type '"car"' is not assignable to '"all" |
+"diagnostico" | "general"'`.
+
+Regla: **un search param nuevo con un enum propio no puede reusar un nombre que
+otra ruta ya use con otro enum.** Elegí un nombre calificado (`vehicleType`, no
+`type`). El `sort` con valor `'type'` sí se puede repetir entre rutas — ahí el
+choque sería sólo si los conjuntos fueran incompatibles, y `'type'` como
+literal es compatible consigo mismo.
+
 ## `SortHeader` y `VehicleCells` son componentes, no copias
 
 `src/components/SortHeader.tsx` (header de columna ordenable) y

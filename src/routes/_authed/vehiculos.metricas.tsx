@@ -1,7 +1,15 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { fleetSearchSchema, type FleetMetricRow, type FleetSummary } from '~/lib/vehicles'
+import {
+  VEHICLE_TYPES,
+  VEHICLE_TYPE_LABELS,
+  fleetSearchSchema,
+  vehicleTypeLabel,
+  type FleetMetricRow,
+  type FleetSummary,
+} from '~/lib/vehicles'
 import { fleetMetricsFn, fleetSummaryFn } from '~/fn/vehicles'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { Input } from '~/components/ui/input'
 import {
@@ -65,7 +73,7 @@ function VehiculosMetricas() {
 
       <SummaryTiles summary={summary} shown={rows.length} />
 
-      <div className="mb-4 mt-5">
+      <div className="mb-4 mt-5 flex flex-wrap items-end gap-5">
         <Input
           type="search"
           placeholder="Filtrar por marca, modelo o versión"
@@ -79,6 +87,29 @@ function VehiculosMetricas() {
             })
           }}
         />
+
+        <FilterGroup label="Tipo">
+          <Chip
+            active={!search.vehicleType}
+            onClick={() => navigate({ search: { ...search, vehicleType: undefined }, replace: true })}
+          >
+            Todos
+          </Chip>
+          {VEHICLE_TYPES.map((t) => (
+            <Chip
+              key={t}
+              active={search.vehicleType === t}
+              onClick={() =>
+                navigate({
+                  search: { ...search, vehicleType: search.vehicleType === t ? undefined : t },
+                  replace: true,
+                })
+              }
+            >
+              {VEHICLE_TYPE_LABELS[t]}
+            </Chip>
+          ))}
+        </FilterGroup>
       </div>
 
       {rows.length === 0 ? (
@@ -87,10 +118,11 @@ function VehiculosMetricas() {
         </p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[1100px]">
+          <Table className="min-w-[1200px]">
             <TableHeader>
               <TableRow>
                 <SortHeader label="Modelo" sortKey="model" active={search.sort === 'model'} dir={search.dir} to="/vehiculos/metricas" firstClick="asc" />
+                <SortHeader label="Tipo" sortKey="type" active={search.sort === 'type'} dir={search.dir} to="/vehiculos/metricas" firstClick="asc" />
                 <SortHeader label="Vehículos" sortKey="vehicles" active={search.sort === 'vehicles'} dir={search.dir} to="/vehiculos/metricas" align="right" firstClick="desc" />
                 <SortHeader label="Usuarios" sortKey="users" active={search.sort === 'users'} dir={search.dir} to="/vehiculos/metricas" align="right" firstClick="desc" />
                 <SortHeader label="Km prom." sortKey="avgKm" active={search.sort === 'avgKm'} dir={search.dir} to="/vehiculos/metricas" align="right" firstClick="desc" />
@@ -154,6 +186,8 @@ function Row({ r }: { r: FleetMetricRow }) {
           </span>
         ) : null}
       </TableCell>
+
+      <TableCell className="text-muted-foreground">{vehicleTypeLabel(r.vehicleType)}</TableCell>
 
       <TableCell className="text-right font-heading text-sm font-bold tabular-nums">
         {formatInt(r.vehicleCount)}
