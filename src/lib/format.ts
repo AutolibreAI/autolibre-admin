@@ -12,8 +12,30 @@ const date = new Intl.DateTimeFormat('es-AR', {
   timeZone: 'UTC',
 })
 
+/**
+ * Fecha + hora, para cuando el día no alcanza — una notificación programada y
+ * enviada el mismo día sólo se distingue por la hora.
+ *
+ * `timeZone: 'UTC'` por el mismo motivo que `date`: el markup del servidor
+ * tiene que coincidir byte a byte con el primer render del cliente, y una hora
+ * en zona local produce dos strings distintos. La consecuencia es que la hora
+ * que se ve es UTC, no ART — se asume y se documenta acá, no se "arregla" con
+ * la zona del navegador.
+ */
+const dateTime = new Intl.DateTimeFormat('es-AR', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  timeZone: 'UTC',
+})
+
 export const formatInt = (n: number) => int.format(n)
 export const formatDate = (iso: string) => date.format(new Date(iso))
+/** Sin sufijo de zona — la hora es UTC y el llamador lo aclara una vez, no por celda. */
+export const formatDateTime = (iso: string) => dateTime.format(new Date(iso))
 
 /**
  * Tamaño de archivo en MB, con un decimal.

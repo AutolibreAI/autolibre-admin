@@ -7,6 +7,7 @@ import {
 import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
+  Bell,
   BookOpen,
   Coins,
   Handshake,
@@ -123,6 +124,15 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * más.
    */
   { to: "/chats", label: "Chats de IA", icon: MessageSquare },
+  /**
+   * `Notificaciones` cierra el bloque de dominio: espeja el bounded context
+   * `notifications/` del backend, y va acá y no junto a `Operación` por eso —
+   * es dominio, no operación del panel. La pregunta que contesta es "de qué le
+   * avisamos a esta persona y le llegó", con el usuario como una columna más
+   * (mismo encuadre que `Chats de IA`). `Operación` muestra el AGREGADO de las
+   * entregas falladas; ésta es la fila. → `.claude/rules/notifications.md`
+   */
+  { to: "/notificaciones", label: "Notificaciones", icon: Bell },
   /**
    * Las dos últimas son las excepciones DECLARADAS a la regla de arriba: no
    * espejan un bounded context del backend porque el backend no tiene uno. Son
