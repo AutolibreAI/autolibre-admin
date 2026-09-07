@@ -18,7 +18,7 @@ import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { formatBytes, formatDate, formatInt } from '~/lib/format'
 
-export const Route = createFileRoute('/_authed/catalogo/$catalogId')({
+export const Route = createFileRoute('/_authed/vehiculos/catalogo/$catalogId')({
   /**
    * SSR completo. Se llega desde el listado, pero también por link pegado — un
    * uuid de catálogo en un mensaje es la forma normal de decir "cargale el
@@ -63,7 +63,7 @@ function CatalogDetailScreen() {
   return (
     <>
       <Link
-        to="/catalogo"
+        to="/vehiculos/catalogo"
         search={{ q: undefined, onlyWithoutManual: false }}
         className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
       >
@@ -113,9 +113,10 @@ function ManualsCard({ manuals }: { manuals: Array<CatalogManual> }) {
       <CardContent>
         {manuals.length === 0 ? (
           /*
-            El vacío se explica, no se deja en blanco. Es el estado de los 83
-            catálogos hoy, así que es la pantalla que más se va a ver — y decir
-            "todavía no hay" es distinto de que parezca que algo no cargó.
+            El vacío se explica, no se deja en blanco. Es el estado de la
+            mayoría de los catálogos hoy, así que es la pantalla que más se va a
+            ver — y decir "todavía no hay" es distinto de que parezca que algo
+            no cargó.
           */
           <p className="text-sm leading-relaxed text-muted-foreground">
             Este modelo todavía no tiene manual. Subí el PDF con el formulario de

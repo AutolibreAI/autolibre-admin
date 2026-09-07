@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { BookOpen, BookX } from 'lucide-react'
 import {
+  VEHICLE_TYPES,
   VEHICLE_TYPE_LABELS,
   catalogSearchSchema,
   catalogTitle,
@@ -9,20 +10,14 @@ import {
 import { listVehicleCatalogs } from '~/fn/manuals'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
+import { SortHeader } from '~/components/SortHeader'
 import { Badge } from '~/components/ui/badge'
 import { Input } from '~/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table'
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '~/components/ui/table'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
-export const Route = createFileRoute('/_authed/catalogo/')({
+export const Route = createFileRoute('/_authed/vehiculos/catalogo/')({
   /**
    * SSR completo (el default de `start.ts`).
    *
@@ -37,7 +32,7 @@ export const Route = createFileRoute('/_authed/catalogo/')({
   loader: ({ deps, abortController }) =>
     listVehicleCatalogs({ data: deps, signal: abortController.signal }),
 
-  head: () => ({ meta: [{ title: 'Catálogo — AutoLibre' }] }),
+  head: () => ({ meta: [{ title: 'Vehículos · Catálogo — AutoLibre' }] }),
   component: CatalogList,
 })
 
@@ -46,21 +41,18 @@ export const Route = createFileRoute('/_authed/catalogo/')({
  *
  * ── Qué consulta de DBeaver reemplaza ───────────────────────────────────────
  *
- * Ninguna, y eso es el punto. Al 2026-09-04 `vehicle_catalog_manuals` tiene
- * CERO filas contra 83 catálogos: nadie corría esa consulta porque no había
- * nada que consultar. Lo que reemplaza es el `INSERT` a mano que iba a hacer
- * falta apenas apareciera el primer PDF — y ese `INSERT` era imposible de todos
+ * Ninguna, y eso es el punto. `vehicle_catalog_manuals` arrancó con CERO filas
+ * contra ~80 catálogos: nadie corría esa consulta porque no había nada que
+ * consultar. Lo que reemplaza es el `INSERT` a mano que iba a hacer falta
+ * apenas apareciera el primer PDF — y ese `INSERT` era imposible de todos
  * modos, porque `file_id` referencia una fila de `files` que sólo se puede
  * crear subiendo el archivo a DigitalOcean Spaces.
- *
- * O sea: sin esta pantalla, cargar un manual no era "incómodo". Era imposible
- * sin escribir un script contra el bucket.
  *
  * ── Las tres columnas de conteo no son adorno ───────────────────────────────
  *
  * `Manuales` es la acción. `Variantes` y `Vehículos` son el contexto que
- * decide a CUÁL de los 83 le cargás el manual primero: un modelo que 12
- * usuarios tienen en la app vale más que uno que nadie cargó todavía.
+ * decide a CUÁL le cargás el manual primero: un modelo que 12 usuarios tienen
+ * en la app vale más que uno que nadie cargó todavía.
  */
 function CatalogList() {
   const catalogs = Route.useLoaderData()
@@ -95,25 +87,42 @@ function CatalogList() {
           autoComplete="off"
         />
 
-        <FilterGroup label="Manual">
-          <Chip
-            active={!search.onlyWithoutManual}
-            onClick={() => setSearch({ onlyWithoutManual: false })}
-          >
-            Todos
-          </Chip>
-          {/*
-            `warn` y no `brand`: acota a filas PROBLEMÁTICAS. Pintarlo de verde
-            diría "seleccionado y todo bien", que es lo contrario.
-          */}
-          <Chip
-            active={search.onlyWithoutManual}
-            tone="warn"
-            onClick={() => setSearch({ onlyWithoutManual: true })}
-          >
-            Sin manual ({formatInt(withoutManual)})
-          </Chip>
-        </FilterGroup>
+        <div className="flex flex-wrap gap-5">
+          <FilterGroup label="Tipo">
+            <Chip active={!search.vehicleType} onClick={() => setSearch({ vehicleType: undefined })}>
+              Todos
+            </Chip>
+            {VEHICLE_TYPES.map((t) => (
+              <Chip
+                key={t}
+                active={search.vehicleType === t}
+                onClick={() => setSearch({ vehicleType: search.vehicleType === t ? undefined : t })}
+              >
+                {VEHICLE_TYPE_LABELS[t]}
+              </Chip>
+            ))}
+          </FilterGroup>
+
+          <FilterGroup label="Manual">
+            <Chip
+              active={!search.onlyWithoutManual}
+              onClick={() => setSearch({ onlyWithoutManual: false })}
+            >
+              Todos
+            </Chip>
+            {/*
+              `warn` y no `brand`: acota a filas PROBLEMÁTICAS. Pintarlo de verde
+              diría "seleccionado y todo bien", que es lo contrario.
+            */}
+            <Chip
+              active={search.onlyWithoutManual}
+              tone="warn"
+              onClick={() => setSearch({ onlyWithoutManual: true })}
+            >
+              Sin manual ({formatInt(withoutManual)})
+            </Chip>
+          </FilterGroup>
+        </div>
       </div>
 
       {catalogs.length === 0 ? (
@@ -125,11 +134,11 @@ function CatalogList() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Modelo</TableHead>
-                <TableHead>Tipo</TableHead>
-                <TableHead className="text-right">Manuales</TableHead>
-                <TableHead className="text-right">Variantes</TableHead>
-                <TableHead className="text-right">Vehículos</TableHead>
+                <SortHeader label="Modelo" sortKey="model" active={search.sort === 'model'} dir={search.dir} to="/vehiculos/catalogo" firstClick="asc" />
+                <SortHeader label="Tipo" sortKey="type" active={search.sort === 'type'} dir={search.dir} to="/vehiculos/catalogo" firstClick="asc" />
+                <SortHeader label="Manuales" sortKey="manuals" active={search.sort === 'manuals'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
+                <SortHeader label="Variantes" sortKey="specs" active={search.sort === 'specs'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
+                <SortHeader label="Vehículos" sortKey="vehicles" active={search.sort === 'vehicles'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -162,7 +171,7 @@ function CatalogRow({ catalog }: { catalog: CatalogListItem }) {
     <TableRow>
       <TableCell>
         <Link
-          to="/catalogo/$catalogId"
+          to="/vehiculos/catalogo/$catalogId"
           params={{ catalogId: catalog.id }}
           className="font-medium text-foreground hover:text-brand hover:underline"
         >

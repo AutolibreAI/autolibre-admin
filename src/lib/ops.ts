@@ -61,6 +61,12 @@ export interface AdoptionPulse {
   /** Cuentas `native`, previas a Clerk. Hoy NO pueden entrar al panel. */
   legacyNativeAdmins: number
   vehiclesActive: number
+  /**
+   * `vehiclesActive` deduplicado por patente. Más de un usuario puede cargar el
+   * mismo auto —y hoy pasa: 115 filas activas, 106 patentes— así que el conteo
+   * crudo infla la flota real. Siempre `<= vehiclesActive`.
+   */
+  vehiclesUnique: number
   vehiclesArchived: number
   vehiclesLast30d: number
   /** `null` cuando no hay usuarios reales — no 0, que sería una afirmación falsa. */

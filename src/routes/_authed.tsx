@@ -8,7 +8,7 @@ import {
 import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
-  BookOpen,
+  Car,
   Coins,
   FileText,
   Handshake,
@@ -110,19 +110,20 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/usuarios", label: "Usuarios", icon: Users },
   /**
-   * `Catálogo` cierra el bloque de dominio, y va último de ese bloque porque es
+   * `Vehículos` cierra el bloque de dominio, y va último de ese bloque porque es
    * el único que NO es marketplace: es `vehicle-management`, el bounded context
    * de los vehículos. Las cuatro de arriba cubren el recorrido taller ↔ usuario;
    * ésta cubre el auto.
    *
-   * Es también la ÚNICA pantalla del panel cuyas escrituras no son SQL: sube
-   * PDFs por HTTP contra el backend hex, porque el archivo va a DigitalOcean
-   * Spaces y ninguna cantidad de SQL lo pone ahí.
-   * → `.claude/rules/vehicle-manuals.md`
+   * Tiene tres pestañas (Catálogo · Listado · Métricas). El Catálogo —que era
+   * `/catalogo`, ahora `/vehiculos/catalogo`— es la ÚNICA pantalla del panel
+   * cuyas escrituras no son SQL: sube PDFs por HTTP contra el backend hex,
+   * porque el archivo va a DigitalOcean Spaces y ninguna cantidad de SQL lo
+   * pone ahí. → `.claude/rules/vehicle-manuals.md`
    */
-  { to: "/catalogo", label: "Catálogo", icon: BookOpen },
+  { to: "/vehiculos", label: "Vehículos", icon: Car },
   /**
-   * `Escáneres` va pegada a `Catálogo` porque comparte su eje vertical: las
+   * `Escáneres` va pegada a `Vehículos` porque comparte su eje vertical: las
    * filas de esa matriz SON los modelos del catálogo. Las dos contestan sobre
    * el auto, no sobre el marketplace ni sobre la persona.
    *

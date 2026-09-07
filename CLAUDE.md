@@ -51,7 +51,7 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 > Y aunque el backend no lo tuviera, un SP tampoco alcanzaría: **el PDF va a DigitalOcean Spaces**,
 > y ninguna cantidad de SQL pone un archivo en un bucket.
 >
-> Eso hace de `/catalogo` la ÚNICA pantalla del panel cuyas escrituras no son SQL, y el único
+> Eso hace de `/vehiculos/catalogo` la ÚNICA pantalla del panel cuyas escrituras no son SQL, y el único
 > consumidor HTTP del backend. → `.claude/rules/vehicle-manuals.md`
 
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
@@ -187,11 +187,18 @@ pantalla no va todavía.
 | `/dashboard` | `true` + streaming | El censo por `(role, auth_provider)`, el `count(*)` de partners y el `group by status` de leads, sueltos |
 | `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
 | `/partners` | `true` | El listado del directorio, la carga manual de rubros y **la ficha** (estado, coordenadas, contacto) |
-| `/leads` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/leads` | — | Layout de pestañas de las líneas de captación. Redirige a `/leads/talleres`. → `.claude/rules/leads.md` |
+| `/leads/talleres` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
+| `/leads/seguros` | `true` | El `select … from insurances where expiration_date < now() + interval '30 days'` que hoy nadie corre — la cola de pólizas por vencer para ofrecer alternativas |
+| `/leads/multas` | `true` | El `select` que cruza `vehicle_fine_syncs` → `fines` → `vehicles` → `users`: qué autos tienen deuda de multas, cuánto, desde cuándo y de quién. Ordenable y filtrable por columna. `/usuarios` ya lo tiene por vehículo dentro de una ficha; esto es la vista transversal |
+| `/leads/contactos` · `/leads/financiacion` · `/leads/pedidos` | — | **Nada todavía.** Pestañas "próximamente": la excepción relevada el 2026-09-06 a "una pantalla que no reemplaza una consulta no va". Se decidió mostrarlas como plan visible. → `.claude/rules/leads.md` |
 | `/usuarios` | `true` | El `select * from users where email ilike '%…%'` de cada reclamo de soporte, más las dos columnas que no están en él: cuántos vehículos tiene y cuándo fue su última señal de vida |
 | `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
-| `/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra 83 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
-| `/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
+| `/vehiculos` | — | Layout de 3 pestañas. Antes era `/catalogo`. Redirige a `/vehiculos/catalogo`. → `.claude/rules/vehicles.md` |
+| `/vehiculos/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra ~80 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
+| `/vehiculos/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
+| `/vehiculos/listado` | `true` | El padrón entero de autos, uno por fila, sin deduplicar por patente, con lo que cuelga de cada uno (VTV, seguro, multas, deuda, tareas, escaneos). Es `UserVehicleSummary` de `/usuarios` pero transversal y con dueño |
+| `/vehiculos/metricas` | `true` | La flota agrupada por modelo del catálogo: cuántos autos de cada uno (`TOYOTA COROLLA XEI …`, no "un Corolla") y las métricas que eso habilita — usuarios, km promedio, con multas, deuda total, escaneados, manuales |
 | `/escaneres` | `true` | **La consulta que no se corría porque no se te ocurre**: con qué versión de auto —`TOYOTA COROLLA XEI 1.8 M/T 2013`, no "un Corolla"— funcionó cada escáner y con cuáles no. Cruza `driving_sessions` → `vehicles` → `vehicle_catalog_specs` → `vehicle_catalogs`, y separa los intentos que trajeron datos de los que engancharon y no trajeron nada. Lo que sí pasaba: contestar "¿le recomiendo este escáner a un Vento?" de memoria |
 | `/chats` | `true` | El `select * from conversations c join conversation_messages m on m.conversation_id = c.id where c.user_id = '…'` que hoy sería la única forma de ver de qué habló un usuario con el asistente — con lo que ese select no contesta solo: si es de diagnóstico o general (deriva de `vehicle_id`), con qué modelo, y cuántos mensajes mandó cada lado |
 | `/chats/:id` | `true` | El chat completo, en orden — hoy inexistente como pantalla, sólo reconstruible mensaje por mensaje en DBeaver |
@@ -466,9 +473,11 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
+| `vehicles.md` | La sección Vehículos (antes `/catalogo`): las 3 pestañas, por qué el listado NO deduplica, por qué las métricas agrupan por catálogo y no por spec, los predicados compartidos con `fines.repo`/`users.repo`/`scanners.repo`, y `vehicle_tax_debts` vacía en producción |
 | `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, la subida directa a Spaces en cuatro llamadas (y por qué proxear el archivo era el error), el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, el límite de plataforma que sólo aparece en producción, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
 | `chats.md` | Chats de IA: por qué `type` y `title` no son columnas y cómo se derivan, por qué el modelo es texto libre y no un enum, por qué `q` va en el `where` de afuera, y las tres patas `LEFT` del join al vehículo |
 | `documents.md` | Documentos OCR (`/documentos`): el predicado "es OCR" (`file_id IS NOT NULL`, + `source='manual'` para VTV), por qué el filtro de tipo se llama `kind` y no `type`, `mismatch` vs `missing` como flags separados, y por qué la pantalla es read-only y sin preview del archivo |
+| `leads.md` | Las pestañas de `/leads`: por qué "sección" acá es vista de producto y no el `Lead` del backend, qué pestaña tiene datos y por qué las otras tres son "próximamente", por qué Contactos no se puede arrancar desde este repo, las trampas de Seguros (días del vencimiento y no de `status`, `JOIN` y no `LEFT`, aseguradora cruda, PDF no descargable) y las de Multas (grano = vehículo consultado, `$0` ≠ null, predicado `pending` compartido con `users.repo`, `ORDER BY` desde `Record` cerrado, "desactualizada" como lectura del reloj) |
 
 ## Cómo mantener esto vivo
 

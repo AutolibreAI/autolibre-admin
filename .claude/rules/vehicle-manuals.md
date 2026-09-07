@@ -1,8 +1,14 @@
-# Manuales de vehículos (`/catalogo`, `/catalogo/:id`)
+# Manuales de vehículos (`/vehiculos/catalogo`, `/vehiculos/catalogo/:id`)
+
+> Las URLs eran `/catalogo` y `/catalogo/:id`. El 2026-09-06 la sección pasó a
+> llamarse **Vehículos** y el catálogo es una de sus tres pestañas. Todo lo de
+> este documento sigue valiendo tal cual — sólo cambió el prefijo de la ruta.
+> → `.claude/rules/vehicles.md` para las otras dos pestañas.
 
 Alcance: `src/lib/manuals.ts`, `src/server/backend.ts`, `src/server/catalog.repo.ts`,
 `src/fn/manuals.ts`, `src/components/ManualUploader.tsx`,
-`src/routes/_authed/catalogo.index.tsx`, `src/routes/_authed/catalogo.$catalogId.tsx`.
+`src/routes/_authed/vehiculos.catalogo.index.tsx`,
+`src/routes/_authed/vehiculos.catalogo.$catalogId.tsx`.
 
 ## El manual cuelga del CATÁLOGO, no del spec
 

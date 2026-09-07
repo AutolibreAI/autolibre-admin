@@ -6,6 +6,7 @@ import type {
   CatalogListItem,
   CatalogManual,
   CatalogSearch,
+  CatalogSortKey,
   CatalogSpec,
   VehicleType,
 } from '~/lib/manuals'
@@ -56,6 +57,24 @@ interface CatalogListRow {
 }
 
 /**
+ * Mapa cerrado `CatalogSortKey → expresión SQL`. Los dos valores del `ORDER BY`
+ * salen de un enum de zod y de este `Record` — nunca de texto suelto. Mismo
+ * patrón que `listUsers` y `listVehicles`.
+ *
+ * `manual_count` / `spec_count` / `vehicle_count` son alias del SELECT y
+ * Postgres deja ordenar por ellos en el nivel superior sin envoltorio (a
+ * diferencia de un `WHERE`, que sí lo necesitaría). Los filtros de esta
+ * consulta van todos sobre columnas de `c`, así que no hace falta.
+ */
+const CATALOG_SORT_COLUMNS: Record<CatalogSortKey, string> = {
+  model: 'model_sort',
+  type: 'c.vehicle_type',
+  manuals: 'manual_count',
+  specs: 'spec_count',
+  vehicles: 'vehicle_count',
+}
+
+/**
  * El listado del catálogo.
  *
  * ── LA TRAMPA DE ESTA CONSULTA: `vehicles` NO apunta al catálogo ────────────
@@ -97,6 +116,13 @@ export async function listCatalogs(
     )
   }
 
+  if (search.vehicleType) {
+    params.push(search.vehicleType)
+    where.push(`c.vehicle_type = $${params.length}::vehicle_type`)
+  }
+
+  const sortColumn = CATALOG_SORT_COLUMNS[search.sort]
+
   const rows = await sql<CatalogListRow>(
     `SELECT c.id,
             c.brand,
@@ -104,6 +130,7 @@ export async function listCatalogs(
             c.year,
             c.trim,
             c.vehicle_type,
+            lower(c.brand || ' ' || c.model || ' ' || c.trim) AS model_sort,
             (SELECT count(*)::int
                FROM vehicle_catalog_manuals m
               WHERE m.catalog_id = c.id)             AS manual_count,
@@ -117,9 +144,10 @@ export async function listCatalogs(
               WHERE s.vehicle_catalog_id = c.id)     AS vehicle_count
        FROM vehicle_catalogs c
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      -- Marca y modelo alfabético, pero el año DESCENDENTE dentro del modelo:
-      -- los autos nuevos son los que todavía no tienen manual cargado.
-      ORDER BY c.brand ASC, c.model ASC, c.year DESC, c.trim ASC
+      -- El desempate reproduce el orden histórico (marca+modelo, y el año
+      -- DESCENDENTE dentro del modelo: los autos nuevos son los que todavía no
+      -- tienen manual). Con sort='model' asc, eso ES el orden.
+      ORDER BY ${sortColumn} ${search.dir} NULLS LAST, model_sort ASC, c.year DESC
       LIMIT 500`,
     params,
   )

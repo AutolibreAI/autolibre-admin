@@ -150,6 +150,42 @@ Cuando ninguno sirvió se pinta **ámbar y no rojo**: el problema puede ser el e
 la app, y esta pantalla no sabe cuál de los dos. Un guión gris significa que nunca lo usó, que es
 distinto de que le haya fallado.
 
+---
+
+## Las columnas de multas del desplegable, y el `null` vs `$0`
+
+En el toggle de vehículos de `/usuarios` (`listUserVehicleSummaries`), dos columnas contestan sobre
+la última consulta de multas:
+
+- **«Multas consultadas»** — la fecha, de `vehicle_fine_syncs.last_synced_at`. Es 1:1 por vehículo
+  (PK `vehicle_id`), así que entra por `LEFT JOIN` y no por subconsulta escalar — misma excepción que
+  `lds` y `dta`, y por la misma razón: no puede fan-outear.
+- **«Monto adeudado»** — `sum(fines.amount)` con `status = 'pending'`. `paid` está saldada,
+  `appealed` en disputa: ninguna es deuda a cobrar. Al 2026-09-06 las 240 multas de producción están
+  todas en `pending`, así que el filtro hoy no descuenta nada — pero el día que alguien marque una
+  pagada, la columna tiene que bajar.
+
+**El gate por `vfs.vehicle_id IS NULL` no es opcional.** Distingue tres estados que NO son lo mismo,
+igual que `activeDtcCount`:
+
+| Estado | `fineQueryAt` | `fineDebtAmount` | Se ve |
+|---|---|---|---|
+| Nunca se consultaron las multas de este auto | `null` | `null` | "nunca" · "—" gris |
+| Se consultaron y no hay nada adeudado | fecha | `0` | fecha · `$0` en texto plano |
+| Se consultaron y hay deuda | fecha | `> 0` | fecha · monto en **ámbar** |
+
+Sin el gate, `sum()` de cero filas devuelve `NULL` y "consultado sin deuda" se volvería
+indistinguible de "nunca consultado". El `$0` **no se pinta de verde**: "no debe nada hoy" es un
+dato, no un logro del panel — mismo criterio que las filas en cero de `/operacion`.
+
+Hoy el gate es exacto porque **toda multa de la base tiene su fila en `vehicle_fine_syncs`** (las 240
+son `source = 'provider'`). Si aparecieran multas manuales sin sync, el monto de ese auto seguiría
+saliendo `null` a propósito: la columna es "según la última consulta", y una carga manual no es una
+consulta.
+
+`formatArs` (`~/lib/format`) es el formateador de pesos, transversal — no confundir con `formatUsd`
+de `~/lib/ai-usage`, que es dato del contexto de Costos de IA (al proveedor se le paga en dólares).
+
 ### ⚠ El predicado está en DOS lugares y se tocan juntos
 
 ```sql

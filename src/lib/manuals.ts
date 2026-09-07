@@ -1,4 +1,10 @@
 import { z } from 'zod'
+import {
+  VEHICLE_TYPES,
+  VEHICLE_TYPE_LABELS,
+  vehicleTypeLabel,
+  type VehicleType,
+} from '~/lib/vehicles'
 
 /**
  * Catálogo de vehículos y sus manuales.
@@ -86,13 +92,13 @@ export const MANUAL_LANGUAGE_LABELS: Record<ManualLanguage, string> = {
   en: 'Inglés',
 }
 
-export const VEHICLE_TYPES = ['car', 'motorcycle'] as const
-export type VehicleType = (typeof VEHICLE_TYPES)[number]
-
-export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
-  car: 'Auto',
-  motorcycle: 'Moto',
-}
+/**
+ * `vehicle_type` vivía acá. Se movió a `~/lib/vehicles` cuando el Listado y las
+ * Métricas de la sección Vehículos lo necesitaron — se re-exporta para que los
+ * consumidores de este archivo (`catalog.repo.ts`, las pantallas del catálogo)
+ * no cambien su import.
+ */
+export { VEHICLE_TYPES, VEHICLE_TYPE_LABELS, vehicleTypeLabel, type VehicleType }
 
 // ── Contratos de lectura ─────────────────────────────────────────────────────
 
@@ -176,15 +182,35 @@ export function catalogTitle(c: {
 
 // ── Search params ────────────────────────────────────────────────────────────
 
+/**
+ * El `ORDER BY` del listado. Cada clave mapea a una expresión SQL en
+ * `CATALOG_SORT_COLUMNS` de `catalog.repo.ts` — nunca texto suelto en el
+ * `ORDER BY`, mismo patrón que `listUsers`.
+ */
+export const CATALOG_SORT_KEYS = ['model', 'type', 'manuals', 'specs', 'vehicles'] as const
+export type CatalogSortKey = (typeof CATALOG_SORT_KEYS)[number]
+
 export const catalogSearchSchema = z.object({
   /** Busca en marca, modelo y versión. */
   q: z.string().trim().max(120).optional(),
   /**
-   * El filtro que motiva la pantalla: al 2026-09-04 los 83 catálogos tienen
-   * CERO manuales. Cuando eso deje de ser cierto, este chip es la lista de
-   * trabajo pendiente.
+   * El filtro que motiva la pantalla: los catálogos arrancaron con CERO
+   * manuales. Este chip es la lista de trabajo pendiente.
    */
   onlyWithoutManual: z.coerce.boolean().catch(false).default(false),
+  /**
+   * Auto / moto. Ausente = ambos. Se llama `vehicleType` y no `type` porque
+   * `/chats` ya usa `type` con otro enum y TanStack unifica los nombres de
+   * search params entre rutas — ver `vehicleSearchSchema` en `~/lib/vehicles`.
+   */
+  vehicleType: z.enum(VEHICLE_TYPES).optional(),
+  /**
+   * `.catch('model')`: un `?sort=banana` de un favorito viejo cae al default —
+   * que reproduce el orden histórico (marca, modelo, año desc). Los demás
+   * ordenamientos llevan ese mismo criterio como desempate.
+   */
+  sort: z.enum(CATALOG_SORT_KEYS).catch('model').default('model'),
+  dir: z.enum(['asc', 'desc']).catch('asc').default('asc'),
 })
 
 export type CatalogSearch = z.infer<typeof catalogSearchSchema>

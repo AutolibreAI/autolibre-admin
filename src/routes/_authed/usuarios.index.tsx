@@ -29,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
+import { CountOrNeverCell, ExpiryCell, FineDebtCell } from '~/components/VehicleCells'
 import { formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
@@ -612,13 +613,15 @@ function VehicleSummaryPanel({ state }: { state: VehicleSummaryState | undefined
 
   return (
     <div className="overflow-x-auto p-3">
-      <table className="w-full min-w-[1180px] text-xs">
+      <table className="w-full min-w-[1400px] text-xs">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
             <th className="px-2 py-1.5 text-left font-medium">Vehículo</th>
             <th className="px-2 py-1.5 text-left font-medium">VTV</th>
             <th className="px-2 py-1.5 text-right font-medium">Chats IA diagnóstico</th>
             <th className="px-2 py-1.5 text-left font-medium">Deuda de patente</th>
+            <th className="px-2 py-1.5 text-left font-medium">Multas consultadas</th>
+            <th className="px-2 py-1.5 text-right font-medium">Monto adeudado</th>
             <th className="px-2 py-1.5 text-left font-medium">Seguro</th>
             <th className="px-2 py-1.5 text-right font-medium">Escaneos</th>
             <th className="px-2 py-1.5 text-right font-medium">DTCs activos</th>
@@ -661,6 +664,18 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
 
       <td className="px-2 py-1.5">
         <LastQueryCell status={v.taxDebtQueryStatus} at={v.taxDebtQueryAt} />
+      </td>
+
+      <td className="px-2 py-1.5">
+        {v.fineQueryAt ? (
+          formatDate(v.fineQueryAt)
+        ) : (
+          <span className="text-muted-foreground/50">nunca</span>
+        )}
+      </td>
+
+      <td className="px-2 py-1.5 text-right tabular-nums">
+        <FineDebtCell amount={v.fineDebtAmount} />
       </td>
 
       <td className="px-2 py-1.5">
@@ -707,52 +722,6 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
   )
 }
 
-/**
- * "Tiempo hasta vencimiento" — VTV y seguro comparten esta celda porque
- * comparten la misma pregunta: ¿cuántos días quedan del DOCUMENTO cargado?
- *
- * Compara por día calendario en UTC, no por instante: `expiration_date` es un
- * `date` sin hora, así que un vencimiento "hoy" no puede leerse como "vencida
- * hace unas horas" sólo porque ya pasó el mediodía. Sin este redondeo, la
- * misma fecha diría "vencida" en Argentina a la tarde y "vigente" a la mañana
- * según cuándo se abra el panel.
- */
-function daysUntilUtc(iso: string): number {
-  const now = new Date()
-  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  const target = new Date(iso)
-  const targetUtc = Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate())
-  return Math.round((targetUtc - todayUtc) / 86_400_000)
-}
-
-function ExpiryCell({ iso }: { iso: string | null }) {
-  if (!iso) return <span className="text-muted-foreground/50">no cargado</span>
-
-  const days = daysUntilUtc(iso)
-
-  if (days < 0) {
-    return (
-      <span className="text-status-yellow" title={formatDate(iso)}>
-        vencida hace {formatInt(Math.abs(days))} día{Math.abs(days) === 1 ? '' : 's'}
-      </span>
-    )
-  }
-
-  if (days === 0) {
-    return (
-      <span className="text-status-yellow" title={formatDate(iso)}>
-        vence hoy
-      </span>
-    )
-  }
-
-  return (
-    <span title={formatDate(iso)}>
-      vence en {formatInt(days)} día{days === 1 ? '' : 's'}
-    </span>
-  )
-}
-
 function LastQueryCell({ status, at }: { status: string | null; at: string | null }) {
   if (!status) return <span className="text-muted-foreground/50">nunca</span>
 
@@ -766,25 +735,3 @@ function LastQueryCell({ status, at }: { status: string | null; at: string | nul
   )
 }
 
-/**
- * DTCs y anomalías comparten esta celda: los dos son "lo encontrado en el
- * evento más reciente", no un estado que el dominio afirme como resuelto. Los
- * tres valores posibles se distinguen a propósito: `null` (gris, nunca pasó)
- * no es lo mismo que `0` (texto plano, pasó y no encontró nada), y ninguno de
- * los dos es lo mismo que encontrar algo (ámbar).
- */
-function CountOrNeverCell({ value, title }: { value: number | null; title: string }) {
-  if (value === null) {
-    return (
-      <span className="text-muted-foreground/50" title={`Nunca — ${title}`}>
-        —
-      </span>
-    )
-  }
-  if (value === 0) return <span title={title}>0</span>
-  return (
-    <span className="font-medium text-status-yellow" title={title}>
-      {formatInt(value)}
-    </span>
-  )
-}
