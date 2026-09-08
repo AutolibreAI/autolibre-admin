@@ -1,7 +1,15 @@
-# Compatibilidad escáner ↔ vehículo (`/escaneres`)
+# Compatibilidad escáner ↔ vehículo (`/escaneres/compatibilidad`)
 
 Alcance: `src/lib/scanners.ts`, `src/server/scanners.repo.ts`, `src/fn/scanners.ts`,
-`src/routes/_authed/escaneres.tsx`.
+`src/routes/_authed/escaneres.compatibilidad.tsx`.
+
+> **`/escaneres` pasó a ser layout de 2 pestañas el 2026-09-08.** La matriz —lo que
+> documenta este archivo— se movió tal cual de `escaneres.tsx` a
+> `escaneres.compatibilidad.tsx` (cambió el id de ruta y los cuatro `to="/escaneres"`
+> a `to="/escaneres/compatibilidad"`, nada más). La otra pestaña, la lista cruda de
+> sesiones, tiene su propia regla → `.claude/rules/scan-sessions.md`. Las cadenas
+> `OK`/`NO_DATA`/`FAILED`/`PENDING` de `scanners.repo.ts` ahora se **exportan** para
+> que esa lista filtre por el mismo corte — antes eran privadas.
 
 ## Qué contesta
 
@@ -179,11 +187,16 @@ es por el CATÁLOGO ausente.
 ### `sessionBucket()` es la TERCERA copia del corte, y se toca con las otras dos
 
 El cubo de cada sesión del panel (`ok` / `noData` / `failed` / `pending`) lo calcula
-`sessionBucket()` en `~/lib/scanners`. Las otras dos expresiones del mismo corte son las cadenas SQL
-`OK` / `NO_DATA` de `scanners.repo.ts` (que la matriz agrega con `GROUPING SETS`) y el predicado de
-la columna «Escaneos» de `users.repo.ts`. **No se pueden unificar** —dos son SQL, una es JS— así que
-la defensa es que estén nombradas y al lado en esta rule. Si la matriz dice `0 / 4` y el panel
-muestra una sesión `ok`, es que divergieron.
+`sessionBucket()` en `~/lib/scanners`. Las expresiones del mismo corte son:
+
+- las cadenas SQL `OK` / `NO_DATA` / `FAILED` / `PENDING` de `scanners.repo.ts` — que la matriz
+  agrega con `GROUPING SETS` **y** que `scan-sessions.repo.ts` importa para el filtro de estado de
+  la pestaña Sesiones (por eso se exportaron: sin eso serían una copia más);
+- el predicado de la columna «Escaneos» de `users.repo.ts`.
+
+**No se pueden unificar del todo** —unas son SQL, otra es JS— así que la defensa es que estén
+nombradas y al lado en esta rule. Si la matriz dice `0 / 4` y el panel muestra una sesión `ok`, es
+que divergieron.
 
 ### Un `noData` puede haber traído un DTC, y no es contradicción
 

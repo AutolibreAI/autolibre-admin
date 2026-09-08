@@ -58,10 +58,15 @@ const toIso = (value: unknown): string | null =>
  * síntoma, cero lecturas es el resultado. El resultado sigue significando lo
  * mismo el día que una versión de la app reporte firmware y falle igual.
  */
-const OK = `ds.status::text = 'completed' and coalesce(ds.total_readings, 0) > 0`
-const NO_DATA = `ds.status::text = 'completed' and coalesce(ds.total_readings, 0) = 0`
-const FAILED = `ds.status::text = 'failed'`
-const PENDING = `ds.status::text = 'pending_chunks'`
+// Exportados para que `scan-sessions.repo.ts` (la pestaña Sesiones) filtre por el
+// MISMO corte que agrega la matriz. Sin esto serían una cuarta copia del predicado
+// —hoy hay tres: estas cadenas, la columna «Escaneos» de `users.repo.ts`, y
+// `sessionBucket()` en JS— y el modo de falla es que la matriz diga "0 / 4" y la
+// lista muestre una fila `ok`. → `.claude/rules/scanner-compatibility.md`
+export const OK = `ds.status::text = 'completed' and coalesce(ds.total_readings, 0) > 0`
+export const NO_DATA = `ds.status::text = 'completed' and coalesce(ds.total_readings, 0) = 0`
+export const FAILED = `ds.status::text = 'failed'`
+export const PENDING = `ds.status::text = 'pending_chunks'`
 
 /**
  * El salto de `driving_sessions` al catálogo.
