@@ -131,6 +131,78 @@ export interface GrowthSeries {
   vehicles: Array<GrowthPoint>
 }
 
+// ── Distribución de vehículos por usuario (tabla de /graficos) ───────────────
+
+/**
+ * Qué autos cuenta cada fila de la tabla. `active` = sólo no archivados ("lo que
+ * el usuario tiene hoy"); `all` = incluye archivados (cuenta histórica, la misma
+ * base que la curva acumulada de vehículos, que tampoco mira `archived`).
+ */
+export const VEHICLE_DIST_SCOPES = ['active', 'all'] as const
+export type VehicleDistScope = (typeof VEHICLE_DIST_SCOPES)[number]
+
+export const VEHICLE_DIST_SCOPE_LABELS: Record<VehicleDistScope, string> = {
+  active: 'Autos activos',
+  all: 'Incl. archivados',
+}
+
+/**
+ * Las cinco columnas, cada una ordenable. `pctUsers` es monotónica con `users`
+ * y `pctFleet` con `segmentVehicles` —ordenar por el % da el mismo orden que
+ * por el conteo— pero son claves propias para que cada header sea clickeable.
+ */
+export const VEHICLE_DIST_SORT_KEYS = [
+  'vehicles',
+  'users',
+  'pctUsers',
+  'segmentVehicles',
+  'pctFleet',
+] as const
+export type VehicleDistSortKey = (typeof VEHICLE_DIST_SORT_KEYS)[number]
+
+export const vehicleDistSearchSchema = z.object({
+  /**
+   * `fleetScope` calificado por dominio a propósito: un `scope` pelado colisiona
+   * con cualquier otra ruta que agregue uno con otro enum, y el merge de search
+   * params de TanStack lo rompería en la ruta ajena, no acá.
+   * → `.claude/rules/notifications.md`
+   */
+  fleetScope: z.enum(VEHICLE_DIST_SCOPES).catch('active').default('active'),
+  /**
+   * `sort`/`dir` pelados: es el nombre que `SortHeader` lee y el que usan todos
+   * los listados del panel. `/graficos` no comparte search params con ninguna
+   * otra ruta vía `<Link>`, así que no hay colisión que esquivar.
+   */
+  sort: z.enum(VEHICLE_DIST_SORT_KEYS).catch('vehicles').default('vehicles'),
+  dir: z.enum(['asc', 'desc']).catch('asc').default('asc'),
+})
+export type VehicleDistSearch = z.infer<typeof vehicleDistSearchSchema>
+
+/**
+ * Una fila: cuántos usuarios reales tienen exactamente `vehicles` autos.
+ *
+ * `pctUsers` = `users` sobre el total de usuarios reales. `pctFleet` = los autos
+ * que concentra este segmento (`segmentVehicles = vehicles * users`) sobre el
+ * padrón total. Los dos porcentajes se derivan en JS, no en SQL, para no
+ * arrastrar casts de `double precision` (ver el comentario de `toNum` en el repo).
+ */
+export interface VehicleDistBucket {
+  vehicles: number
+  users: number
+  pctUsers: number
+  segmentVehicles: number
+  pctFleet: number
+}
+
+export interface VehicleDistribution {
+  scope: VehicleDistScope
+  /** Usuarios reales (sin cuentas internas). Denominador de `pctUsers`. */
+  totalUsers: number
+  /** Padrón de autos de esos usuarios, con o sin archivados según `scope`. Denominador de `pctFleet`. */
+  totalFleet: number
+  buckets: Array<VehicleDistBucket>
+}
+
 // ── Marketplace ──────────────────────────────────────────────────────────────
 
 /**

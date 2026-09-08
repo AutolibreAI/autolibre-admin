@@ -16,6 +16,10 @@ import type {
   OpsWindow,
   QueueHealth,
   QueueKey,
+  VehicleDistBucket,
+  VehicleDistribution,
+  VehicleDistSearch,
+  VehicleDistSortKey,
 } from '~/lib/ops'
 
 /**
@@ -271,6 +275,91 @@ export async function adoptionSeries(
   ])
 
   return { unit, users, vehicles }
+}
+
+// ── Distribución de vehículos por usuario ───────────────────────────────────
+
+/**
+ * `sortKey → cómo se ordena`. `pctUsers` y `pctFleet` ordenan por su columna
+ * base (`users` / `segmentVehicles`): el % es una reescala monotónica, así que
+ * el orden es idéntico y no hace falta comparar floats. La clave sale de un
+ * enum de zod, nunca es texto suelto.
+ */
+const DIST_SORT_VALUE: Record<VehicleDistSortKey, (b: VehicleDistBucket) => number> = {
+  vehicles: (b) => b.vehicles,
+  users: (b) => b.users,
+  pctUsers: (b) => b.users,
+  segmentVehicles: (b) => b.segmentVehicles,
+  pctFleet: (b) => b.segmentVehicles,
+}
+
+/**
+ * Reemplaza: el `select vc, count(*) from (select count(v.*) ... group by u.id)
+ * group by vc` que contesta "cuántos usuarios tienen 1 auto, cuántos 2, …" y que
+ * hoy nadie corre.
+ *
+ * ── Decisiones ──────────────────────────────────────────────────────────────
+ *
+ *  - Excluye cuentas internas con `INTERNAL_PREDICATE`, igual que
+ *    `adoptionSeries`: la tabla es sobre adopción real.
+ *  - `fleetScope` elige si un auto archivado cuenta. El fragmento
+ *    (`and not v.archived`) es un literal de un conjunto cerrado, nunca entrada
+ *    de usuario — mismo criterio que los umbrales de `fines.repo.ts`.
+ *  - Los buckets vacíos NO se rellenan (al revés que `growthSeries`): "ningún
+ *    usuario tiene exactamente 3 autos" no miente en una tabla como sí lo haría
+ *    un hueco en una curva. Se muestran sólo las cantidades que existen.
+ *  - El orden se resuelve en JS: son un puñado de filas y dos claves ordenan por
+ *    una columna derivada que no está en el SELECT.
+ */
+export async function vehicleDistribution(
+  search: VehicleDistSearch,
+  opts: { signal?: AbortSignal } = {},
+): Promise<VehicleDistribution> {
+  void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
+
+  const archivedClause = search.fleetScope === 'active' ? 'and not v.archived' : ''
+
+  const rows = await sql<{ vehicles: number | string; users: number | string }>(`
+    WITH flagged AS (
+      SELECT u.id, ${INTERNAL_PREDICATE} AS internal
+      FROM users u
+    ),
+    per_user AS (
+      SELECT (
+        SELECT count(*) FROM vehicles v
+        WHERE v.user_id = flagged.id ${archivedClause}
+      )::int AS vc
+      FROM flagged
+      WHERE NOT internal
+    )
+    SELECT vc AS vehicles, count(*)::int AS users
+    FROM per_user
+    GROUP BY vc
+  `)
+
+  const raw = rows.map((r) => ({ vehicles: toInt(r.vehicles), users: toInt(r.users) }))
+  const totalUsers = raw.reduce((sum, r) => sum + r.users, 0)
+  const totalFleet = raw.reduce((sum, r) => sum + r.vehicles * r.users, 0)
+
+  const buckets: Array<VehicleDistBucket> = raw.map((r) => {
+    const segmentVehicles = r.vehicles * r.users
+    return {
+      vehicles: r.vehicles,
+      users: r.users,
+      pctUsers: totalUsers === 0 ? 0 : (r.users / totalUsers) * 100,
+      segmentVehicles,
+      pctFleet: totalFleet === 0 ? 0 : (segmentVehicles / totalFleet) * 100,
+    }
+  })
+
+  const pick = DIST_SORT_VALUE[search.sort]
+  const factor = search.dir === 'asc' ? 1 : -1
+  buckets.sort((a, b) => {
+    const primary = (pick(a) - pick(b)) * factor
+    return primary !== 0 ? primary : a.vehicles - b.vehicles
+  })
+
+  return { scope: search.fleetScope, totalUsers, totalFleet, buckets }
 }
 
 // ── Marketplace ──────────────────────────────────────────────────────────────

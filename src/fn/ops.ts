@@ -4,6 +4,7 @@ import {
   growthSearchSchema,
   opsSearchSchema,
   removeExcludedDomainSchema,
+  vehicleDistSearchSchema,
 } from '~/lib/ops'
 import {
   adoptionPulse,
@@ -16,6 +17,7 @@ import {
   queueHealth,
   removeExcludedDomain,
   upsertExcludedDomain,
+  vehicleDistribution,
 } from '~/server/ops.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -26,6 +28,7 @@ import type {
   GrowthSeries,
   OpsPulse,
   QueueHealth,
+  VehicleDistribution,
 } from '~/lib/ops'
 
 /**
@@ -78,6 +81,17 @@ export const getAdoptionSeries = createServerFn({ method: 'GET' })
   .validator(growthSearchSchema)
   .handler(async ({ data }): Promise<GrowthSeries> =>
     adoptionSeries(data.unit, { signal: requestSignal() }),
+  )
+
+/**
+ * La tabla de "cuántos usuarios tienen N autos" de `/graficos`. Mismo
+ * `adminMiddleware`: publica el tamaño del padrón de usuarios y autos.
+ */
+export const getVehicleDistribution = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(vehicleDistSearchSchema)
+  .handler(async ({ data }): Promise<VehicleDistribution> =>
+    vehicleDistribution(data, { signal: requestSignal() }),
   )
 
 export const getQueueHealth = createServerFn({ method: 'GET' })
