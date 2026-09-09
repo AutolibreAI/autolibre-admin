@@ -21,6 +21,8 @@ import {
   getPartnerServices,
   listApplications,
   listPartners,
+  loadCatalog,
+  partnerCoverageBoard,
   pipelineHealth,
   setPartnerContact,
   setPartnerLinks,
@@ -42,7 +44,12 @@ import type {
   EditServicesResult,
   PartnerWriteResult,
 } from '~/server/partners.repo'
-import type { PartnerListItem, PartnerServicesView } from '~/lib/catalog'
+import type {
+  PartnerListItem,
+  PartnerServicesView,
+  ServiceFamily,
+} from '~/lib/catalog'
+import type { PartnerCoverageBoard } from '~/lib/partners-coverage'
 
 /**
  * Todo el marketplace pasa por `adminMiddleware`, lecturas incluidas.
@@ -111,6 +118,30 @@ export const listMarketplacePartners = createServerFn({ method: 'GET' })
   .validator(partnerSearchSchema)
   .handler(async ({ data }): Promise<Array<PartnerListItem>> =>
     listPartners(data, { signal: requestSignal() }),
+  )
+
+/**
+ * El tablero de cobertura (`/partners/cobertura`).
+ *
+ * No toma search params: filtrar y enfocar una categoría se hace en el cliente
+ * sobre el tablero completo (40 partners, 16 categorías — es chico). Pasa por
+ * `adminMiddleware` igual que el resto del marketplace.
+ */
+export const getPartnerCoverageBoard = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<PartnerCoverageBoard> =>
+    partnerCoverageBoard({ signal: requestSignal() }),
+  )
+
+/**
+ * El catálogo de rubros (16 categorías) y sus servicios (79), para los filtros
+ * del Listado. Es el mismo `loadCatalog` que arma la ficha; sólo las categorías
+ * con ≥1 servicio activo, en orden de catálogo.
+ */
+export const getServiceCatalog = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<Array<ServiceFamily>> =>
+    loadCatalog(),
   )
 
 export const getPartnerServicesView = createServerFn({ method: 'GET' })

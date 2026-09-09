@@ -202,15 +202,14 @@ La explicación completa de por qué el corte es ése —y por qué va sobre `to
 
 ## Las tarjetas del pulso de Inicio llevan a su pantalla
 
-Tres de las cuatro: Usuarios → `/usuarios`, Partners → `/partners`, Leads → `/leads`.
+Las cuatro: Usuarios → `/usuarios`, Partners → `/partners/listado`, Leads → `/leads/talleres`,
+Vehículos → `/vehiculos/listado`.
 
-**Vehículos no lleva a ningún lado, y es deliberado.** Los autos se ven adentro de la ficha de su
-dueño; no existe un listado propio. La alternativa era mandarla igual a `/usuarios`, y es peor:
-prometería un listado de vehículos que no hay. Una tarjeta que no se puede clickear es una molestia;
-una que te lleva al lugar equivocado te hace dudar de si entendiste el número.
-
-Por eso `to` es opcional en `PulseTile` y sin él la tarjeta no recibe ni cursor de mano ni hover — la
-diferencia se ve antes de hacer click.
+> Hasta el 2026-09-08 Vehículos **no linkeaba a nada**, a propósito: no había listado propio de
+> autos, sólo la vista dentro de la ficha del dueño. Ahora existe `/vehiculos/listado` (el padrón
+> entero, transversal), así que la tarjeta lleva ahí. La regla que sale de esto NO cambió: `to`
+> sigue siendo opcional en `PulseTile` y una tarjeta sin pantalla detrás no debe fingir que la
+> tiene — sin `to` no recibe ni cursor de mano ni hover.
 
 Las que sí son link llevan anillo de foco. No es cosmético: pasan a ser destinos de tabulación, y un
 foco invisible deja a quien navega con teclado sin saber dónde está parado.

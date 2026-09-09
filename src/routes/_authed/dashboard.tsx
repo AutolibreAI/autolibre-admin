@@ -103,17 +103,10 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
   const { adoption, marketplace, leads } = pulse
 
   /**
-   * `to` es opcional a propósito.
-   *
-   * Tres de las cuatro tarjetas tienen una pantalla detrás; **Vehículos no**.
-   * Los autos se ven adentro de la ficha de su dueño, y no existe un listado
-   * propio — así que esa tarjeta no lleva a ningún lado y no finge que sí: sin
-   * `to` no recibe ni el cursor de mano ni el hover.
-   *
-   * La alternativa era mandarla igual a `/usuarios`, y es peor: prometería un
-   * listado de vehículos que no hay. Una tarjeta que no se puede clickear es
-   * una molestia; una que te lleva al lugar equivocado te hace dudar de si
-   * entendiste el número.
+   * `to` sigue siendo opcional en `PulseTile` —una tarjeta sin pantalla detrás
+   * no debe fingir que la tiene— pero hoy las cuatro linkean: Vehículos pasó a
+   * tener listado propio (`/vehiculos/listado`), así que ya no hace falta la
+   * tarjeta muerta que esta nota describía.
    */
   const tiles: ReadonlyArray<PulseTile> = [
     {
@@ -134,6 +127,7 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
     {
       key: 'vehicles',
       icon: Car,
+      to: '/vehiculos/listado',
       value: formatInt(adoption.vehiclesActive),
       // El crudo cuenta dos veces un auto que cargaron dos usuarios. El número
       // chico es la flota real, deduplicada por patente.
@@ -148,7 +142,8 @@ function PulseRow({ pulse }: { pulse: OpsPulse }) {
     {
       key: 'partners',
       icon: Store,
-      to: '/partners',
+      // Directo a la pestaña con la tabla; `/partners` es sólo el layout y redirige.
+      to: '/partners/listado',
       value: formatInt(marketplace.active),
       label: 'Partners publicados',
       hint: `${formatInt(marketplace.founding)} founding · ${formatInt(marketplace.total)} en total`,
@@ -283,7 +278,7 @@ function ActionList({
       icon: Store,
       title: 'Partners invisibles',
       detail: 'Activos y sin un solo rubro: se listan sin filtros y desaparecen bajo cualquier chip.',
-      to: '/partners',
+      to: '/partners/listado',
     },
     {
       key: 'would-be-invisible',
@@ -299,7 +294,7 @@ function ActionList({
       icon: MapPinOff,
       title: 'Partners sin coordenadas',
       detail: 'No se pueden ordenar por cercanía: el usuario ve uno a 400 km arriba de uno a seis cuadras.',
-      to: '/partners',
+      to: '/partners/listado',
     },
     {
       key: 'no-contact',
@@ -307,7 +302,7 @@ function ActionList({
       icon: AlertTriangle,
       title: 'Partners sin forma de contacto',
       detail: 'Publicados sin WhatsApp, sin email y sin link. El usuario llega y no tiene cómo escribir.',
-      to: '/partners',
+      to: '/partners/listado',
     },
   ].filter((row) => row.count > 0)
 

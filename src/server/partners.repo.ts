@@ -5,11 +5,16 @@ import { normalizeForMatch } from '~/lib/catalog'
 import type {
   PartnerLink,
   PartnerListItem,
+  PartnerListSortKey,
   PartnerSearch,
   PartnerServicesView,
   ServiceFamily,
   ServiceItem,
 } from '~/lib/catalog'
+import type {
+  CoverageCategory,
+  PartnerCoverageBoard,
+} from '~/lib/partners-coverage'
 import type {
   ApplicationDetail,
   ApplicationListItem,
@@ -510,24 +515,93 @@ interface PartnerRow {
   status: string
   coverage_zone: string
   service_count: number
+  category_count: number
+  categories: Array<{ slug: string; name: string; position: number }>
+  invisible: boolean
 }
 
+/**
+ * Mapa cerrado `PartnerListSortKey → columna del SELECT interno`. Seguro de
+ * interpolar en el `ORDER BY` porque los tipos obligan a cubrir cada clave —
+ * mismo patrón que `SORT_COLUMNS` de `users.repo.ts` / `notifications.repo.ts`.
+ * El desempate por `name` va SIEMPRE al final: es lo que preserva el orden
+ * histórico "invisibles primero, después alfabético" cuando `sort = services`.
+ */
+const PARTNER_SORT_COLUMNS: Record<PartnerListSortKey, string> = {
+  services: 'service_count',
+  categories: 'category_count',
+  name: 'name',
+  zone: 'coverage_zone',
+  status: 'status',
+}
+
+/**
+ * Consulta 7 del runbook, ampliada: qué rubros (categorías) y cuántos servicios
+ * tiene cada partner, filtrable y ordenable por esas columnas.
+ *
+ * Va envuelta en `select * from (...) t` —igual que `listUsers` y `listChats`—
+ * porque `category_count`, `categories` y el flag `invisible` son agregados o
+ * subconsultas que el `where`/`order by` del nivel de afuera necesita ver como
+ * alias. `q` es la excepción: busca sobre `p.name`, columna cruda, así que acota
+ * el barrido en el `where` interno.
+ *
+ * `invisible` se define como `NOT EXISTS (partner_services)` — SIN filtro de
+ * `services.active` — para que coincida exacto con `pipelineHealth.invisible` y
+ * con la card de Inicio. Los chips de rubro sí filtran por `s.active`, que es lo
+ * que la app usa.
+ */
 export async function listPartners(
   search: PartnerSearch,
   opts: { signal?: AbortSignal } = {},
 ): Promise<Array<PartnerListItem>> {
   void opts.signal
 
+  const orderBy = PARTNER_SORT_COLUMNS[search.sort]
+
   const rows = await sql<PartnerRow>(
-    `SELECT p.id, p.name, p.status::text AS status, p.coverage_zone,
-            count(ps.service_id)::int AS service_count
-       FROM partners p
-       LEFT JOIN partner_services ps ON ps.partner_id = p.id
-      WHERE ($1::text IS NULL OR p.name ILIKE '%' || $1 || '%')
-      GROUP BY p.id, p.name, p.status, p.coverage_zone
-     HAVING (NOT $2::boolean OR count(ps.service_id) = 0)
-      ORDER BY count(ps.service_id), p.name`,
-    [search.q ?? null, search.onlyInvisible],
+    `SELECT * FROM (
+       SELECT p.id,
+              p.name,
+              p.status::text AS status,
+              p.coverage_zone,
+              count(DISTINCT ps.service_id)::int AS service_count,
+              count(DISTINCT sc.id)::int AS category_count,
+              coalesce(
+                jsonb_agg(DISTINCT jsonb_build_object(
+                  'slug', sc.slug, 'name', sc.name, 'position', sc."position"))
+                  FILTER (WHERE sc.id IS NOT NULL),
+                '[]'::jsonb) AS categories,
+              NOT EXISTS (
+                SELECT 1 FROM partner_services x WHERE x.partner_id = p.id
+              ) AS invisible
+         FROM partners p
+         LEFT JOIN partner_services ps ON ps.partner_id = p.id
+         LEFT JOIN services s ON s.id = ps.service_id AND s.active
+         LEFT JOIN service_categories sc ON sc.id = s.category_id AND sc.active
+        WHERE ($1::text IS NULL OR p.name ILIKE '%' || $1 || '%')
+        GROUP BY p.id, p.name, p.status, p.coverage_zone
+     ) t
+      WHERE (NOT $2::boolean OR t.invisible)
+        AND ($3::text = 'all' OR t.status = $3)
+        AND ($4::text IS NULL OR EXISTS (
+              SELECT 1
+                FROM partner_services ps2
+                JOIN services s2 ON s2.id = ps2.service_id AND s2.active
+                JOIN service_categories sc2 ON sc2.id = s2.category_id
+               WHERE ps2.partner_id = t.id AND sc2.slug = $4))
+        AND ($5::text IS NULL OR EXISTS (
+              SELECT 1
+                FROM partner_services ps3
+                JOIN services s3 ON s3.id = ps3.service_id
+               WHERE ps3.partner_id = t.id AND s3.slug = $5))
+      ORDER BY ${orderBy} ${search.dir} NULLS LAST, t.name ASC`,
+    [
+      search.q ?? null,
+      search.onlyInvisible,
+      search.partnerStatus,
+      search.category ?? null,
+      search.service ?? null,
+    ],
   )
 
   return rows.map((r) => ({
@@ -536,8 +610,112 @@ export async function listPartners(
     status: r.status,
     coverageZone: r.coverage_zone,
     serviceCount: r.service_count,
-    invisible: r.service_count === 0,
+    categoryCount: r.category_count,
+    categories: [...r.categories]
+      .sort((a, b) => a.position - b.position)
+      .map(({ slug, name }) => ({ slug, name })),
+    invisible: r.invisible,
   }))
+}
+
+// ── Tablero de cobertura ────────────────────────────────────────────────────
+
+/**
+ * El cruce cobertura × zona para `/partners/cobertura`.
+ *
+ * Son tres consultas y no una porque contestan cosas de grano distinto (la
+ * lista de categorías, la matriz, los totales por zona) y unirlas en un
+ * `GROUPING SETS` haría el mapper ilegible para 40 partners. El `now()` no
+ * entra en juego acá —no hay nada derivado del reloj— así que no hace falta el
+ * snapshot único que sí exige `ops.repo.ts`.
+ *
+ * `coverage_zone` es texto crudo (ver `~/lib/partners-coverage`). La única
+ * normalización es `btrim` + fallback a "Sin zona".
+ *
+ * Como cada partner tiene UNA sola `coverage_zone`, `categoryTotals` se arma
+ * sumando las celdas a lo ancho: un partner nunca aparece en dos filas.
+ */
+export async function partnerCoverageBoard(
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerCoverageBoard> {
+  void opts.signal
+
+  const ZONE = `coalesce(nullif(btrim(p.coverage_zone), ''), 'Sin zona')`
+
+  const [categoryRows, matrixRows, zoneRows, totalRow] = await Promise.all([
+    sql<{ slug: string; name: string; position: number }>(
+      `SELECT sc.slug, sc.name, sc."position"
+         FROM service_categories sc
+        WHERE sc.active
+          AND EXISTS (SELECT 1 FROM services s
+                       WHERE s.category_id = sc.id AND s.active)
+        ORDER BY sc."position", sc.name`,
+    ),
+    sql<{ zone: string; category_slug: string; partners: number }>(
+      `SELECT ${ZONE} AS zone,
+              sc.slug AS category_slug,
+              count(DISTINCT p.id)::int AS partners
+         FROM partners p
+         JOIN partner_services ps ON ps.partner_id = p.id
+         JOIN services s ON s.id = ps.service_id AND s.active
+         JOIN service_categories sc ON sc.id = s.category_id AND sc.active
+        WHERE p.status = 'active'
+        GROUP BY 1, 2`,
+    ),
+    sql<{ zone: string; total: number; invisible: number }>(
+      `SELECT ${ZONE} AS zone,
+              count(*)::int AS total,
+              count(*) FILTER (
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM partner_services ps WHERE ps.partner_id = p.id
+                )
+              )::int AS invisible
+         FROM partners p
+        WHERE p.status = 'active'
+        GROUP BY 1`,
+    ),
+    sqlOne<{ n: number }>(
+      `SELECT count(*)::int AS n FROM partners WHERE status = 'active'`,
+    ),
+  ])
+
+  const categories: Array<CoverageCategory> = categoryRows.map((r) => ({
+    slug: r.slug,
+    name: r.name,
+    position: r.position,
+  }))
+
+  const cellByZone = new Map<string, Record<string, number>>()
+  for (const m of matrixRows) {
+    const byCat = cellByZone.get(m.zone) ?? {}
+    byCat[m.category_slug] = m.partners
+    cellByZone.set(m.zone, byCat)
+  }
+
+  const zones = zoneRows
+    .map((z) => ({
+      zone: z.zone,
+      partnersTotal: z.total,
+      invisible: z.invisible,
+      byCategory: cellByZone.get(z.zone) ?? {},
+    }))
+    .sort((a, b) => b.partnersTotal - a.partnersTotal || a.zone.localeCompare(b.zone, 'es'))
+
+  const categoryTotals: Record<string, number> = {}
+  for (const cat of categories) {
+    categoryTotals[cat.slug] = zones.reduce(
+      (acc, z) => acc + (z.byCategory[cat.slug] ?? 0),
+      0,
+    )
+  }
+
+  return {
+    categories,
+    zones,
+    categoryTotals,
+    emptyCategories: categories.filter((c) => (categoryTotals[c.slug] ?? 0) === 0),
+    totalActivePartners: totalRow?.n ?? 0,
+  }
 }
 
 // ── El catálogo completo ─────────────────────────────────────────────────────
@@ -557,7 +735,7 @@ interface CatalogRow {
  * rubro, no solo los de las familias que el taller declaró. Ese es justamente
  * el caso de la consulta 8 — resolver lo que la carga automática no pudo.
  */
-async function loadCatalog(): Promise<Array<ServiceFamily>> {
+export async function loadCatalog(): Promise<Array<ServiceFamily>> {
   const rows = await sql<CatalogRow>(
     `SELECT sc.slug AS family_slug, sc.name AS family_name,
             s.id, s.slug, s.name
