@@ -181,3 +181,28 @@ strings sobre 79 filas que ya están en memoria.
 La mayoría tiene 1–2 rubros, lo que sugiere que vinieron de la planilla vieja y no de la carga
 automática por familia (que da 5–10+ por familia declarada). Vale tenerlo en cuenta antes de leer un
 número bajo como un error.
+
+---
+
+# El editor de la solicitud (`ApplicationEditor`) — migración 010
+
+`/solicitudes/$applicationId` ya no es solo lectura: `ApplicationEditor` edita
+todos los campos del formulario del taller con un solo "Guardar", vía
+`ops.update_partner_application`. El detalle del SP y sus guardrails está en
+`.claude/rules/ops-write-actions.md` (sección "Migración 010"). Lo que hay que
+saber desde acá:
+
+- **`status` se sigue editando aparte**, en el panel de la derecha. No entra al
+  editor porque tiene el lock de `verbal_agreement` de la función de aprobación
+  (un `verbal_agreement` a mano deja la solicitud trabada — ver arriba).
+- **`first_contacted_at` y `reviewed_*` no se editan.** No son datos que el
+  operador corrija; los mueve el sistema.
+- **El selector de rubros declarados normaliza familia → servicios al sembrar.**
+  Un `declared_services` con el slug `motor` se muestra como los 10 servicios de
+  motor tildados, y al guardar quedan esos 10 slugs. `expandDeclaredSlugs` y el
+  INSERT de aprobación dan el mismo `partner_services` en los dos casos — sólo
+  cambia que `resolved.matchedFamilies` pasa a listar servicios uno a uno.
+- Las etiquetas viejas que no son ni rubro ni familia (`"Chapa y pintura"`)
+  quedan como chips "sin reconocer", removibles pero preservadas. Es el mismo
+  caso que `Suggestions` resuelve del otro lado (en la ficha del partner ya
+  publicado).

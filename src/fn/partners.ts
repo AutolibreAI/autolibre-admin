@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   applicationSearchSchema,
   approveSchema,
+  editApplicationSchema,
   updateStatusSchema,
 } from '~/lib/partners'
 import {
@@ -24,6 +25,7 @@ import {
   loadCatalog,
   partnerCoverageBoard,
   pipelineHealth,
+  updatePartnerApplication,
   setPartnerContact,
   setPartnerLinks,
   setPartnerLocation,
@@ -102,6 +104,21 @@ export const updatePartnerApplicationStatus = createServerFn({ method: 'POST' })
     await updateApplicationStatus(data.applicationId, data.status)
     return { ok: true }
   })
+
+/**
+ * Editar todos los campos del formulario de una solicitud (migración 010).
+ *
+ * El actor sale de `context.user.id` —la sesión de Clerk—, NUNCA del payload:
+ * `ops.action_log` es el único registro de quién tocó qué en el marketplace, y
+ * un actor por parámetro lo convierte en una firma falsificable. Misma regla
+ * exacta que `setPartnerProfileFn` y `approvePartnerApplication`.
+ */
+export const updatePartnerApplicationFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(editApplicationSchema)
+  .handler(async ({ data, context }): Promise<ApplicationDetail> =>
+    updatePartnerApplication(data, context.user.id),
+  )
 
 /** Consulta 5 del runbook: devolver a `in_conversation` una solicitud trabada. */
 export const unstickPartnerApplication = createServerFn({ method: 'POST' })

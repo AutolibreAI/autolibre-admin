@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne, withTransaction } from './db'
+import { APPLICATION_PATCH_KEYS, type EditApplicationInput } from '~/lib/partners'
 import { normalizeForMatch } from '~/lib/catalog'
 import type {
   PartnerLink,
@@ -249,6 +250,7 @@ interface DetailRow extends QueueRow {
   declared_fuel_types: Array<string>
   vehicle_types: Array<string>
   service_other: string | null
+  how_found_other: string | null
   contact_channel: string | null
   first_contacted_at: string | null
   agreement_type: string | null
@@ -273,7 +275,7 @@ export async function findApplication(
             a.next_step, a.follow_up_date, a.declared_services, a.how_found,
             a.created_at,
             a.brand_specialized, a.declared_brands, a.declared_fuel_types,
-            a.vehicle_types, a.service_other, a.contact_channel,
+            a.vehicle_types, a.service_other, a.how_found_other, a.contact_channel,
             a.first_contacted_at, a.agreement_type, a.agreement_detail,
             a.internal_notes, a.review_note, a.reviewed_at,
             (p.id IS NOT NULL)                       AS already_published,
@@ -311,6 +313,7 @@ export async function findApplication(
     declaredFuelTypes: row.declared_fuel_types,
     vehicleTypes: row.vehicle_types,
     serviceOther: row.service_other,
+    howFoundOther: row.how_found_other,
     contactChannel: row.contact_channel,
     firstContactedAt: row.first_contacted_at,
     agreementType: row.agreement_type,
@@ -484,6 +487,53 @@ export async function updateApplicationStatus(
       WHERE id = $1`,
     [applicationId, status],
   )
+}
+
+/**
+ * Editar los campos del formulario de una solicitud — migración 010.
+ *
+ * ── POR QUÉ VÍA STORED PROCEDURE Y NO UN UPDATE ACÁ ─────────────────────────
+ *
+ * `updateApplicationStatus` de arriba es un UPDATE directo, y esta función NO lo
+ * es, a propósito. El status es un movimiento de una sola columna por un embudo;
+ * esto reescribe todo el formulario del taller —contacto, lo que declaró, notas
+ * internas— y eso necesita auditoría. `ops.update_partner_application` graba
+ * `before`/`after` completos en `ops.action_log` DENTRO de su transacción. Un
+ * UPDATE acá más un INSERT de log serían separables, y el modo de falla es el
+ * peor: el cambio queda y el registro de quién lo hizo no.
+ *
+ * El `actorId` llega de la sesión (ver `src/fn/partners.ts`), nunca del payload.
+ *
+ * `p_patch` es un jsonb con TODAS las claves editables en snake_case
+ * (`APPLICATION_PATCH_KEYS` hace la traducción camelCase → snake_case, explícita
+ * — una clave mal mapeada es un campo que no se guarda en silencio). Se manda
+ * con `JSON.stringify` explícito, mismo cuidado que `setPartnerLinks`: `pg`
+ * serializaría un objeto de JS a algo que `jsonb` no reconoce.
+ *
+ * Devuelve el `ApplicationDetail` fresco —re-consultado con `findApplication`—
+ * porque la UI necesita `resolved` recalculado sobre los `declared_services`
+ * nuevos, y eso el SP no lo da.
+ */
+export async function updatePartnerApplication(
+  input: EditApplicationInput,
+  actorId: string,
+): Promise<ApplicationDetail> {
+  const { applicationId, ...fields } = input
+
+  const patch: Record<string, unknown> = {}
+  for (const [camel, snake] of Object.entries(APPLICATION_PATCH_KEYS)) {
+    patch[snake] = (fields as Record<string, unknown>)[camel]
+  }
+
+  const row = await sqlOne<{ id: string }>(
+    `SELECT (ops.update_partner_application($1::uuid, $2::uuid, $3::jsonb, $4))->>'id' AS id`,
+    [applicationId, actorId, JSON.stringify(patch), null],
+  )
+  if (!row) throw new Error(`APPLICATION_NOT_FOUND:${applicationId}`)
+
+  const fresh = await findApplication(applicationId)
+  if (!fresh) throw new Error(`APPLICATION_NOT_FOUND:${applicationId}`)
+  return fresh
 }
 
 /**

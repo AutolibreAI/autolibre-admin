@@ -186,7 +186,7 @@ pantalla no va todavía.
 |---|---|---|
 | `/dashboard` | `true` + streaming | El censo por `(role, auth_provider)`, el `count(*)` de partners y el `group by status` de leads, sueltos |
 | `/metricas` | `'data-only'` | 2º del menú, pegada a Inicio. Antes era `/graficos`. Tres bloques: (1) las 4 cards del pulso de Inicio, reusadas vía `PulseRow`; (2) **la consulta que nadie corría** — qué % de los usuarios reales usó cada función (seguro, multas, chat IA, VTV, escáner, mantenimiento…), una docena de `count(distinct user_id)` en una sola sentencia; (3) el crecimiento de `users`/`vehicles` período a período + la distribución de autos por usuario. No confundir con el `/analytics` borrado el 2026-08-30 (renderizaba `RecordItem` placeholder). → `.claude/rules/metricas.md` |
-| `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
+| `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql`. La ficha de una solicitud (`/solicitudes/$applicationId`) además EDITA todos sus campos vía `ops.update_partner_application` (migración 010) — `status` sigue aparte |
 | `/partners` | — | Layout de 2 pestañas. Redirige a `/partners/listado`. → `.claude/rules/partners-coverage.md` |
 | `/partners/listado` | `true` | El listado del directorio, con los rubros (categorías) y servicios de cada uno, ordenable y filtrable por esas columnas. Antes era `/partners` |
 | `/partners/cobertura` | `true` | **La consulta que nadie corría**: qué oferta tiene cubierta el marketplace y cuál falta. Cruza las 16 `service_categories` contra `partners.coverage_zone` (texto crudo), con los huecos absolutos y los puntos únicos de falla |
@@ -453,7 +453,9 @@ Reglas que salen de esto y no son negociables:
    conexiones distintas, así que el lock se toma en una y el `unlock` puede caer en otra: queda un
    lock colgado y, peor, dos deploys simultáneos dejan de serializarse. Al 2026-09-04 las 7
    migraciones ya están aplicadas en producción y no hay pendientes — la próxima es la que hay que
-   cuidar.
+   cuidar. **Al 2026-09-09 la 010 (`ops.update_partner_application`, editar solicitudes) está
+   escrita y probada pero NO aplicada en producción**: `pnpm db:migrate` con la URL del puerto
+   directo antes de que el editor de `/solicitudes/$applicationId` funcione en prod.
 3. **La tabla del censo nunca debió vivir en un `.md`.** El número ahora se calcula solo:
    `adoptionPulse()` en `src/server/ops.repo.ts` devuelve `legacyNativeAdmins` y la pantalla de
    Inicio lo muestra — contra la base a la que el panel esté conectado, sea cual sea. Regla general:

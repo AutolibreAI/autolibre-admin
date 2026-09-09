@@ -3,7 +3,10 @@
 Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/server/partners.repo.ts`, `src/server/leads.repo.ts`, `src/fn/leads.ts`, las
 `setPartner*Fn` de `src/fn/partners.ts`, `src/components/PartnerFicha.tsx`,
-`src/routes/_authed/leads.tsx`.
+`src/routes/_authed/leads.tsx`. La 010 suma
+`migrations/010_ops_editar_solicitud.sql`, `updatePartnerApplication` de
+`src/server/partners.repo.ts`, `updatePartnerApplicationFn` de
+`src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`.
 
 ## La regla que esto reemplaza, y por qué
 
@@ -349,3 +352,100 @@ cada `` ` `` de sus referencias a columnas terminaba el string.
 
 **Adentro de un template de SQL, los comentarios van con `--` y sin backticks.** Los JSDoc con
 backticks van AFUERA, antes del literal — que es donde están todos los demás de ese archivo.
+
+---
+
+# Migración 010 — editar la solicitud entera (`partner_applications`)
+
+Alcance añadido: `migrations/010_ops_editar_solicitud.sql`, su `.test.sql`,
+`ops.update_partner_application`, `ops._jsonb_text_array`, `updatePartnerApplication`
+de `src/server/partners.repo.ts`, `updatePartnerApplicationFn` de
+`src/fn/partners.ts`, `editApplicationSchema` + `APPLICATION_PATCH_KEYS` de
+`src/lib/partners.ts`, `src/components/ApplicationEditor.tsx`.
+
+## Por qué un SP y no un UPDATE directo como el status
+
+`partner_applications` ya se escribía desde `partners.repo.ts` sin SP:
+`updateApplicationStatus` y `unstickApplication` son `UPDATE` directos. La 010 NO
+sigue ese camino, y la diferencia es la **consecuencia**, no la tabla:
+
+- Mover el status es una columna por un embudo de 4 estados. Bajo impacto,
+  reversible, y el propio backend lo dejó designado en `lead-status.vo.ts`.
+- La 010 reescribe **todo el formulario del taller** — contacto, marcas,
+  combustibles, rubros declarados, notas internas. Eso necesita `before`/`after`
+  en `ops.action_log`, que es lo único que contesta "¿quién le cambió el email a
+  esta solicitud?".
+
+Los 8 guardrails son los mismos que 007/008/009 (`SECURITY INVOKER`,
+`search_path` fijo, `assert_actor`, `FOR UPDATE`, log adentro de la función, sin
+FK a `public`, `updated_at` lo pone `trg_partner_applications_updated_at`).
+
+## El `grep` al backend NO se pudo correr
+
+La regla dice *"la excepción se gana con un `grep`, no se asume"*. Para la 010 no
+se pudo: `../autolibre-backend-hex` no estaba clonado. Se asumió que el backend
+no tiene un caso de uso que edite campos de una solicitud —mismo estado que
+partners— pero **antes de ampliar este SP hay que correr ese `grep`**:
+
+```
+rg -n "IPartnerApplicationRepository|update\(partnerApplications" ../autolibre-backend-hex/src
+```
+
+Si aparece un `update` de campos (más allá de la función de aprobación), esto
+pasa a ser competencia del backend.
+
+## El patch es jsonb y viaja completo
+
+`ops.update_partner_application(p_application_id, p_actor_id, p_patch jsonb, p_note)`.
+`p_patch` trae TODAS las claves editables en **snake_case** —el formulario manda
+el juego completo, misma filosofía que `set_partner_contact`.
+
+- **`APPLICATION_PATCH_KEYS`** (en `~/lib/partners`) traduce camelCase → snake_case
+  explícito. Un `Object.entries` con regex daría una clave mal mapeada = un campo
+  que no se guarda en silencio (mismo criterio que `mapCensus`).
+- **`JSON.stringify` explícito** en el repo: `pg` serializaría un objeto de JS a
+  algo que `jsonb` no reconoce (misma trampa que `setPartnerLinks`).
+
+### Validación: solo representabilidad
+
+| Campo | Regla |
+|---|---|
+| `business_name`, `email`, `whatsapp`, `address` | NOT NULL en la base → `''` rechaza con `<FIELD>_REQUIRED`, no borra |
+| nullable text (9 campos) | `nullif(btrim(x), '')` → `''` borra |
+| `follow_up_date` | `''`→NULL; formato malo → `INVALID_FOLLOW_UP_DATE` (parseada ANTES del UPDATE para poder traducir el error) |
+| `declared_*` / `*_types` (4 arrays) | `ops._jsonb_text_array`: descarta elementos vacíos; si la clave falta se deja como estaba; `[]` sí vacía |
+
+Ninguna regla de negocio: no valida que un rubro declarado exista en el catálogo
+(eso lo resuelve la pantalla de aprobación, que sabe leer slugs heterogéneos), ni
+normaliza marcas, ni exige nada.
+
+## `status` y las fechas de CRM NO se editan acá
+
+`status` tiene su editor propio y el lock de `verbal_agreement`. `first_contacted_at`,
+`reviewed_at`, `reviewed_by_id`, `raw_submission`, `legacy_sheet_row_id` no son
+datos que el operador corrija a mano — quedan fuera del `p_patch` a propósito.
+
+## El selector de rubros declarados normaliza familia → servicios
+
+`declared_services` guarda un histórico heterogéneo: slugs de servicio
+(`frenos`), slugs de familia (`motor`), y etiquetas del formulario viejo
+(`"Chapa y pintura"`). `ApplicationEditor` al sembrar:
+
+- slug de servicio → tilde en el picker
+- slug de familia → se expande a los slugs de sus servicios activos
+- lo demás → chip "sin reconocer", removible pero preservado al guardar
+
+Expandir la familia es **deliberado y seguro**: `expandDeclaredSlugs` y el INSERT
+de `approveApplication` producen el MISMO conjunto de `partner_services` con los
+slugs de servicio que con el slug de familia. Lo que cambia es que
+`matchedFamilies` de `resolved` deja de decir "familia declarada" y pasa a listar
+los servicios uno a uno — más verboso, mismo resultado.
+
+## Se probó como 007/008/009
+
+`migrations/010_ops_editar_solicitud.test.sql`: 31 casos, `BEGIN … ROLLBACK`,
+crea su propia solicitud + actor. Cubre los 3 guardrails de forma, el camino
+feliz de los ~19 campos, los 4 `*_REQUIRED`, `INVALID_FOLLOW_UP_DATE`, la
+normalización de arrays (ausente ≠ `[]` ≠ con vacíos), `APPLICATION_NOT_FOUND` /
+`ACTOR_NOT_FOUND` / `ACTOR_REQUIRED`, el log con `before`/`after`, y que el SP no
+escriba `updated_at`. **Repetir ese patrón para cualquier SP nuevo.**

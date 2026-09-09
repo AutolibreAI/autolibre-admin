@@ -9,10 +9,12 @@ import {
 import {
   approvePartnerApplication,
   getPartnerApplication,
+  getServiceCatalog,
   unstickPartnerApplication,
   updatePartnerApplicationStatus,
 } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { ApplicationEditor } from '~/components/ApplicationEditor'
 import { ApplicationStatusBadge } from '~/components/ApplicationStatusBadge'
 import { ResolvedServicesSummary } from '~/components/ResolvedServicesSummary'
 import { Button } from '~/components/ui/button'
@@ -25,21 +27,22 @@ import type { ApplicationDetail } from '~/lib/partners'
 
 export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
   loader: async ({ params, abortController }) => {
-    const app = await getPartnerApplication({
-      data: params,
-      signal: abortController.signal,
-    }).catch((cause: unknown) => {
-      if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
-      throw cause
-    })
+    const signal = abortController.signal
+    const [app, catalog] = await Promise.all([
+      getPartnerApplication({ data: params, signal }).catch((cause: unknown) => {
+        if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
+        throw cause
+      }),
+      getServiceCatalog({ signal }),
+    ])
 
     if (!app) throw notFound()
-    return app
+    return { app, catalog }
   },
 
   head: ({ loaderData }) => ({
     meta: [
-      { title: loaderData ? `${loaderData.businessName} — Solicitudes` : 'Solicitud' },
+      { title: loaderData ? `${loaderData.app.businessName} — Solicitudes` : 'Solicitud' },
     ],
   }),
 
@@ -47,7 +50,7 @@ export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
 })
 
 function ApplicationDetailPage() {
-  const app = Route.useLoaderData()
+  const { app, catalog } = Route.useLoaderData()
 
   return (
     <>
@@ -73,55 +76,8 @@ function ApplicationDetailPage() {
       <StuckWarning app={app} />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Contacto</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2">
-              <Field label="Email" value={app.email} />
-              <Field label="WhatsApp" value={app.whatsapp} />
-              <Field label="Dirección" value={app.address} className="sm:col-span-2" />
-              <Field label="Cómo nos encontró" value={app.howFound ?? '—'} />
-              <Field label="Canal de contacto" value={app.contactChannel ?? '—'} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Lo que declaró</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Field
-                label="Especializado en marca"
-                value={app.brandSpecialized ? 'Sí' : 'No'}
-              />
-              <ChipList label="Marcas" items={app.declaredBrands} />
-              <ChipList label="Combustibles" items={app.declaredFuelTypes} />
-              <ChipList label="Tipos de vehículo" items={app.vehicleTypes} />
-              {app.serviceOther ? (
-                <Field label="Otros servicios (texto libre)" value={app.serviceOther} />
-              ) : null}
-            </CardContent>
-          </Card>
-
-          {app.internalNotes || app.reviewNote || app.nextStep ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Notas</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {app.nextStep ? <Field label="Próximo paso" value={app.nextStep} /> : null}
-                {app.followUpDate ? (
-                  <Field label="Fecha de seguimiento" value={formatDate(app.followUpDate)} />
-                ) : null}
-                {app.internalNotes ? (
-                  <Field label="Notas internas" value={app.internalNotes} />
-                ) : null}
-                {app.reviewNote ? <Field label="Nota de revisión" value={app.reviewNote} /> : null}
-              </CardContent>
-            </Card>
-          ) : null}
+        <div className="min-w-0">
+          <ApplicationEditor app={app} catalog={catalog} />
         </div>
 
         <div className="space-y-4">
@@ -413,30 +369,6 @@ function Field({
     <div className={className}>
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-sm break-words">{value}</div>
-    </div>
-  )
-}
-
-function ChipList({ label, items }: { label: string; items: Array<string> }) {
-  return (
-    <div>
-      <div className="mb-1.5 text-xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      {items.length === 0 ? (
-        <span className="text-sm text-muted-foreground">—</span>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {items.map((item) => (
-            <span
-              key={item}
-              className="rounded-md border border-border bg-secondary px-2 py-0.5 text-xs"
-            >
-              {item}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

@@ -112,6 +112,7 @@ export interface ApplicationDetail extends ApplicationListItem {
   declaredFuelTypes: Array<string>
   vehicleTypes: Array<string>
   serviceOther: string | null
+  howFoundOther: string | null
   contactChannel: string | null
   firstContactedAt: string | null
   agreementType: string | null
@@ -176,3 +177,77 @@ export const updateStatusSchema = z.object({
   applicationId: z.uuid(),
   status: z.enum(MANUAL_STATUSES),
 })
+
+/**
+ * Editar la solicitud entera — migración 010, vía `ops.update_partner_application`.
+ *
+ * El formulario del panel manda SIEMPRE el juego completo (misma filosofía que
+ * `setPartnerContactSchema` en `catalog.ts`): lo que el operador ve es lo que
+ * queda guardado. Por eso los nullables van con `.default('')` en vez de
+ * `.optional()` — un `''` es "borrá este campo", explícito.
+ *
+ * `business_name`/`email`/`whatsapp`/`address` son NOT NULL en la base: acá se
+ * validan `.min(1)` para dar el error al lado del input, y el SP los vuelve a
+ * rechazar (`*_REQUIRED`) para cualquier otro llamador.
+ *
+ * `status` NO está: tiene su propio editor y el lock de `verbal_agreement`.
+ * `followUpDate` viaja como string; el SP la parsea y traduce el error de
+ * formato a `INVALID_FOLLOW_UP_DATE`.
+ */
+const freeLabelArray = z.array(z.string().trim().min(1).max(120)).max(80)
+
+export const editApplicationSchema = z.object({
+  applicationId: z.uuid(),
+  businessName: z.string().trim().min(1, 'El nombre del taller no puede quedar vacío.').max(200),
+  email: z.string().trim().min(1, 'El email no puede quedar vacío.').max(200),
+  whatsapp: z.string().trim().min(1, 'El WhatsApp no puede quedar vacío.').max(60),
+  address: z.string().trim().min(1, 'La dirección no puede quedar vacía.').max(300),
+  brandSpecialized: z.boolean(),
+  contactChannel: z.string().trim().max(120).default(''),
+  howFound: z.string().trim().max(200).default(''),
+  howFoundOther: z.string().trim().max(200).default(''),
+  serviceOther: z.string().trim().max(500).default(''),
+  nextStep: z.string().trim().max(500).default(''),
+  agreementType: z.string().trim().max(120).default(''),
+  agreementDetail: z.string().trim().max(1000).default(''),
+  internalNotes: z.string().trim().max(2000).default(''),
+  reviewNote: z.string().trim().max(2000).default(''),
+  followUpDate: z.string().trim().max(10).default(''),
+  declaredServices: freeLabelArray,
+  declaredBrands: freeLabelArray,
+  declaredFuelTypes: freeLabelArray,
+  vehicleTypes: freeLabelArray,
+})
+
+export type EditApplicationInput = z.infer<typeof editApplicationSchema>
+
+/**
+ * `EditApplicationInput` (camelCase) → las claves snake_case que espera el
+ * `p_patch` de `ops.update_partner_application`. Explícito y no un
+ * `Object.entries` con regex: una clave mal traducida es un campo que no se
+ * guarda, en silencio.
+ */
+export const APPLICATION_PATCH_KEYS: Record<
+  Exclude<keyof EditApplicationInput, 'applicationId'>,
+  string
+> = {
+  businessName: 'business_name',
+  email: 'email',
+  whatsapp: 'whatsapp',
+  address: 'address',
+  brandSpecialized: 'brand_specialized',
+  contactChannel: 'contact_channel',
+  howFound: 'how_found',
+  howFoundOther: 'how_found_other',
+  serviceOther: 'service_other',
+  nextStep: 'next_step',
+  agreementType: 'agreement_type',
+  agreementDetail: 'agreement_detail',
+  internalNotes: 'internal_notes',
+  reviewNote: 'review_note',
+  followUpDate: 'follow_up_date',
+  declaredServices: 'declared_services',
+  declaredBrands: 'declared_brands',
+  declaredFuelTypes: 'declared_fuel_types',
+  vehicleTypes: 'vehicle_types',
+}
