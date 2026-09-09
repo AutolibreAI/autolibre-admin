@@ -8,6 +8,7 @@ import {
 import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
+  BarChart3,
   Bell,
   Car,
   Coins,
@@ -20,7 +21,6 @@ import {
   MessageSquare,
   ScanLine,
   Store,
-  TrendingUp,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -93,6 +93,15 @@ interface NavItem {
  */
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { to: "/dashboard", label: "Inicio", icon: LayoutDashboard },
+  /**
+   * `Métricas` va 2º, pegada a Inicio y fuera del bloque de dominio: las dos
+   * son la lectura transversal del panel. Inicio da el snapshot accionable;
+   * Métricas da el resto — las mismas 4 cards del pulso, qué % de los usuarios
+   * usa cada función de la app, y la curva de crecimiento período a período.
+   * Todo agregado a mano sobre `public`, mismo criterio que `Operación` (no
+   * espeja ningún bounded context del backend porque el backend no tiene uno).
+   */
+  { to: "/metricas", label: "Métricas", icon: BarChart3 },
   { to: "/solicitudes", label: "Solicitudes", icon: Inbox },
   { to: "/partners", label: "Partners", icon: Store },
   /**
@@ -116,7 +125,8 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * de los vehículos. Las cuatro de arriba cubren el recorrido taller ↔ usuario;
    * ésta cubre el auto.
    *
-   * Tiene tres pestañas (Catálogo · Listado · Métricas). El Catálogo —que era
+   * Tiene tres pestañas (Catálogo · Listado · Flota; la ruta de Flota sigue
+   * siendo `/vehiculos/metricas`). El Catálogo —que era
    * `/catalogo`, ahora `/vehiculos/catalogo`— es la ÚNICA pantalla del panel
    * cuyas escrituras no son SQL: sube PDFs por HTTP contra el backend hex,
    * porque el archivo va a DigitalOcean Spaces y ninguna cantidad de SQL lo
@@ -162,14 +172,9 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/notificaciones", label: "Notificaciones", icon: Bell },
   /**
-   * Las tres últimas son las excepciones DECLARADAS a la regla de arriba: no
-   * espejan un bounded context del backend porque el backend no tiene uno. Son
-   * operación / analítica del panel.
-   *
-   * `Gráficos` es la curva de crecimiento —usuarios y vehículos período a
-   * período— agregada a mano sobre `users`/`vehicles` de `public`, mismo
-   * criterio que `Operación`. Es lo que `Inicio` no muestra: la tendencia, no
-   * el snapshot.
+   * Las dos últimas son excepciones DECLARADAS a la regla de arriba: no espejan
+   * un bounded context del backend porque el backend no tiene uno. Son operación
+   * del panel (`Métricas`, 2º, es la otra — analítica).
    *
    * `Operación` lee tablas de `public` y no escribe ninguna: muestra colas
    * colgadas y motivos de falla, y manda a la pantalla donde se arregla. Su
@@ -177,7 +182,6 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    *
    * `Costos de IA` vive entero en `ops` — el schema que este repo migra.
    */
-  { to: "/graficos", label: "Gráficos", icon: TrendingUp },
   { to: "/operacion", label: "Operación", icon: Activity },
   { to: "/ai-costos", label: "Costos de IA", icon: Coins },
 ];

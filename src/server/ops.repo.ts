@@ -2,8 +2,9 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
-import { OPS_WINDOW_HOURS, QUEUE_LABELS } from '~/lib/ops'
+import { ADOPTION_FEATURES, OPS_WINDOW_HOURS, QUEUE_LABELS } from '~/lib/ops'
 import type {
+  AdoptionFeatureRow,
   AdoptionPulse,
   CatalogGap,
   ExcludedDomain,
@@ -16,6 +17,7 @@ import type {
   OpsWindow,
   QueueHealth,
   QueueKey,
+  UsageAdoption,
   VehicleDistBucket,
   VehicleDistribution,
   VehicleDistSearch,
@@ -173,7 +175,7 @@ export async function adoptionPulse(
   }
 }
 
-// ── Serie de adopción (pantalla /graficos) ──────────────────────────────────
+// ── Serie de adopción (pantalla /metricas) ──────────────────────────────────
 
 /**
  * `GrowthUnit → unidad de Postgres`. Viaja como PARÁMETRO en la consulta, nunca
@@ -240,7 +242,7 @@ async function growthSeries(
 }
 
 /**
- * Las dos series que pide `/graficos`: altas de `users` y de `vehicles` por
+ * Las dos series que pide `/metricas`: altas de `users` y de `vehicles` por
  * período.
  *
  * Vive acá y no en un repo nuevo porque es la misma data de adopción que
@@ -360,6 +362,136 @@ export async function vehicleDistribution(
   })
 
   return { scope: search.fleetScope, totalUsers, totalFleet, buckets }
+}
+
+// ── Adopción por función ────────────────────────────────────────────────────
+
+interface UsageRow {
+  total: number
+  vehicle: number
+  push: number
+  fine_sync: number
+  chat: number
+  insurance: number
+  vtv: number
+  reg_card: number
+  scan: number
+  maintenance_done: number
+  notified: number
+  license: number
+  maintenance_plan: number
+}
+
+/**
+ * Reemplaza: nada, y ése es el punto. Para saber "qué % de los usuarios cargó su
+ * seguro / consultó multas / usó el chat" hoy habría que correr una docena de
+ * `select count(distinct user_id)` sueltos y dividir a mano. Nadie lo hace.
+ *
+ * ── Por qué UNA sola sentencia ──────────────────────────────────────────────
+ *
+ * Las doce subconsultas comparten el snapshot de Postgres, igual que el censo de
+ * `users.repo.ts` y el `UNION ALL` de `queueHealth`. Con doce consultas
+ * separadas, una fila insertada en el medio del barrido entra en un contador y
+ * no en otro, y los % dejan de ser comparables entre sí.
+ *
+ * ── Los predicados, y por qué éstos ─────────────────────────────────────────
+ *
+ *  - "Usuario real" = `INTERNAL_PREDICATE` negado. El MISMO que `adoptionPulse`
+ *    y `ops.v_ai_usage`. Si divergen, el denominador de esta tabla y el número
+ *    de "Usuarios reales" de Inicio dejan de coincidir.
+ *  - `chat`: conversación CON al menos un mensaje. Una conversación vacía no es
+ *    uso (48 de 70 en prod no tienen ningún mensaje — ver `chats.md`).
+ *  - `vtv`: sólo `file_id IS NOT NULL`. Las filas `source = 'provider'` son un
+ *    lookup a una API por patente, no algo que el usuario cargó — mismo criterio
+ *    que `documents.md`.
+ *  - `maintenance_done`: ocurrencia con `performed_at` — una tarea REGISTRADA
+ *    como hecha, no una pendiente autogenerada por el plan.
+ *  - `notified`: `delivery_status = 'sent'` — le llegó de verdad, no que se haya
+ *    encolado.
+ *  - `fine_sync` y `scan` se alcanzan por el vehículo (`vehicle_fine_syncs` /
+ *    `driving_sessions`), así que se joinea `vehicles` → `user_id`.
+ *
+ * ── Sin ventana temporal ────────────────────────────────────────────────────
+ *
+ * La pregunta es acumulativa ("¿alguna vez usó X?"), igual que la matriz de
+ * `/escaneres`. Una ventana de 30 días vaciaría la tabla y se leería como "nadie
+ * usa nada".
+ */
+export async function usageAdoption(
+  opts: { signal?: AbortSignal } = {},
+): Promise<UsageAdoption> {
+  void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
+
+  const row = await sqlOne<UsageRow>(`
+    WITH real_users AS (
+      SELECT u.id FROM users u WHERE NOT ${INTERNAL_PREDICATE}
+    )
+    SELECT
+      (SELECT count(*) FROM real_users)::int AS total,
+      (SELECT count(DISTINCT v.user_id)
+         FROM vehicles v JOIN real_users r ON r.id = v.user_id)::int AS vehicle,
+      (SELECT count(DISTINCT t.user_id)
+         FROM expo_push_tokens t JOIN real_users r ON r.id = t.user_id)::int AS push,
+      (SELECT count(DISTINCT v.user_id)
+         FROM vehicle_fine_syncs vfs
+         JOIN vehicles v ON v.id = vfs.vehicle_id
+         JOIN real_users r ON r.id = v.user_id)::int AS fine_sync,
+      (SELECT count(DISTINCT c.user_id)
+         FROM conversations c JOIN real_users r ON r.id = c.user_id
+         WHERE EXISTS (SELECT 1 FROM conversation_messages m WHERE m.conversation_id = c.id))::int AS chat,
+      (SELECT count(DISTINCT i.user_id)
+         FROM insurances i JOIN real_users r ON r.id = i.user_id)::int AS insurance,
+      (SELECT count(DISTINCT vi.user_id)
+         FROM vehicle_inspections vi JOIN real_users r ON r.id = vi.user_id
+         WHERE vi.file_id IS NOT NULL)::int AS vtv,
+      (SELECT count(DISTINCT rc.user_id)
+         FROM registration_cards rc JOIN real_users r ON r.id = rc.user_id)::int AS reg_card,
+      (SELECT count(DISTINCT ds.user_id)
+         FROM driving_sessions ds JOIN real_users r ON r.id = ds.user_id)::int AS scan,
+      (SELECT count(DISTINCT mo.user_id)
+         FROM maintenance_occurrences mo JOIN real_users r ON r.id = mo.user_id
+         WHERE mo.performed_at IS NOT NULL)::int AS maintenance_done,
+      (SELECT count(DISTINCT n.user_id)
+         FROM notifications n JOIN real_users r ON r.id = n.user_id
+         WHERE n.delivery_status = 'sent')::int AS notified,
+      (SELECT count(DISTINCT dl.user_id)
+         FROM driver_licenses dl JOIN real_users r ON r.id = dl.user_id)::int AS license,
+      (SELECT count(DISTINCT mp.user_id)
+         FROM maintenance_plans mp JOIN real_users r ON r.id = mp.user_id)::int AS maintenance_plan
+  `)
+
+  const total = toInt(row?.total)
+
+  // El mapeo es explícito, key por key: un `Object.entries` snake→camel compila
+  // igual el día que se renombre una columna del SELECT y devuelve 0 en
+  // silencio, que en esta tabla se lee como "nadie usa esa función". Mismo
+  // criterio que `mapCensus` en `users.repo.ts`.
+  const counts: Record<(typeof ADOPTION_FEATURES)[number]['key'], number> = {
+    vehicle: toInt(row?.vehicle),
+    push: toInt(row?.push),
+    fineSync: toInt(row?.fine_sync),
+    chat: toInt(row?.chat),
+    insurance: toInt(row?.insurance),
+    vtv: toInt(row?.vtv),
+    regCard: toInt(row?.reg_card),
+    scan: toInt(row?.scan),
+    maintenanceDone: toInt(row?.maintenance_done),
+    notified: toInt(row?.notified),
+    license: toInt(row?.license),
+    maintenancePlan: toInt(row?.maintenance_plan),
+  }
+
+  const features: Array<AdoptionFeatureRow> = ADOPTION_FEATURES.map((f) => {
+    const users = counts[f.key]
+    return {
+      key: f.key,
+      label: f.label,
+      users,
+      pct: total === 0 ? 0 : (users / total) * 100,
+    }
+  })
+
+  return { totalUsers: total, features }
 }
 
 // ── Marketplace ──────────────────────────────────────────────────────────────

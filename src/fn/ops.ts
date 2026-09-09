@@ -17,6 +17,7 @@ import {
   queueHealth,
   removeExcludedDomain,
   upsertExcludedDomain,
+  usageAdoption,
   vehicleDistribution,
 } from '~/server/ops.repo'
 import { requestSignal } from '~/server/request'
@@ -28,6 +29,7 @@ import type {
   GrowthSeries,
   OpsPulse,
   QueueHealth,
+  UsageAdoption,
   VehicleDistribution,
 } from '~/lib/ops'
 
@@ -72,7 +74,16 @@ export const getOpsPulse = createServerFn({ method: 'GET' })
   })
 
 /**
- * Las dos series de crecimiento (`/graficos`). Mismo `adminMiddleware` que el
+ * La tabla de adopción por función (`/metricas`): qué % de los usuarios reales
+ * usó cada función. Mismo `adminMiddleware`: publica el tamaño del padrón y el
+ * comportamiento agregado de usuarios reales.
+ */
+export const getUsageAdoption = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<UsageAdoption> => usageAdoption({ signal: requestSignal() }))
+
+/**
+ * Las dos series de crecimiento (`/metricas`). Mismo `adminMiddleware` que el
  * resto: publica el tamaño y la velocidad de crecimiento del negocio, que no se
  * le contesta a cualquiera con una sesión de la app.
  */
@@ -84,7 +95,7 @@ export const getAdoptionSeries = createServerFn({ method: 'GET' })
   )
 
 /**
- * La tabla de "cuántos usuarios tienen N autos" de `/graficos`. Mismo
+ * La tabla de "cuántos usuarios tienen N autos" de `/metricas`. Mismo
  * `adminMiddleware`: publica el tamaño del padrón de usuarios y autos.
  */
 export const getVehicleDistribution = createServerFn({ method: 'GET' })

@@ -11,7 +11,9 @@ El Catálogo (pestaña 1) tiene su propia regla: `.claude/rules/vehicle-manuals.
 
 El 2026-09-06 `/catalogo` pasó a ser `/vehiculos`, un layout de 3 pestañas:
 **Catálogo** (lo que estaba en `/catalogo`, movido tal cual a
-`/vehiculos/catalogo`), **Listado**, **Métricas**. El nav dice "Vehículos"
+`/vehiculos/catalogo`), **Listado**, **Flota** (la ruta sigue siendo
+`/vehiculos/metricas`; la etiqueta pasó de "Métricas" a "Flota" el 2026-09-09
+para no chocar con el ítem de nav de primer nivel `/metricas`). El nav dice "Vehículos"
 (icono `Car`). Mismo patrón exacto que `/leads`.
 
 `/escaneres` NO es una pestaña de acá aunque comparta el eje (los modelos del
@@ -31,7 +33,7 @@ por el mismo motivo que `listUsers` — casi todo son subconsultas escalares o
 dependen de un LEFT JOIN del inner select, y filtrar/ordenar por ellas obliga a
 envolver.
 
-## Métricas (`/vehiculos/metricas`) — la flota por MODELO del catálogo
+## Flota (`/vehiculos/metricas`) — la flota por MODELO del catálogo
 
 El grano es `vehicle_catalogs`, NO el spec. Misma decisión que `/escaneres`
 (`scanner-compatibility.md`): bajar al spec parte el mismo auto en dos filas
@@ -43,7 +45,7 @@ vs.vehicle_count > 0` deja fuera los catálogos que nadie cargó (no son flota).
 
 **El cero de "Manuales" acá SÍ es un pendiente** (ámbar): este modelo tiene
 autos y ningún manual. Es lo opuesto a la columna "Vehículos" del listado del
-catálogo, donde el cero era sólo contexto. La diferencia: en Métricas todas las
+catálogo, donde el cero era sólo contexto. La diferencia: en Flota todas las
 filas ya tienen autos, así que "0 manuales" siempre significa trabajo sin hacer.
 
 ## Predicados compartidos — si divergen, el panel miente
@@ -88,7 +90,7 @@ links: el orden ES la URL) y filtrables:
   orden histórico (marca+modelo, año desc como desempate).
 - **Listado**: buscar (patente/alias/modelo/dueño), Estado, Tipo, "VTV vencida",
   "con deuda de multas". Sort por 10 columnas.
-- **Métricas**: buscar, Tipo. Sort por casi todas.
+- **Flota**: buscar, Tipo. Sort por casi todas.
 
 ### ⚠ El filtro de tipo se llama `vehicleType`, NO `type`
 

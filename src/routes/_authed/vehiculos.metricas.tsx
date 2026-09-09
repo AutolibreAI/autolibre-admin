@@ -54,7 +54,7 @@ export const Route = createFileRoute('/_authed/vehiculos/metricas')({
     ])
     return { rows, summary }
   },
-  head: () => ({ meta: [{ title: 'Vehículos · Métricas — AutoLibre' }] }),
+  head: () => ({ meta: [{ title: 'Vehículos · Flota — AutoLibre' }] }),
   component: VehiculosMetricas,
 })
 
@@ -66,8 +66,8 @@ function VehiculosMetricas() {
   return (
     <>
       <PageHeader
-        title="Métricas"
-        subtitle="La flota por modelo del catálogo."
+        title="Flota"
+        subtitle="Los vehículos agrupados por modelo del catálogo."
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 

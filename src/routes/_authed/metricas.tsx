@@ -7,10 +7,12 @@ import {
   growthSearchSchema,
   vehicleDistSearchSchema,
   type GrowthSearch,
+  type UsageAdoption,
   type VehicleDistScope,
 } from '~/lib/ops'
-import { getAdoptionSeries, getVehicleDistribution } from '~/fn/ops'
+import { getAdoptionSeries, getOpsPulse, getUsageAdoption, getVehicleDistribution } from '~/fn/ops'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { PulseRow } from '~/components/PulseCards'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { GrowthChart } from '~/components/GrowthChart'
 import { SortHeader } from '~/components/SortHeader'
@@ -19,20 +21,22 @@ import {
   TableBody,
   TableCell,
   TableFooter,
+  TableHead,
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
 import { formatInt } from '~/lib/format'
 
 /**
- * `/graficos` mergea dos schemas de search: la unidad temporal de los gráficos
+ * `/metricas` mergea dos schemas de search: la unidad temporal de los gráficos
  * y el orden/scope de la tabla de distribución. Son ejes independientes y cada
  * uno tiene su server function; el schema combinado sólo vive acá para que
- * `validateSearch` cubra las dos.
+ * `validateSearch` cubra las dos. Las cards del pulso y la tabla de adopción no
+ * toman search params.
  */
-const graficosSearchSchema = growthSearchSchema.extend(vehicleDistSearchSchema.shape)
+const metricasSearchSchema = growthSearchSchema.extend(vehicleDistSearchSchema.shape)
 
-export const Route = createFileRoute('/_authed/graficos')({
+export const Route = createFileRoute('/_authed/metricas')({
   /**
    * SSR MODE: 'data-only'. Mismo trade que `/operacion`:
    *  - Detrás de auth: ningún crawler la ve, el markup server-rendered no compra
@@ -44,43 +48,47 @@ export const Route = createFileRoute('/_authed/graficos')({
    */
   ssr: 'data-only',
 
-  validateSearch: graficosSearchSchema,
+  validateSearch: metricasSearchSchema,
   loaderDeps: ({ search }) => search,
 
   /**
-   * Dos llamadas en paralelo contra el pool: la serie de crecimiento y la
-   * distribución de autos por usuario. Cada `data` se valida por su propio
-   * schema del lado del server function, así que pasarles la búsqueda entera es
-   * inocuo (las claves de más se descartan).
+   * Cuatro llamadas en paralelo contra el pool: el pulso del negocio (las 4
+   * cards, compartidas con Inicio), la tabla de adopción por función, la serie
+   * de crecimiento y la distribución de autos por usuario. Cada `data` se valida
+   * por su propio schema del lado del server function, así que pasarles la
+   * búsqueda entera es inocuo (las claves de más se descartan).
    */
   loader: async ({ deps, abortController }) => {
     const signal = abortController.signal
-    const [series, distribution] = await Promise.all([
+    const [pulse, usage, series, distribution] = await Promise.all([
+      getOpsPulse({ signal }),
+      getUsageAdoption({ signal }),
       getAdoptionSeries({ data: deps, signal }),
       getVehicleDistribution({ data: deps, signal }),
     ])
-    return { series, distribution }
+    return { pulse, usage, series, distribution }
   },
 
-  head: () => ({ meta: [{ title: 'Gráficos — AutoLibre' }] }),
-  component: GraficosPage,
+  head: () => ({ meta: [{ title: 'Métricas — AutoLibre' }] }),
+  component: MetricasPage,
 })
 
 /**
- * Gráficos — el crecimiento del producto en el tiempo, más la distribución de
- * autos por usuario.
+ * Métricas — el estado y la evolución del producto en números.
  *
- * Qué reemplaza:
- *  - Las curvas: nada previo. `/dashboard` da el pulso (totales y últimos 30
- *    días) pero no la evolución período a período.
- *  - La tabla: el `select vc, count(*) from (… group by user)` que contesta
- *    "cuántos usuarios tienen 1 auto, cuántos 2, …" y que hoy nadie corre.
+ * Tres bloques, de arriba abajo:
+ *  1. Las 4 cards del pulso (idénticas a Inicio): usuarios, vehículos, partners,
+ *     leads. Comparten `PulseRow` — si se ven distintas, una está mal.
+ *  2. Adopción por función: qué % de los usuarios reales usó cada cosa. Reemplaza
+ *     una docena de `count(distinct user_id)` sueltos que nadie corre.
+ *  3. Crecimiento: altas de `users`/`vehicles` por período + la distribución de
+ *     autos por usuario. Es lo que Inicio no muestra: la curva, no el snapshot.
  *
- * Los números excluyen las cuentas internas / E2E (`@autolibre.app`), igual que
- * "Usuarios reales" en Inicio.
+ * Los números excluyen las cuentas internas / E2E, igual que "Usuarios reales"
+ * en Inicio.
  */
-function GraficosPage() {
-  const { series, distribution } = Route.useLoaderData()
+function MetricasPage() {
+  const { pulse, usage, series, distribution } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -93,32 +101,40 @@ function GraficosPage() {
   return (
     <>
       <PageHeader
-        title="Gráficos"
-        subtitle="El crecimiento de usuarios y vehículos en el tiempo."
+        title="Métricas"
+        subtitle="El estado del negocio, qué funciones usa la gente y cómo crece."
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
-      <div className="mb-5">
-        <FilterGroup label="Unidad de tiempo">
-          {GROWTH_UNITS.map((u) => (
-            <Chip key={u} active={search.unit === u} onClick={() => setUnit(u)}>
-              {GROWTH_UNIT_LABELS[u]}
-            </Chip>
-          ))}
-        </FilterGroup>
-      </div>
+      <PulseRow pulse={pulse} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <GrowthChart points={series.users} unit={series.unit} label="Usuarios" />
-        <GrowthChart points={series.vehicles} unit={series.unit} label="Vehículos" />
-      </div>
+      <AdoptionTable data={usage} />
 
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        Las barras son las altas de cada período; la línea es el acumulado. El
-        total de vehículos cuenta los registros históricos (activos + archivados),
-        así que no coincide con "Vehículos activos" de Inicio. Se excluyen las
-        cuentas internas de test.
-      </p>
+      <section className="mt-8">
+        <h2 className="mb-3 font-heading text-base font-semibold">Crecimiento</h2>
+
+        <div className="mb-5">
+          <FilterGroup label="Unidad de tiempo">
+            {GROWTH_UNITS.map((u) => (
+              <Chip key={u} active={search.unit === u} onClick={() => setUnit(u)}>
+                {GROWTH_UNIT_LABELS[u]}
+              </Chip>
+            ))}
+          </FilterGroup>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <GrowthChart points={series.users} unit={series.unit} label="Usuarios" />
+          <GrowthChart points={series.vehicles} unit={series.unit} label="Vehículos" />
+        </div>
+
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          Las barras son las altas de cada período; la línea es el acumulado. El
+          total de vehículos cuenta los registros históricos (activos + archivados),
+          así que no coincide con "Vehículos activos" de arriba. Se excluyen las
+          cuentas internas de test.
+        </p>
+      </section>
 
       <section className="mt-8">
         <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
@@ -154,7 +170,7 @@ function GraficosPage() {
                     sortKey="vehicles"
                     active={search.sort === 'vehicles'}
                     dir={search.dir}
-                    to="/graficos"
+                    to="/metricas"
                     align="right"
                     firstClick="asc"
                   />
@@ -163,7 +179,7 @@ function GraficosPage() {
                     sortKey="users"
                     active={search.sort === 'users'}
                     dir={search.dir}
-                    to="/graficos"
+                    to="/metricas"
                     align="right"
                     firstClick="desc"
                   />
@@ -172,7 +188,7 @@ function GraficosPage() {
                     sortKey="pctUsers"
                     active={search.sort === 'pctUsers'}
                     dir={search.dir}
-                    to="/graficos"
+                    to="/metricas"
                     align="right"
                     firstClick="desc"
                   />
@@ -181,7 +197,7 @@ function GraficosPage() {
                     sortKey="segmentVehicles"
                     active={search.sort === 'segmentVehicles'}
                     dir={search.dir}
-                    to="/graficos"
+                    to="/metricas"
                     align="right"
                     firstClick="desc"
                   />
@@ -190,7 +206,7 @@ function GraficosPage() {
                     sortKey="pctFleet"
                     active={search.sort === 'pctFleet'}
                     dir={search.dir}
-                    to="/graficos"
+                    to="/metricas"
                     align="right"
                     firstClick="desc"
                   />
@@ -245,5 +261,70 @@ function GraficosPage() {
         )}
       </section>
     </>
+  )
+}
+
+/**
+ * Adopción por función — con qué interactúa la gente y con qué no.
+ *
+ * Orden FIJO por % descendente: la tabla contesta "de un vistazo, ¿qué usan y
+ * qué no?", y para eso alcanza con verla ordenada. Sin `SortHeader` a propósito
+ * — no hay search param, así que no hay colisión de nombres que esquivar
+ * (`.claude/rules/notifications.md`) y `ssr: 'data-only'` se mantiene.
+ *
+ * La barra por fila es el mismo patrón que `Distribution` en `dashboard.tsx`:
+ * CSS puro sobre el token de marca, sin librería de charts (que traería su
+ * propia paleta y sus sombras — lo que el design system prohíbe).
+ */
+function AdoptionTable({ data }: { data: UsageAdoption }) {
+  const rows = [...data.features].sort((a, b) => b.pct - a.pct)
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-1 font-heading text-base font-semibold">Adopción por función</h2>
+      <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+        Sobre {formatInt(data.totalUsers)} usuarios reales (cuentas internas de
+        test excluidas). Cada fila cuenta a los usuarios que usaron esa función al
+        menos una vez, sin ventana temporal.
+      </p>
+
+      {data.totalUsers === 0 ? (
+        <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+          Todavía no hay usuarios reales para medir.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Función</TableHead>
+                <TableHead className="w-[9rem]" />
+                <TableHead className="text-right">Usuarios</TableHead>
+                <TableHead className="text-right">%</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.key}>
+                  <TableCell className="text-sm">{row.label}</TableCell>
+                  <TableCell>
+                    <span className="block h-2.5 overflow-hidden rounded-full bg-secondary">
+                      <span
+                        className="block h-full rounded-full bg-brand"
+                        style={{ width: `${row.pct}%` }}
+                      />
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{formatInt(row.users)}</TableCell>
+                  <TableCell className="text-right font-medium tabular-nums">
+                    {row.pct.toFixed(1)}%
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </section>
   )
 }

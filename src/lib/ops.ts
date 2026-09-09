@@ -73,7 +73,7 @@ export interface AdoptionPulse {
   vehiclesPerUser: number | null
 }
 
-// ── Serie de adopción (pantalla /graficos) ──────────────────────────────────
+// ── Serie de adopción (pantalla /metricas) ──────────────────────────────────
 
 /**
  * La granularidad temporal de los gráficos de crecimiento. Conjunto cerrado
@@ -131,7 +131,7 @@ export interface GrowthSeries {
   vehicles: Array<GrowthPoint>
 }
 
-// ── Distribución de vehículos por usuario (tabla de /graficos) ───────────────
+// ── Distribución de vehículos por usuario (tabla de /metricas) ───────────────
 
 /**
  * Qué autos cuenta cada fila de la tabla. `active` = sólo no archivados ("lo que
@@ -170,7 +170,7 @@ export const vehicleDistSearchSchema = z.object({
   fleetScope: z.enum(VEHICLE_DIST_SCOPES).catch('active').default('active'),
   /**
    * `sort`/`dir` pelados: es el nombre que `SortHeader` lee y el que usan todos
-   * los listados del panel. `/graficos` no comparte search params con ninguna
+   * los listados del panel. `/metricas` no comparte search params con ninguna
    * otra ruta vía `<Link>`, así que no hay colisión que esquivar.
    */
   sort: z.enum(VEHICLE_DIST_SORT_KEYS).catch('vehicles').default('vehicles'),
@@ -387,6 +387,54 @@ export const excludedDomainSchema = z.object({
 export const removeExcludedDomainSchema = z.object({
   domain: z.string().trim().toLowerCase().min(3).max(253),
 })
+
+// ── Adopción por función (tabla de /metricas) ───────────────────────────────
+
+/**
+ * Qué funciones de la app se miden, y en qué orden se DEFINEN (el orden VISUAL
+ * de la tabla se calcula por % descendente; este array sólo fija las claves y
+ * las etiquetas). Mismo patrón que `QUEUE_LABELS` y `CENSUS_ENTRIES` de
+ * `~/lib/users`: una sola lista, no tres lugares que se desincronizan.
+ *
+ * Cada `key` tiene una subconsulta `count(DISTINCT user_id)` en
+ * `usageAdoption()` de `src/server/ops.repo.ts`. Agregar una función es una
+ * línea acá y una subconsulta allá.
+ */
+export const ADOPTION_FEATURES = [
+  { key: 'vehicle', label: 'Cargó un vehículo' },
+  { key: 'push', label: 'Habilitó notificaciones (push token)' },
+  { key: 'fineSync', label: 'Consultó multas' },
+  { key: 'chat', label: 'Usó el chat de IA' },
+  { key: 'insurance', label: 'Cargó un seguro' },
+  { key: 'vtv', label: 'Cargó una VTV' },
+  { key: 'regCard', label: 'Cargó la cédula del vehículo' },
+  { key: 'scan', label: 'Escaneó con OBD' },
+  { key: 'maintenanceDone', label: 'Registró una tarea de mantenimiento hecha' },
+  { key: 'notified', label: 'Recibió una notificación' },
+  { key: 'license', label: 'Cargó la licencia de conducir' },
+  { key: 'maintenancePlan', label: 'Creó un plan de mantenimiento' },
+] as const
+
+export type AdoptionFeatureKey = (typeof ADOPTION_FEATURES)[number]['key']
+
+/** Una fila de la tabla: cuántos usuarios reales usaron `key` alguna vez. */
+export interface AdoptionFeatureRow {
+  key: AdoptionFeatureKey
+  label: string
+  users: number
+  /** `users` sobre `totalUsers`. Derivado en JS, no en SQL. 0 si no hay usuarios. */
+  pct: number
+}
+
+/**
+ * "Con qué interactúa la gente y con qué no." El denominador (`totalUsers`) son
+ * los usuarios reales — cuentas internas excluidas con el MISMO predicado que
+ * `adoptionPulse` (`ops.v_ai_usage` → `ops.excluded_email_domains`).
+ */
+export interface UsageAdoption {
+  totalUsers: number
+  features: Array<AdoptionFeatureRow>
+}
 
 // ── Agregado de pantalla ─────────────────────────────────────────────────────
 

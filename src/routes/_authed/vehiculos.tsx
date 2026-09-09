@@ -13,8 +13,10 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  *  - **Listado** — cada `vehicles` cargado en el sistema, uno por fila, sin
  *    deduplicar. Con lo que cuelga de cada auto: VTV, seguro, multas, deuda,
  *    tareas, escaneos.
- *  - **Métricas** — la flota agrupada por modelo del catálogo: cuántos autos
- *    de cada uno, y las métricas que eso habilita.
+ *  - **Flota** — los `vehicles` agrupados por modelo del catálogo: cuántos autos
+ *    de cada uno, y las métricas que eso habilita. La ruta sigue siendo
+ *    `/vehiculos/metricas`; sólo la etiqueta es "Flota", para no chocar con el
+ *    ítem de nav de primer nivel "Métricas".
  *
  * `/escaneres` NO es una pestaña de acá aunque comparta el eje (los modelos del
  * catálogo): es un hecho acumulado (qué hardware enganchó con qué auto), no un
@@ -36,7 +38,7 @@ interface Tab {
 const TABS: ReadonlyArray<Tab> = [
   { to: '/vehiculos/catalogo', label: 'Catálogo' },
   { to: '/vehiculos/listado', label: 'Listado' },
-  { to: '/vehiculos/metricas', label: 'Métricas' },
+  { to: '/vehiculos/metricas', label: 'Flota' },
 ]
 
 function VehiculosLayout() {
