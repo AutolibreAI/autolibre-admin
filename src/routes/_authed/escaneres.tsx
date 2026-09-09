@@ -1,7 +1,7 @@
 import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
 
 /**
- * `/escaneres` — la sección de escáneres OBD, en dos pestañas.
+ * `/escaneres` — la sección de escáneres OBD, en tres pestañas.
  *
  * Antes era una sola pantalla (la matriz de compatibilidad). Ahora:
  *
@@ -11,6 +11,9 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  *  - **Sesiones** — todos los escaneos, uno por fila: usuario, fecha, duración,
  *    DTCs, anomalías, distancia desde el borrado, y lo demás que el escaneo
  *    extrae. Ordenable y filtrable. → `.claude/rules/scan-sessions.md`
+ *  - **Detecciones** — cada fila un código DTC o un tipo de anomalía, agregado
+ *    sobre los escaneos que trajeron datos: cuántas veces, en cuántos autos,
+ *    en cuántos modelos. → `.claude/rules/scan-detections.md`
  *
  * Las dos son SOLO LECTURA: un escaneo es un hecho que pasó, no un estado que el
  * admin mueva. Mismo patrón de layout que `/vehiculos` y `/leads`.
@@ -26,6 +29,7 @@ export const Route = createFileRoute('/_authed/escaneres')({
 const TABS = [
   { to: '/escaneres/compatibilidad', label: 'Compatibilidad' },
   { to: '/escaneres/sesiones', label: 'Sesiones' },
+  { to: '/escaneres/detecciones', label: 'Detecciones' },
 ] as const
 
 function EscaneresLayout() {
