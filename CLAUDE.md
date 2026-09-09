@@ -186,7 +186,10 @@ pantalla no va todavía.
 |---|---|---|
 | `/dashboard` | `true` + streaming | El censo por `(role, auth_provider)`, el `count(*)` de partners y el `group by status` de leads, sueltos |
 | `/solicitudes` | `true` | Las consultas 1–6 del runbook `aprobar-partner-application.sql` |
-| `/partners` | `true` | El listado del directorio, la carga manual de rubros y **la ficha** (estado, coordenadas, contacto) |
+| `/partners` | — | Layout de 2 pestañas. Redirige a `/partners/listado`. → `.claude/rules/partners-coverage.md` |
+| `/partners/listado` | `true` | El listado del directorio, con los rubros (categorías) y servicios de cada uno, ordenable y filtrable por esas columnas. Antes era `/partners` |
+| `/partners/cobertura` | `true` | **La consulta que nadie corría**: qué oferta tiene cubierta el marketplace y cuál falta. Cruza las 16 `service_categories` contra `partners.coverage_zone` (texto crudo), con los huecos absolutos y los puntos únicos de falla |
+| `/partners/$partnerId` | — | La ficha: carga manual de rubros (consultas 7–8 del runbook) + editor de estado, coordenadas, contacto, perfil y links |
 | `/leads` | — | Layout de pestañas de las líneas de captación. Redirige a `/leads/talleres`. → `.claude/rules/leads.md` |
 | `/leads/talleres` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
 | `/leads/seguros` | `true` | El `select … from insurances where expiration_date < now() + interval '30 days'` que hoy nadie corre — la cola de pólizas por vencer para ofrecer alternativas |
@@ -470,6 +473,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `backend-contracts.md` | Bounded contexts, vocabulario, auth Clerk, dónde vive cada dato |
 | `database.md` | Cómo consultar, 42 tablas, enums, las dos funciones de app |
 | `partner-approval.md` | La primera pantalla real: el runbook de aprobación de partners y sus trampas |
+| `partners-coverage.md` | La sección `/partners` en pestañas: el vocabulario de UI (`Rubro`=categoría), el listado ampliado, y el tablero de cobertura (eje de zonas en crudo, el invariante 1 partner=1 zona que hace sumable `categoryTotals`, por qué `chasis-y-frenos` no es columna, huecos y punto único de falla) |
 | `ai-costs.md` | El schema `ops`: migraciones, costo NULL vs 0, precios con vigencia, qué NO se mide |
 | `ops-metrics.md` | Métricas de operación: dueño del SQL, `failed` vs `stuck`, el predicado de "interno" |
 | `ops-write-actions.md` | Los SP de `ops` que escriben `public`: por qué se permiten, los 8 guardrails, las dos minas, y los dos SP que se decidió NO escribir |

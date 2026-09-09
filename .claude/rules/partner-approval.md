@@ -110,8 +110,14 @@ Hacelo la primera vez.
 
 # Consultas 7 y 8 — el editor de rubros
 
-`/partners` (listado) y `/partners/$partnerId` (editor). Reemplazan las tres consultas de
+`/partners/listado` y `/partners/$partnerId` (editor). Reemplazan las tres consultas de
 mantenimiento del runbook: la 6 (invisibles), la 7 (qué tiene cada uno) y la 8 (carga manual).
+
+> **`/partners` pasó a ser un layout de 2 pestañas el 2026-09-08** (Listado · Cobertura), mismo
+> patrón que `/leads` y `/vehiculos`. Todo lo de esta sección vale igual — sólo cambió el prefijo:
+> `/partners` → `/partners/listado`. El tablero de Cobertura y el vocabulario de UI
+> (`Rubro` = las 16 `service_categories`, `Servicio` = los 79 `services`) están en
+> `.claude/rules/partners-coverage.md`.
 
 ## Por qué van juntas en una pantalla
 
@@ -123,8 +129,13 @@ el repo los aplica en una transacción.
 
 ## El orden del listado no es alfabético a propósito
 
-`ORDER BY count(ps.service_id), p.name` — los de cero van **primero**. Un listado alfabético los
-esconde en el medio, que es exactamente lo que hace que este modo de falla pase desapercibido.
+El **default** es `sort=services` `asc` con desempate por `name` — o sea el viejo
+`ORDER BY count(ps.service_id), p.name`: los de cero rubros van **primero**. Un listado alfabético
+los esconde en el medio, que es exactamente lo que hace que este modo de falla pase desapercibido.
+
+Desde el 2026-09-08 el listado es ordenable por columna (el operador puede pasar a alfabético), pero
+el default no se toca y `PARTNER_SORT_COLUMNS` en `partners.repo.ts` **siempre** appendea `t.name`
+como último criterio para que ese default siga siendo estable.
 
 ## Sugerencias para lo que la automática ignoró
 

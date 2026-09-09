@@ -31,7 +31,12 @@ export interface PartnerListItem {
   name: string
   status: string
   coverageZone: string
+  /** Cuántos `services` tiene cargados en `partner_services` ("Servicios" en la UI). */
   serviceCount: number
+  /** Cuántas `service_categories` distintas cubren esos servicios ("Rubros" en la UI). */
+  categoryCount: number
+  /** Los rubros (categorías) que cubre, en orden de catálogo. */
+  categories: Array<{ slug: string; name: string }>
   /** Sin un solo rubro: se lista sin filtro pero no sale bajo ningún chip. */
   invisible: boolean
 }
@@ -120,10 +125,52 @@ export function normalizeForMatch(value: string): string {
 
 // ── Search params ────────────────────────────────────────────────────────────
 
+/**
+ * Vocabulario de la UI de Partners: "Rubro" = `service_categories` (16),
+ * "Servicio" = `services` (79). Ver `~/lib/partners-coverage`.
+ */
+export const PARTNER_LIST_SORT_KEYS = [
+  'services',
+  'categories',
+  'name',
+  'zone',
+  'status',
+] as const
+export type PartnerListSortKey = (typeof PARTNER_LIST_SORT_KEYS)[number]
+
+export const PARTNER_STATUS_FILTERS = ['all', 'active', 'paused', 'archived'] as const
+export type PartnerStatusFilter = (typeof PARTNER_STATUS_FILTERS)[number]
+
+export const PARTNER_STATUS_FILTER_LABELS: Record<PartnerStatusFilter, string> = {
+  all: 'Todos',
+  active: 'Publicados',
+  paused: 'Pausados',
+  archived: 'Archivados',
+}
+
 export const partnerSearchSchema = z.object({
   q: z.string().trim().max(80).optional(),
   /** Solo los que quedaron sin rubros — el chequeo de la consulta 6. */
   onlyInvisible: z.coerce.boolean().catch(false).default(false),
+  /**
+   * Estado del partner. Se llama `partnerStatus` y NO `status` a propósito:
+   * `/solicitudes` ya usa `status` con el enum `partner_application_status`, y
+   * dos search params con la misma clave y enums disjuntos rompen el typecheck
+   * de la ruta ajena (ver `.claude/rules/notifications.md`).
+   */
+  partnerStatus: z.enum(PARTNER_STATUS_FILTERS).catch('all').default('all'),
+  /** Slug de `service_categories`: filtra a los que cubren ≥1 servicio de ese rubro. */
+  category: z.string().trim().max(60).optional(),
+  /** Slug de `services`: filtra a los que tienen ese servicio puntual. */
+  service: z.string().trim().max(80).optional(),
+  /**
+   * Default `services` asc: los de menos servicios —los invisibles— van
+   * primero. Reproduce el `ORDER BY count(ps.service_id), p.name` que la regla
+   * de `partner-approval.md` puso a propósito para que el modo de falla no se
+   * esconda en el medio de la lista. El operador puede re-ordenar.
+   */
+  sort: z.enum(PARTNER_LIST_SORT_KEYS).catch('services').default('services'),
+  dir: z.enum(['asc', 'desc']).catch('asc').default('asc'),
 })
 
 export type PartnerSearch = z.infer<typeof partnerSearchSchema>
