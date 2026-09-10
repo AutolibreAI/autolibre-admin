@@ -21,6 +21,7 @@ import {
   MessageSquare,
   ScanLine,
   Store,
+  TrendingUp,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -181,9 +182,17 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * única escritura es sobre `ops`, que este repo posee.
    *
    * `Costos de IA` vive entero en `ops` — el schema que este repo migra.
+   *
+   * `Negocio` es la tercera excepción: el P&L mensual. No espeja ningún bounded
+   * context —cruza `public` con `ops` y con números que no viven en ninguna
+   * tabla (planes, FX, infra)— y es la primera pantalla del panel que NO
+   * reemplaza una consulta de DBeaver, porque el P&L no se puede correr a mano.
+   * Va última porque su lectura consume a las otras dos (el costo de IA es una
+   * de sus líneas). → el plan de `/negocio`.
    */
   { to: "/operacion", label: "Operación", icon: Activity },
   { to: "/ai-costos", label: "Costos de IA", icon: Coins },
+  { to: "/negocio", label: "Negocio", icon: TrendingUp },
 ];
 
 function Wordmark() {

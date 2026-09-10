@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { lastSignalSql } from '~/lib/activity'
 import type {
   AuthProvider,
   MaintenanceTaskState,
@@ -122,7 +123,9 @@ const SORT_COLUMNS: Record<UserSortKey, string> = {
  *     `users` no tiene `last_seen_at`. Inventar una columna acá sería inventar
  *     dominio (regla dura 8); derivarla del dato que sí existe, no. Queda `null`
  *     para el que se registró y nunca hizo nada — que es exactamente lo que se
- *     quiere ver.
+ *     quiere ver. La lista de señales vive en `~/lib/activity`, compartida con
+ *     el criterio de churn de `/negocio`: si divergen, el panel dice dos cosas
+ *     distintas del mismo usuario.
  *
  *  3. **`driver_license_days_until_expiration` se calcula acá, no en React.**
  *     Esta pantalla es SSR completo — si el "cuántos días faltan" se calculara
@@ -227,11 +230,7 @@ export async function listUsers(
            from driving_sessions d where d.user_id = u.id) as scans_ok,
         (select count(*)::int
            from driving_sessions d where d.user_id = u.id) as scans_total,
-        greatest(
-          (select max(v.created_at) from vehicles v where v.user_id = u.id),
-          (select max(c.created_at) from conversations c where c.user_id = u.id),
-          (select max(d.created_at) from driving_sessions d where d.user_id = u.id)
-        ) as last_activity_at,
+        ${lastSignalSql('u.id')} as last_activity_at,
         -- El registro: la fila NO archivada más reciente y, si no hay
         -- ninguna, la archivada más reciente — mismo criterio que
         -- insurances/registration_cards en findUserDetail.

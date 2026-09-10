@@ -89,8 +89,13 @@ export function windowStart(window: OpsWindow): Date | null {
  * Si acá se usara `email LIKE '%@'||domain`, un email `foo@sub.autolibre.app`
  * contaría como interno en esta pantalla y como externo en Costos de IA — dos
  * respuestas distintas a la misma pregunta, y ningún error para encontrarlo.
+ *
+ * Se exporta (server-only → server-only) para que `business.repo.ts` cuente
+ * "usuarios reales" con el MISMO predicado en `/negocio`. Una tercera copia
+ * sería exactamente el bug que este comentario describe. Asume el alias `u`
+ * para `users` — el llamador tiene que respetarlo.
  */
-const INTERNAL_PREDICATE = `coalesce(
+export const INTERNAL_PREDICATE = `coalesce(
   split_part(lower(u.email), '@', 2) IN (SELECT d.domain FROM ops.excluded_email_domains d),
   false
 )`
