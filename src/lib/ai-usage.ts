@@ -109,6 +109,41 @@ export interface UsageSummary {
   internalEvents: number
 }
 
+/**
+ * Los tres valores de "costo del período" que pidió producto: el gasto de la
+ * ventana elegida, ese gasto repartido entre los usuarios reales activos EN LA
+ * APP, y repartido entre los que alguna vez usaron el chat del asistente.
+ *
+ * "Usuario real" = distinto, no interno (`ops.excluded_email_domains`). Los dos
+ * denominadores son subconjuntos distintos y **ninguno contiene al otro**:
+ *
+ *  - `activeUsers`: con actividad en la app (alta de vehículo / conversación /
+ *    sesión de manejo) DENTRO de la ventana — misma definición de
+ *    `last_activity_at` que `listUsers`. Con ventana `all` son todos los
+ *    usuarios reales (sin corte de actividad).
+ *  - `activeChatUsers`: con una `conversation` con ≥1 mensaje, ALGUNA VEZ (no se
+ *    acota a la ventana). Mismo predicado que la fila `chat` de `usageAdoption`
+ *    en `~/lib/ops`.
+ *
+ * Alguien pudo chatear hace un año y no abrir la app esta semana → estaría en
+ * `activeChatUsers` y no en `activeUsers`. Por eso `activeChatUsers` puede ser
+ * mayor que `activeUsers`.
+ *
+ * Las razones se derivan en el componente (`periodUsd / n`), no en SQL, y son
+ * `null` si `periodUsd` es `null` (todo sin precio) o el divisor es 0 — nunca 0,
+ * que se leería como "gratis".
+ */
+export interface UsageUnitEconomics {
+  /** Gasto de la ventana. `null` si ningún evento tiene precio (ver `formatUsd`). */
+  periodUsd: number | null
+  /** Llamadas de la ventana sin tarifa vigente — el `periodUsd` no las incluye. */
+  unpricedEvents: number
+  /** Usuarios reales con actividad en la app dentro de la ventana. */
+  activeUsers: number
+  /** Usuarios reales que alguna vez tuvieron una conversación con ≥1 mensaje. */
+  activeChatUsers: number
+}
+
 export interface UsageByModel {
   model: string
   provider: string | null
@@ -218,6 +253,16 @@ export function formatUsd(value: number | null): string {
   if (value === null) return '—'
   if (value !== 0 && Math.abs(value) < 0.01) return usdSmall.format(value)
   return usd.format(value)
+}
+
+/**
+ * Siempre 4 decimales, para las razones "costo por usuario" — con Haiku a
+ * US$1/US$5 el Mtok, el gasto por persona vive en centésimas de centavo y los
+ * 2 decimales de `formatUsd` colapsarían dos valores distintos al mismo
+ * "US$ 0,02". `null` → "—".
+ */
+export function formatUsdPrecise(value: number | null): string {
+  return value === null ? '—' : usdSmall.format(value)
 }
 
 const compact = new Intl.NumberFormat('es-AR', {

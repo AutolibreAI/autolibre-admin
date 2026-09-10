@@ -7,6 +7,7 @@ import {
   usageByUser,
   usageDaily,
   usageSummary,
+  usageUnitEconomics,
 } from '~/server/ai-usage.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -17,6 +18,7 @@ import type {
   UsageByUser,
   UsageDay,
   UsageSummary,
+  UsageUnitEconomics,
 } from '~/lib/ai-usage'
 
 /**
@@ -39,6 +41,18 @@ export const getAiUsageSummary = createServerFn({ method: 'GET' })
   .validator(aiUsageSearchSchema)
   .handler(async ({ data }): Promise<UsageSummary> =>
     usageSummary(data, { signal: requestSignal() }),
+  )
+
+/**
+ * Los tres valores de "costo del período" — total, por usuario activo, y por
+ * usuario activo que además chatea. Mismo `adminMiddleware`: publica gasto
+ * agregado y el tamaño del padrón activo.
+ */
+export const getAiUsageUnitEconomics = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(aiUsageSearchSchema)
+  .handler(async ({ data }): Promise<UsageUnitEconomics> =>
+    usageUnitEconomics(data, { signal: requestSignal() }),
   )
 
 export const getAiUsageByModel = createServerFn({ method: 'GET' })

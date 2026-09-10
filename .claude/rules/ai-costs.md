@@ -197,6 +197,50 @@ error tolerable de los dos, pero es una diferencia real — no la busques como b
 contra el resumen de OpenAI. Medirlo bien necesita al backend: viene en
 `usage.prompt_tokens_details.cached_tokens` de la respuesta, y si no se anota ahí se pierde.
 
+## Los tres valores de "costo del período" (`usageUnitEconomics`)
+
+Pedido de producto (2026-09-10): ver el gasto de la ventana elegida tres veces —
+total, ÷ usuarios activos en la app, ÷ usuarios que alguna vez usaron el chat.
+
+- **"Unidad de tiempo" = la ventana elegida** (7d / 30d / 90d / todo), NO un
+  promedio por día. `periodUsd` es el mismo número que el tile "Gasto estimado";
+  se muestra igual porque es el numerador de los otros dos.
+- **`activeUsers` (valor 2) = usuario real con actividad EN LA APP dentro de la
+  ventana.** "Actividad" = `last_activity_at >= p_from`, con `last_activity_at`
+  copiado LITERAL de `listUsers` en `users.repo.ts` (`greatest()` de alta de
+  vehículo / conversación / sesión de manejo). **NO** es "hizo una llamada de
+  IA" — eso confunde el denominador con el numerador. Con ventana `all` no hay
+  corte: son todos los usuarios reales.
+- **`activeChatUsers` (valor 3) = usuario real con una `conversation` con ≥1
+  mensaje, ALGUNA VEZ.** No se acota a la ventana (mismo predicado que la fila
+  `chat` de `usageAdoption` en `~/lib/ops`). La pregunta es "de nuestra gente
+  que chatea, cuánto sale la IA por cabeza".
+- **(2) y (3) son subconjuntos distintos y NINGUNO contiene al otro.** Alguien
+  que chateó hace un año y no abrió la app esta semana está en `activeChatUsers`
+  y no en `activeUsers` → el valor 3 puede tener un denominador MÁS grande que el
+  valor 2. No es un bug.
+- **"Usuario real"** = no interno, con `REAL_USER_PREDICATE` copiado literal de
+  `ops.v_ai_usage` (`split_part(lower(email), '@', 2) IN (...)`). Si diverge,
+  estos denominadores y el `internal_events` de `ai_usage_summary` dejan de
+  hablar de la misma gente (`ops-metrics.md`, trampa 1).
+- **Las razones se derivan en el componente**, y son `null` → "—" si `periodUsd`
+  es `null` (todo sin precio) o el divisor es 0. Nunca 0 — se leería como
+  "gratis". `formatUsdPrecise` (4 decimales) porque el gasto por persona vive en
+  centésimas de centavo y `formatUsd` colapsaría dos valores distintos a
+  "US$ 0,02".
+
+### Por qué es un SELECT crudo y no una función de `ops`
+
+`ai-usage.repo.ts` invoca funciones de `migrations/`; `usageUnitEconomics` es la
+excepción. Dos motivos: (1) cruza a `public.users` / `vehicles` / `conversations`
+/ `conversation_messages` / `driving_sessions`, y una función de `ops` que lee
+`public` es la dependencia cruzada que `ops-metrics.md` desaconseja; (2) es
+lectura pura y `ops.schema_migrations` es por base — una migración nueva habría
+que aplicarla a mano en producción. Agrega `ops.v_ai_usage_costed` directo (que
+ya trae el LEFT JOIN a la tarifa y el flag `internal`), mismo criterio que
+`ops.repo.ts` con `public`. `sum(total_usd)` preserva el NULL igual que
+`ops.ai_usage_summary`.
+
 ## Lo único que SÍ necesita al backend
 
 Instrumentar una superficie que hoy no mide.
