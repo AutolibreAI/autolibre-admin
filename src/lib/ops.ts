@@ -410,9 +410,13 @@ export const ADOPTION_FEATURES = [
   { key: 'regCard', label: 'Cargó la cédula del vehículo' },
   { key: 'scan', label: 'Escaneó con OBD' },
   { key: 'maintenanceDone', label: 'Registró una tarea de mantenimiento hecha' },
+  { key: 'maintenanceUpcoming', label: 'Se puso un recordatorio de mantenimiento' },
   { key: 'notified', label: 'Recibió una notificación' },
   { key: 'license', label: 'Cargó la licencia de conducir' },
   { key: 'maintenancePlan', label: 'Creó un plan de mantenimiento' },
+  { key: 'odometer', label: 'Cargó el odómetro' },
+  { key: 'anyDocument', label: 'Cargó al menos un documento' },
+  { key: 'proposalAccepted', label: 'Aceptó algo que propuso el chat' },
 ] as const
 
 export type AdoptionFeatureKey = (typeof ADOPTION_FEATURES)[number]['key']
@@ -435,6 +439,136 @@ export interface UsageAdoption {
   totalUsers: number
   features: Array<AdoptionFeatureRow>
 }
+
+// ── Preguntas: recurrencia de escaneo (bloque 2 de /metricas) ────────────────
+
+/**
+ * Una fila de la distribución: cuántos usuarios hicieron exactamente `scans`
+ * escaneos, y el rango de días entre el primero y el último de cada uno.
+ *
+ * Grano = usuario, universo = TODAS las `driving_sessions` (no sólo las que
+ * trajeron datos): la pregunta es "¿quiere saber cómo está su auto?", y un
+ * intento fallido también es esa intención. Sin ventana temporal, igual que la
+ * matriz de `/escaneres` — la pregunta es acumulativa.
+ */
+export interface ScanRecurrenceBucket {
+  scans: number
+  users: number
+  /** Días entre la primera y la última sesión, mínimo/máximo/promedio del bucket. */
+  spanDaysMin: number
+  spanDaysMax: number
+  spanDaysAvg: number
+}
+
+export interface ScanRecurrence {
+  totalUsers: number
+  totalSessions: number
+  buckets: Array<ScanRecurrenceBucket>
+}
+
+// ── Preguntas: qué produce el chat (bloque 3) ───────────────────────────────
+
+export const PROPOSAL_STATUSES = ['pending', 'accepted', 'dismissed'] as const
+export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number]
+
+export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
+  pending: 'Pendientes',
+  accepted: 'Aceptadas',
+  dismissed: 'Descartadas',
+}
+
+export interface ProposalStatusRow {
+  status: ProposalStatus
+  count: number
+  /** De esas, cuántas nacieron de una conversación (`conversation_id IS NOT NULL`). */
+  fromConversation: number
+}
+
+/**
+ * `assistant_proposals` agrupadas por estado.
+ *
+ * `types` son los valores presentes de `assistant_proposal_type`. Hoy es sólo
+ * `['maintenance']`, y el bloque lo dice en voz alta: "pedidos" y "búsqueda de
+ * proveedores" desde el chat no es que no se usen — **no se pueden
+ * representar**. Mostrar sólo el conteo dejaría creer que las otras dos existen
+ * y dan cero. Un valor nuevo del enum del backend aparece solo acá.
+ */
+export interface ProposalStats {
+  total: number
+  byStatus: Array<ProposalStatusRow>
+  types: Array<string>
+}
+
+// ── Preguntas: tareas sin solución (bloque 4) ───────────────────────────────
+
+/**
+ * Los tres resultados de cruzar una tarea creada a mano contra el marketplace.
+ * Separarlos es el punto: **"no lo entendimos" es un bug de la app y "no lo
+ * tenemos" es un hueco del marketplace** — van a equipos distintos.
+ */
+export const UNSOLVED_KINDS = ['no_service', 'no_partner', 'covered'] as const
+export type UnsolvedKind = (typeof UNSOLVED_KINDS)[number]
+
+export interface UnsolvedTaskRow {
+  /** `maintenance_occurrences.service_slug` crudo. `null` = la app no clasificó. */
+  serviceSlug: string | null
+  /** `services.name` si el slug resuelve a un servicio del catálogo. */
+  serviceName: string | null
+  /** Categoría del servicio — para enlazar a `/partners/cobertura`. */
+  categorySlug: string | null
+  categoryName: string | null
+  kind: UnsolvedKind
+  tasks: number
+  users: number
+  /** Partners activos que ofrecen ese servicio. */
+  activePartners: number
+}
+
+export interface UnsolvedTasks {
+  rows: Array<UnsolvedTaskRow>
+  totalTasks: number
+}
+
+// ── Preguntas: lo que todavía no se puede medir (bloque 5) ──────────────────
+
+export interface CantMeasureItem {
+  question: string
+  why: string
+  needs: string
+}
+
+/**
+ * Lista CERRADA. Bloque `tone="warn"` (ámbar: falta un dato, no está roto nada),
+ * mismo criterio que "DTCs sin título" en `/escaneres/detecciones`: trabajo
+ * pendiente que se ve aunque no se pueda hacer desde acá. Es lo que evita que se
+ * vuelva a preguntar en tres meses.
+ *
+ * Las cuatro son del backend. Ninguna se "arregla" inventando un proxy — mismo
+ * criterio que la medición de tokens de IA (`ai-costs.md`) y los clicks de
+ * WhatsApp a partners (`leads.md`).
+ */
+export const CANT_MEASURE_YET: ReadonlyArray<CantMeasureItem> = [
+  {
+    question: 'Recurrencia de las consultas de multas',
+    why: '`vehicle_fine_syncs` es PK por `vehicle_id` y `fine_lookups` es UNIQUE por `plate`: cada consulta pisa la anterior, no queda historial.',
+    needs: 'Que el backend escriba append-only cada lookup.',
+  },
+  {
+    question: 'Pedidos con/sin presupuesto y tiempo de entrega del presupuesto',
+    why: '`leads` tiene 0 filas y `lead_status` (`new/contacted/won/lost`) no tiene un estado de "presupuesto entregado".',
+    needs: 'Que exista el flujo de pedidos, y un sello de tiempo de presupuesto entregado.',
+  },
+  {
+    question: 'Recurrencia de carga del odómetro',
+    why: '`vehicle_audit_logs` existe exactamente para esto —su enum `vehicle_audit_field` tiene un único valor, `odometer`— y tiene 0 filas.',
+    needs: 'Que el backend escriba esa tabla al actualizar el odómetro.',
+  },
+  {
+    question: 'Pedidos y búsqueda de proveedores desde el chat',
+    why: '`assistant_proposal_type` tiene un solo valor: `maintenance`.',
+    needs: 'Un valor nuevo en el enum del backend.',
+  },
+]
 
 // ── Agregado de pantalla ─────────────────────────────────────────────────────
 

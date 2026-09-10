@@ -2,7 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
-import { ADOPTION_FEATURES, OPS_WINDOW_HOURS, QUEUE_LABELS } from '~/lib/ops'
+import { ADOPTION_FEATURES, OPS_WINDOW_HOURS, PROPOSAL_STATUSES, QUEUE_LABELS } from '~/lib/ops'
 import type {
   AdoptionFeatureRow,
   AdoptionPulse,
@@ -15,8 +15,14 @@ import type {
   LeadFunnel,
   MarketplaceHealth,
   OpsWindow,
+  ProposalStats,
+  ProposalStatus,
   QueueHealth,
   QueueKey,
+  ScanRecurrence,
+  UnsolvedKind,
+  UnsolvedTaskRow,
+  UnsolvedTasks,
   UsageAdoption,
   VehicleDistBucket,
   VehicleDistribution,
@@ -377,9 +383,13 @@ interface UsageRow {
   reg_card: number
   scan: number
   maintenance_done: number
+  maintenance_upcoming: number
   notified: number
   license: number
   maintenance_plan: number
+  odometer: number
+  any_document: number
+  proposal_accepted: number
 }
 
 /**
@@ -451,13 +461,35 @@ export async function usageAdoption(
       (SELECT count(DISTINCT mo.user_id)
          FROM maintenance_occurrences mo JOIN real_users r ON r.id = mo.user_id
          WHERE mo.performed_at IS NOT NULL)::int AS maintenance_done,
+      -- Un recordatorio: ocurrencia sin performed_at y con al menos un
+      -- vencimiento cargado (fecha o km). Es la cara "lo que se recordo" de la
+      -- fila 2, distinta de "lo que ya hizo" (arriba) y del plan recurrente.
+      (SELECT count(DISTINCT mo.user_id)
+         FROM maintenance_occurrences mo JOIN real_users r ON r.id = mo.user_id
+         WHERE mo.performed_at IS NULL
+           AND (mo.due_date IS NOT NULL OR mo.due_km IS NOT NULL))::int AS maintenance_upcoming,
       (SELECT count(DISTINCT n.user_id)
          FROM notifications n JOIN real_users r ON r.id = n.user_id
          WHERE n.delivery_status = 'sent')::int AS notified,
       (SELECT count(DISTINCT dl.user_id)
          FROM driver_licenses dl JOIN real_users r ON r.id = dl.user_id)::int AS license,
       (SELECT count(DISTINCT mp.user_id)
-         FROM maintenance_plans mp JOIN real_users r ON r.id = mp.user_id)::int AS maintenance_plan
+         FROM maintenance_plans mp JOIN real_users r ON r.id = mp.user_id)::int AS maintenance_plan,
+      (SELECT count(DISTINCT v.user_id)
+         FROM vehicles v JOIN real_users r ON r.id = v.user_id
+         WHERE coalesce(v.odometer_value, 0) > 0)::int AS odometer,
+      -- OR de cuatro documentos, NO una suma: sumar contaria dos veces a quien
+      -- cargo seguro y cedula. Misma definicion de "es OCR" que las 4 filas que
+      -- ya existen (VTV filtra file_id IS NOT NULL, ver documents.md).
+      (SELECT count(*) FROM real_users r
+         WHERE EXISTS (SELECT 1 FROM insurances i WHERE i.user_id = r.id)
+            OR EXISTS (SELECT 1 FROM registration_cards rc WHERE rc.user_id = r.id)
+            OR EXISTS (SELECT 1 FROM driver_licenses dl WHERE dl.user_id = r.id)
+            OR EXISTS (SELECT 1 FROM vehicle_inspections vi
+                        WHERE vi.user_id = r.id AND vi.file_id IS NOT NULL))::int AS any_document,
+      (SELECT count(DISTINCT ap.user_id)
+         FROM assistant_proposals ap JOIN real_users r ON r.id = ap.user_id
+         WHERE ap.status = 'accepted')::int AS proposal_accepted
   `)
 
   const total = toInt(row?.total)
@@ -476,9 +508,13 @@ export async function usageAdoption(
     regCard: toInt(row?.reg_card),
     scan: toInt(row?.scan),
     maintenanceDone: toInt(row?.maintenance_done),
+    maintenanceUpcoming: toInt(row?.maintenance_upcoming),
     notified: toInt(row?.notified),
     license: toInt(row?.license),
     maintenancePlan: toInt(row?.maintenance_plan),
+    odometer: toInt(row?.odometer),
+    anyDocument: toInt(row?.any_document),
+    proposalAccepted: toInt(row?.proposal_accepted),
   }
 
   const features: Array<AdoptionFeatureRow> = ADOPTION_FEATURES.map((f) => {
@@ -492,6 +528,218 @@ export async function usageAdoption(
   })
 
   return { totalUsers: total, features }
+}
+
+// ── Preguntas: recurrencia de escaneo ───────────────────────────────────────
+
+interface ScanRecurrenceRow {
+  scans: number | string
+  users: number | string
+  span_min: number | string | null
+  span_max: number | string | null
+  span_avg: number | string | null
+}
+
+/**
+ * Reemplaza: nada. "Cuántos usuarios escanean y cada cuánto" hoy no se mira.
+ *
+ * Grano = usuario, universo = TODAS las `driving_sessions` (no sólo las que
+ * trajeron datos: un intento fallido también es "quiere saber cómo está su
+ * auto"). `span_days` es la diferencia de fechas entre la primera y la última
+ * sesión de cada usuario — 0 para quien escaneó una sola vez o todas el mismo
+ * día.
+ *
+ * Sin ventana temporal, igual que la matriz de `/escaneres` y la tabla de
+ * adopción: la pregunta es acumulativa y con ~14 usuarios cualquier ventana
+ * vacía la tabla.
+ */
+export async function scanRecurrence(
+  opts: { signal?: AbortSignal } = {},
+): Promise<ScanRecurrence> {
+  void opts.signal
+
+  const rows = await sql<ScanRecurrenceRow>(`
+    WITH per_user AS (
+      SELECT user_id,
+        count(*)::int AS n,
+        (max(started_at)::date - min(started_at)::date)::int AS span_days
+      FROM driving_sessions
+      GROUP BY user_id
+    )
+    SELECT
+      n                       AS scans,
+      count(*)::int           AS users,
+      min(span_days)::int     AS span_min,
+      max(span_days)::int     AS span_max,
+      avg(span_days)::float8  AS span_avg
+    FROM per_user
+    GROUP BY n
+    ORDER BY n
+  `)
+
+  const buckets = rows.map((r) => ({
+    scans: toInt(r.scans),
+    users: toInt(r.users),
+    spanDaysMin: toInt(r.span_min),
+    spanDaysMax: toInt(r.span_max),
+    spanDaysAvg: Number(r.span_avg ?? 0),
+  }))
+
+  return {
+    totalUsers: buckets.reduce((sum, b) => sum + b.users, 0),
+    totalSessions: buckets.reduce((sum, b) => sum + b.scans * b.users, 0),
+    buckets,
+  }
+}
+
+// ── Preguntas: qué produce el chat ──────────────────────────────────────────
+
+interface ProposalStatusSqlRow {
+  status: ProposalStatus
+  count: number | string
+  from_conversation: number | string
+}
+
+/**
+ * Reemplaza: nada. `assistant_proposals` es lo que el asistente propone y el
+ * usuario acepta o descarta.
+ *
+ * `byStatus` incluye SIEMPRE los tres estados aunque uno quede en cero — es
+ * `/usuarios`, no Inicio: acá el cero es el síntoma que se vino a buscar. Los
+ * `types` salen de `select distinct` para que un valor nuevo del enum del
+ * backend aparezca solo (mismo patrón que `listDistinctChatModels`).
+ */
+export async function assistantProposalStats(
+  opts: { signal?: AbortSignal } = {},
+): Promise<ProposalStats> {
+  void opts.signal
+
+  const [statusRows, typeRows] = await Promise.all([
+    sql<ProposalStatusSqlRow>(`
+      SELECT status::text AS status,
+        count(*)::int AS count,
+        count(*) FILTER (WHERE conversation_id IS NOT NULL)::int AS from_conversation
+      FROM assistant_proposals
+      GROUP BY status
+    `),
+    sql<{ type: string }>(
+      `SELECT DISTINCT type::text AS type FROM assistant_proposals ORDER BY 1`,
+    ),
+  ])
+
+  const byKey = new Map(statusRows.map((r) => [r.status, r]))
+  const byStatus = PROPOSAL_STATUSES.map((status) => {
+    const row = byKey.get(status)
+    return {
+      status,
+      count: toInt(row?.count),
+      fromConversation: toInt(row?.from_conversation),
+    }
+  })
+
+  return {
+    total: byStatus.reduce((sum, r) => sum + r.count, 0),
+    byStatus,
+    types: typeRows.map((r) => r.type),
+  }
+}
+
+// ── Preguntas: tareas sin solución ──────────────────────────────────────────
+
+interface UnsolvedSqlRow {
+  service_slug: string | null
+  service_name: string | null
+  category_slug: string | null
+  category_name: string | null
+  tasks: number | string
+  users: number | string
+  active_partners: number | string
+}
+
+/**
+ * Reemplaza: nada, y es la consulta con más valor de la sección. Una tarea que
+ * el usuario creó a mano (`plan_id IS NULL`, no la autogeneró un plan) y a la
+ * que no le podemos ofrecer un taller.
+ *
+ * Cadena: `service_slug` → `services.slug` → `partner_services` → `partners`
+ * activos. Tres resultados, y separarlos es el punto:
+ *
+ *  - `no_service` (`service_slug IS NULL`): la app no supo clasificar lo que se
+ *    escribió. Es un bug de la app.
+ *  - `no_partner` (0 partners activos): sabemos qué necesita y no tenemos a
+ *    quién mandarlo. Es un hueco del marketplace.
+ *  - `covered` (≥1 partner activo): el resto.
+ *
+ * `service_task_slug` NO entra en el corte: es el detalle dentro del rubro, y
+ * para saber si podemos derivar a alguien alcanza con el rubro.
+ */
+export async function unsolvedTasks(
+  opts: { signal?: AbortSignal } = {},
+): Promise<UnsolvedTasks> {
+  void opts.signal
+
+  const rows = await sql<UnsolvedSqlRow>(`
+    WITH occ AS (
+      SELECT user_id, service_slug
+      FROM maintenance_occurrences
+      WHERE plan_id IS NULL AND NOT archived
+    ),
+    agg AS (
+      SELECT service_slug,
+        count(*)::int AS tasks,
+        count(DISTINCT user_id)::int AS users
+      FROM occ
+      GROUP BY service_slug
+    )
+    SELECT
+      a.service_slug,
+      s.name  AS service_name,
+      sc.slug AS category_slug,
+      sc.name AS category_name,
+      a.tasks,
+      a.users,
+      coalesce((
+        SELECT count(DISTINCT p.id)::int
+        FROM services s2
+        JOIN partner_services ps ON ps.service_id = s2.id
+        JOIN partners p ON p.id = ps.partner_id AND p.status = 'active'
+        WHERE s2.slug = a.service_slug
+      ), 0) AS active_partners
+    FROM agg a
+    LEFT JOIN services s ON s.slug = a.service_slug
+    LEFT JOIN service_categories sc ON sc.id = s.category_id
+  `)
+
+  const mapped: Array<UnsolvedTaskRow> = rows.map((r) => {
+    const activePartners = toInt(r.active_partners)
+    const kind: UnsolvedKind =
+      r.service_slug === null ? 'no_service' : activePartners === 0 ? 'no_partner' : 'covered'
+    return {
+      serviceSlug: r.service_slug,
+      serviceName: r.service_name,
+      categorySlug: r.category_slug,
+      categoryName: r.category_name,
+      kind,
+      tasks: toInt(r.tasks),
+      users: toInt(r.users),
+      activePartners,
+    }
+  })
+
+  // `no_service` primero siempre; después por partners ascendente (los huecos
+  // arriba); desempate por tareas descendente.
+  const KIND_RANK: Record<UnsolvedKind, number> = { no_service: 0, no_partner: 1, covered: 2 }
+  mapped.sort(
+    (a, b) =>
+      KIND_RANK[a.kind] - KIND_RANK[b.kind] ||
+      a.activePartners - b.activePartners ||
+      b.tasks - a.tasks,
+  )
+
+  return {
+    rows: mapped,
+    totalTasks: mapped.reduce((sum, r) => sum + r.tasks, 0),
+  }
 }
 
 // ── Marketplace ──────────────────────────────────────────────────────────────

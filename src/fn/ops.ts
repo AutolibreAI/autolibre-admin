@@ -9,6 +9,7 @@ import {
 import {
   adoptionPulse,
   adoptionSeries,
+  assistantProposalStats,
   catalogGaps,
   excludedDomains,
   failureReasons,
@@ -16,6 +17,8 @@ import {
   marketplaceHealth,
   queueHealth,
   removeExcludedDomain,
+  scanRecurrence,
+  unsolvedTasks,
   upsertExcludedDomain,
   usageAdoption,
   vehicleDistribution,
@@ -28,7 +31,10 @@ import type {
   FailureReason,
   GrowthSeries,
   OpsPulse,
+  ProposalStats,
   QueueHealth,
+  ScanRecurrence,
+  UnsolvedTasks,
   UsageAdoption,
   VehicleDistribution,
 } from '~/lib/ops'
@@ -104,6 +110,25 @@ export const getVehicleDistribution = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<VehicleDistribution> =>
     vehicleDistribution(data, { signal: requestSignal() }),
   )
+
+/**
+ * Los tres bloques de datos de la sección `Preguntas` de `/metricas`, cada uno
+ * su server function. Los tres con `adminMiddleware` por el mismo motivo que
+ * `getUsageAdoption`: publican comportamiento agregado de usuarios reales y el
+ * tamaño de poblaciones chicas (14 personas escanean; 2 usuarios con una tarea
+ * que no sabemos clasificar). Un server function es un endpoint HTTP público.
+ */
+export const getScanRecurrence = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<ScanRecurrence> => scanRecurrence({ signal: requestSignal() }))
+
+export const getAssistantProposalStats = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<ProposalStats> => assistantProposalStats({ signal: requestSignal() }))
+
+export const getUnsolvedTasks = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<UnsolvedTasks> => unsolvedTasks({ signal: requestSignal() }))
 
 export const getQueueHealth = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
