@@ -191,3 +191,119 @@ export function scanDurationLabel(seconds: number | null): string | null {
   const h = Math.floor(min / 60)
   return `${h} h ${min % 60} min`
 }
+
+// ── El detalle de UNA sesión (`/escaneres/sesiones/:sessionId`) ──────────────
+//
+// Qué reemplaza: no hay un `select` único — hoy es reconstruir la sesión a
+// mano con un `select` por tabla (`driving_session_chunks`, `diagnostic_dtcs`,
+// `ai_diagnostics`, `driving_telemetry_analysis`, `session_dtc_snapshots`), el
+// mismo trabajo que ya hacía `scannerSessions()` para el panel de la matriz
+// pero sólo hasta el nivel de fila — acá se abre TODO lo que esas tablas
+// tienen, no sólo los contadores.
+
+/** Un chunk de telemetría subido. `driving_session_chunks` es chico (≤5 hoy). */
+export interface ScanChunk {
+  chunkIndex: number
+  readingCount: number
+  objectKey: string
+  contentSha256: string
+  createdAt: string
+}
+
+/**
+ * Un código DTC con su detalle de `diagnostic_dtcs`, más el título del
+ * catálogo local resuelto SERVER-SIDE (`~/server/dtc-catalog`, ver
+ * `scan-detections.md`) — el mismo catálogo que usa `/escaneres/detecciones`.
+ * `standardDescription` es la columna del backend, 100% NULL en producción
+ * hoy; se muestra igual por si algún día se carga.
+ */
+export interface ScanDtcDetail {
+  code: string
+  title: string | null
+  system: string | null
+  standardDescription: string | null
+  rawResponse: string | null
+  createdAt: string
+}
+
+/**
+ * Un valor de `evidence` — jsonb sin schema fijo, pero acotado a lo que un
+ * server function puede serializar. `unknown` no sirve acá: TanStack Start
+ * valida en tipos que todo lo que devuelve un server function sea
+ * serializable, y `unknown` no lo es.
+ */
+export type ScanEvidenceValue = string | number | boolean | null | Array<string>
+
+/**
+ * La anomalía CON su explicación — `justification`, `probableCauses` y
+ * `evidence` no viajan en `ScanSessionRow.anomalies` (la fila los omite para no
+ * arrastrar ~500 bytes por anomalía en el listado, ver `scan-sessions.md`).
+ * `evidence` cambia de forma según `type` (RPM trae `sessionMax`/`sessionMin`,
+ * fuel trim trae `combinedFrom`…) y se muestra como pares clave/valor crudos en
+ * vez de tipar cada variante.
+ */
+export interface ScanAnomalyDetail extends ScanAnomaly {
+  justification: string
+  probableCauses: Array<string>
+  evidence: Record<string, ScanEvidenceValue>
+}
+
+/** Un estudio que el análisis de telemetría no pudo evaluar, y por qué. */
+export interface ScanNotEvaluable {
+  type: string
+  study: string
+  reason: string
+  affectedPid: string | null
+  justification: string
+  missingPidKeys: Array<string>
+}
+
+/** Una métrica de PID de `driving_telemetry_analysis.metrics`. */
+export interface ScanMetric {
+  avg: number
+  min: number
+  max: number
+  stdDev: number
+  sampleCount: number
+}
+
+/** `driving_telemetry_analysis` completo para una sesión. */
+export interface ScanTelemetryAnalysis {
+  bySeverity: { red: number; violet: number; yellow: number }
+  totalAnomalies: number
+  anomalies: Array<ScanAnomalyDetail>
+  notEvaluable: Array<ScanNotEvaluable>
+  /** `PID → métrica`. Las claves son las que el backend haya producido. */
+  metrics: Record<string, ScanMetric>
+}
+
+/**
+ * Una fila de `ai_diagnostics`. Puede haber MÁS DE UNA por sesión (verificado:
+ * hasta 2 en producción) — el backend no las deduplica, así que el detalle las
+ * lista todas en vez de asumir una sola.
+ */
+export interface ScanAiDiagnostic {
+  id: string
+  text: string | null
+  model: string | null
+  status: string
+  failureReason: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  embeddingTokens: number | null
+  embeddingModel: string | null
+  ragDocsUsed: Array<string>
+  createdAt: string
+}
+
+/** Todo lo que el panel sabe de UNA sesión — la fila más lo que cuelga de ella. */
+export interface ScanSessionDetail extends ScanSessionRow {
+  /** `driving_sessions.created_at` — cuándo se creó la fila, distinto de `startedAt`. */
+  createdAt: string
+  chunkSize: number
+  chunks: Array<ScanChunk>
+  dtcDetails: Array<ScanDtcDetail>
+  /** `null` cuando la sesión no produjo análisis de telemetría. */
+  telemetry: ScanTelemetryAnalysis | null
+  aiDiagnostics: Array<ScanAiDiagnostic>
+}

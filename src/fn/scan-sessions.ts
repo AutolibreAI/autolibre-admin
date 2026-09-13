@@ -1,9 +1,10 @@
 import { createServerFn } from '@tanstack/react-start'
+import { z } from 'zod'
 import { scanSessionSearchSchema } from '~/lib/scan-sessions'
-import { listScanSessions } from '~/server/scan-sessions.repo'
+import { getScanSessionDetail, listScanSessions } from '~/server/scan-sessions.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { ScanSessionRow } from '~/lib/scan-sessions'
+import type { ScanSessionDetail, ScanSessionRow } from '~/lib/scan-sessions'
 
 /**
  * Sesiones de escáner — el borde RPC.
@@ -20,3 +21,18 @@ export const listScanSessionsFn = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<Array<ScanSessionRow>> =>
     listScanSessions(data, { signal: requestSignal() }),
   )
+
+/**
+ * El detalle de una sesión (`/escaneres/sesiones/:sessionId`). El uuid entra
+ * por `z.uuid()` y no como string suelto — mismo motivo que `getAppUser`: un id
+ * basura tiene que dar el 404 de la ruta, no el `errorComponent` genérico de
+ * Postgres rechazando un `invalid input syntax for type uuid`.
+ */
+export const getScanSessionDetailFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(z.object({ sessionId: z.uuid() }))
+  .handler(async ({ data }): Promise<ScanSessionDetail> => {
+    const found = await getScanSessionDetail(data.sessionId, { signal: requestSignal() })
+    if (!found) throw new Error(`NOT_FOUND:${data.sessionId}`)
+    return found
+  })

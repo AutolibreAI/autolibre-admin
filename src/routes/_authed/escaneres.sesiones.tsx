@@ -182,6 +182,7 @@ function ScanSessions() {
         escriba. «DTCs» y «Anomalías» muestran cuántas y cuáles; las anomalías van
         con color por severidad (rojo / violeta / amarillo). «Dist. desde
         borrado» es la que reportó el escáner; vacía cuando el auto no la informa.
+        Tocá la fecha de una fila para ver el detalle completo del escaneo.
       </p>
     </>
   )
@@ -250,8 +251,14 @@ function ScanRow({ row: r }: { row: ScanSessionRow }) {
         </div>
       </TableCell>
 
-      <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
-        {formatDateTime(r.startedAt)}
+      <TableCell className="whitespace-nowrap tabular-nums">
+        <Link
+          to="/escaneres/sesiones/$sessionId"
+          params={{ sessionId: r.id }}
+          className="rounded text-muted-foreground outline-none hover:text-brand hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
+          {formatDateTime(r.startedAt)}
+        </Link>
       </TableCell>
 
       <TableCell className="whitespace-nowrap text-right tabular-nums">

@@ -1,8 +1,9 @@
-# Sesiones de escáner (`/escaneres/sesiones`)
+# Sesiones de escáner (`/escaneres/sesiones`, `/escaneres/sesiones/:sessionId`)
 
 Alcance: `src/lib/scan-sessions.ts`, `src/server/scan-sessions.repo.ts`,
-`src/fn/scan-sessions.ts`, `src/routes/_authed/escaneres.sesiones.tsx`, y el
-layout `src/routes/_authed/escaneres.tsx` + su redirect `escaneres.index.tsx`.
+`src/fn/scan-sessions.ts`, `src/routes/_authed/escaneres.sesiones.tsx`,
+`src/routes/_authed/escaneres.sesiones.$sessionId.tsx`, y el layout
+`src/routes/_authed/escaneres.tsx` + su redirect `escaneres.index.tsx`.
 
 La otra pestaña —la matriz de compatibilidad— es `.claude/rules/scanner-compatibility.md`.
 
@@ -92,7 +93,8 @@ SELECT interno referenciada afuera, por eso el envoltorio.
 (`{min,max,avg,stdDev,sampleCount}`). Se extrae sólo `->>'max'` de speed, rpm y
 engineTemp — lo justo para distinguir un escaneo en ralentí de uno andando.
 `null` cuando no hay análisis o el PID no está. No se abre el resto de `metrics`
-en la lista: eso es un detalle por sesión, y no hay pantalla de detalle todavía.
+en la lista: eso es un detalle por sesión — ver la sección de abajo, ya tiene
+pantalla.
 
 ## Ni una escritura
 
@@ -101,15 +103,85 @@ cuando el teléfono sube los chunks. Un escaneo es un hecho que pasó, no un
 estado que el admin mueva — mismo criterio que `conversations` y `notifications`.
 Si aparece un `UPDATE`/`INSERT` en `scan-sessions.repo.ts`, está mal.
 
+## Detalle por sesión (`/escaneres/sesiones/:sessionId`), agregado el 2026-09-13
+
+Ya no es "qué falta" — es la pantalla. La fecha de cada fila del listado (y de
+cada `SessionCard` del `SessionsPanel` de la matriz) linkea acá. Reemplaza la
+reconstrucción manual con un `select` por tabla que hacía falta para ver TODO
+lo que una sesión produjo: no sólo los contadores de la fila, el jsonb entero.
+
+`getScanSessionDetail()` en `scan-sessions.repo.ts` corre CINCO consultas en
+paralelo (la sesión + join a catálogo; `driving_session_chunks`;
+`diagnostic_dtcs`; `driving_telemetry_analysis`; `ai_diagnostics`) — no una
+JOIN gigante, porque las últimas tres son 1\:N (`ai_diagnostics` tiene hasta 2
+filas por sesión, verificado contra producción) y una sola sesión no necesita
+el envoltorio `select * from (...) s` que sí hace falta en un listado.
+
+### El análisis de telemetría se trae DOS VECES con distinto detalle, y es correcto
+
+`listScanSessions` (la fila) trae el jsonb RECORTADO —`{type, severity, pid}`
+por anomalía, sólo 3 claves de `metrics`— porque cargar `justification` +
+`probableCauses` + `evidence` por cada una de las N filas de la tabla sería
+~500 bytes de más por fila que nadie lee ahí. `getScanSessionDetail` trae el
+jsonb COMPLETO porque acá SÍ se lee. No son la misma consulta parametrizada por
+un flag "traer todo": son dos consultas separadas a propósito, cada una del
+tamaño que su pantalla necesita.
+
+`speedMax`/`rpmMax`/`producedTelemetryAnalysis` del detalle se DERIVAN del
+resultado de `driving_telemetry_analysis` en JS (¿hay fila? ¿qué dice
+`metrics.speed.max`?) en vez de pedirlos de nuevo por columna — evita una
+sexta consulta redundante.
+
+### `evidence` no puede tipar `Record<string, unknown>`
+
+Cada tipo de anomalía trae una forma de `evidence` distinta (RPM:
+`sessionMax`/`sessionMin`; fuel trim: `combinedFrom`, un array de strings) y no
+vale la pena tipar cada variante para mostrarla como texto. La tentación es
+`Record<string, unknown>` — **no compila**: TanStack Start valida en tipos que
+todo lo que devuelve un server function sea serializable
+(`ValidateSerializableMapped`), y `unknown` no lo es. El error no aparece en el
+archivo con el bug: aparece en `fn/scan-sessions.ts`, en la firma de
+`createServerFn`, y de ahí se propaga como si el `Route.useLoaderData()` de la
+pantalla entera fuera `{}` — un error de tipos que parece no tener nada que ver
+con la causa real. `ScanEvidenceValue` (`string | number | boolean | null |
+Array<string>`) es la unión cerrada que sí sirve.
+
+### Narrowing de una propiedad NO sobrevive un `.map()` anidado
+
+`s.telemetry` es `ScanTelemetryAnalysis | null`. Narrowearlo una vez arriba
+(`!s.telemetry ? <p/> : <TelemetrySection telemetry={s.telemetry} .../>`) y
+volver a escribir `s.telemetry.algo` DENTRO de un callback de `.map()` no
+compila con `noUncheckedIndexedAccess` + `strict`: TS descarta el narrowing de
+una propiedad de objeto al cruzar el borde de una función anidada, porque no
+puede garantizar que no cambió mientras tanto (una variable local SÍ sobrevive
+ese cruce; una propiedad, no). El arreglo no es repetir `s.telemetry &&` en
+cada callback — es sacar el bloque a un componente aparte
+(`TelemetrySection`) que recibe `telemetry: ScanTelemetryAnalysis` ya
+no-nullable como prop. Mismo motivo por el que `SEVERITY_LABEL[sev]` con
+`noUncheckedIndexedAccess` devuelve `string | undefined` aun con `sev` tipado
+como el literal exacto de sus claves — un `Record<string,string>` genérico
+indexado siempre puede volver `undefined` bajo ese flag; el fallback
+`?? sev` (mismo patrón que ya usaba `SEVERITY_LABEL[a.severity] ?? a.severity`)
+lo resuelve sin retipar el mapa.
+
+### El título del DTC se resuelve iguales que en `/escaneres/detecciones`
+
+`dtcDetails` usa el MISMO `lookupDtc()` de `~/server/dtc-catalog` — no una
+segunda copia del catálogo. `standardDescription` (`diagnostic_dtcs.standard_
+description`) se muestra igual aunque esté 100% NULL en producción hoy (ver
+`scan-detections.md`): es la columna que el backend dejó pensada para esto, y
+el día que se cargue tiene que aparecer sin tocar este archivo.
+
+### Ni una escritura acá tampoco
+
+Mismo criterio que el resto de este archivo: la pantalla es de lectura
+completa. Si aparece un `UPDATE`/`INSERT` en `getScanSessionDetail`, está mal.
+
 ## Qué NO se implementó, y por qué
 
-- **Detalle por sesión** (`/escaneres/sesiones/:id`). Las anomalías con
-  `justification` + `probableCauses`, el detalle de DTC con descripción, el
-  resto de `metrics` y `summary.notEvaluable` (los estudios que no corrieron)
-  quedarían bien ahí. No reemplaza ninguna consulta que hoy se corra, así que
-  no va todavía — y el `SessionsPanel` de la matriz ya cubre buena parte.
-- **Paginación.** 34 sesiones al 2026-09-08. Cuando moleste, el arreglo es
-  mejorar la búsqueda, no agregar páginas (mismo criterio que `/usuarios`).
+- **Paginación** en el listado. 34 sesiones al 2026-09-08. Cuando moleste, el
+  arreglo es mejorar la búsqueda, no agregar páginas (mismo criterio que
+  `/usuarios`).
 
 ## Cómo verificar un cambio acá
 
