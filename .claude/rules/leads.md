@@ -2,14 +2,17 @@
 
 Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `leads.talleres.tsx`, `leads.seguros.tsx`, `leads.multas.tsx`,
-`leads.contactos.tsx`, `leads.financiacion.tsx`, `leads.pedidos.tsx`,
+`leads.contactos.tsx`, `leads.financiacion.tsx`,
 `src/lib/insurance.ts`, `src/lib/fines.ts`, `src/server/insurance.repo.ts`,
 `src/server/fines.repo.ts`, `src/fn/insurance.ts`, `src/fn/fines.ts`,
-`src/components/ComingSoonPipeline.tsx`.
+`src/components/ComingSoonPipeline.tsx`. Pedidos: `leads.pedidos.index.tsx`,
+`leads.pedidos.$quoteRequestId.tsx`, `src/lib/quote-requests.ts`,
+`src/server/quote-requests.repo.ts`, `src/fn/quote-requests.ts`,
+`src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`.
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
-regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas y las tres
-pestañas "todavía no" no escriben nada.
+regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas, Pedidos y las
+dos pestañas "todavía no" no escriben nada.
 
 ## `/leads` es un layout, no una pantalla
 
@@ -47,9 +50,13 @@ está mal.
 | **Multas** | `vehicle_fine_syncs` + `fines` | Real. 51 vehículos con multas consultadas, 38 con deuda, ~$69M adeudados. Ver abajo. |
 | **Contactos** | — | No hay tabla. Ver abajo. |
 | **Financiación** | — | El producto no existe. |
-| **Pedidos** | — | El flujo no existe. |
+| **Pedidos** | `quote_requests` | Real desde el 2026-09-14, **pero la tabla no existe en producción** (el bounded context `quotes/` del backend no está desplegado). En DEV hay 2 filas. La pestaña lo detecta con un guard y lo dice; no muestra datos de ejemplo. Ver abajo. |
 
-## Por qué existen tres pestañas sin datos
+## Por qué existen dos pestañas sin datos
+
+> Eran tres. Pedidos salió de esta lista el 2026-09-14, exactamente por el
+> camino que esta sección prevé: apareció la tabla, el archivo pasó a tener
+> `Route` + loader, y dejó de usar `ComingSoonPipeline`.
 
 Es la **excepción relevada el 2026-09-06** a *"una pantalla que no reemplaza
 ninguna consulta no va todavía"*. Se decidió mostrarlas como plan visible en vez
@@ -228,6 +235,168 @@ dominio.
 Una multa la escribe el backend al sincronizar con el proveedor. Es un hecho, no
 un estado que el admin mueva. Si aparece un `UPDATE`/`INSERT` en `fines.repo.ts`,
 está mal.
+
+## Pedidos (`/leads/pedidos`, `/leads/pedidos/:id`)
+
+### Qué reemplaza
+
+`scripts/sql/listar-pedidos-de-presupuesto-abiertos.sql` de
+`autolibre-backend-hex`, que el operador corre en DBeaver (`… where status <>
+'closed' order by created_at`). El default de la pestaña es ese corte y ese
+orden (`quoteStatus=open`, `createdAt asc`); los cerrados —que el script no
+muestra y nadie mira— están a un chip. La ficha reemplaza el `select * … where
+id = '…'` de antes de llamar.
+
+### `QuoteRequest` ≠ `Lead`
+
+El aggregate es `QuoteRequest` (bounded context `quotes/`, tabla
+`quote_requests`). Un `Lead` es el usuario yendo hacia UN taller que ya eligió;
+un `QuoteRequest` es la persona pidiendo "¿cuánto sale esto?" y el operador
+saliendo a buscar talleres. El código dice `QuoteRequest` / `quote-requests`,
+nunca `Lead` (regla dura 7).
+
+### Una sola tabla, sin presupuestos por taller
+
+El MVP del backend **sacó** `quotes` y `quote_messages`. No hay una fila por
+oferta ni por partner: lo que el operador consiguió vive en `proposals_count`
+(obligatorio al pasar a `answered`) y en el texto libre de `internal_notes`. Si
+alguien arma "ofertas" parseando las notas, está inventando dominio.
+
+### El guard de disponibilidad, y por qué no es opcional
+
+Al 2026-09-14 **`to_regclass('public.quote_requests')` es `NULL` en producción**
+(`autolibre` / `doadmin`) y la tabla existe en DEV con la migración 0093
+aplicada. La pantalla se escribió contra la tabla real igual (build-now,
+deploy-later), protegida por `quoteRequestsAvailability()`:
+
+- `no_table` → la tabla no existe.
+- `missing_0093` → existe pero le falta alguna de las columnas que el repo LEE
+  (`READ_COLUMNS`; en la práctica las de la 0093: `public_number`,
+  `close_reason_code`, `cancellation_*`, `proposals_count`, `user_outcome*`).
+
+El chequeo corre **en el handler del server function**, no sólo en el loader:
+un `fetch` directo al endpoint contra producción sería si no un 500 con el texto
+de Postgres. Se usa `to_regclass` + `information_schema.columns` y NO un
+`select … limit 0` con try/catch — un catch que se traga errores de SQL termina
+tragándose los reales. La UI (`QuoteRequestsUnavailable`) dice cuál de las dos
+cosas falta, sin datos de ejemplo (regla dura 8).
+
+**`READ_COLUMNS` se toca junto con `SELECT_COLUMNS`.** Si se lee una columna
+nueva y no se agrega a la lista, el guard dice "disponible" y la pantalla
+explota igual.
+
+### `outcome` y `user_outcome` son dos ejes, y `NULL` ≠ `no_response`
+
+- `outcome` (`hired | not_hired | no_response`) lo carga el OPERADOR después de
+  preguntarle a la persona. **`NULL` = todavía no se preguntó**, que no es
+  `no_response` ("se preguntó y no contestó"). El chip se llama "Sin preguntar".
+- `user_outcome` (`hired | not_hired`) + `user_outcome_at` lo DECLARA la persona
+  desde la app.
+
+Van en dos columnas y no se combinan: pueden no coincidir, y esa discrepancia es
+un dato.
+
+### `closed` incluye las cancelaciones del usuario
+
+`status = 'closed'` mezcla "el operador cerró el caso" con
+`close_reason_code = 'cancelled_by_user'` (la persona se fue sola, desde
+`received` o `contacted`, con `cancellation_reason` + `cancellation_comment`
+propios). El resumen cuenta `cancelledByUser` aparte y hay un chip
+"Cancelados por el usuario". `closed_reason` es la nota INTERNA del operador;
+`cancellation_comment` es texto de la persona. No se confunden en la ficha.
+
+### "Sin contactar" es lectura nuestra del reloj
+
+Abierto + `contacted_at IS NULL` + más viejo que
+`QUOTE_UNCONTACTED_AFTER_HOURS` (24 h). Ámbar, no rojo — misma forma que
+`stuck` y `atrasada`. El predicado vive en UNA función
+(`uncontactedPredicate`) que usan la columna del listado y la tarjeta del
+resumen; el umbral entra por parámetro (`make_interval`), no interpolado.
+
+### `public_number` es sólo para mostrar
+
+`AL-{public_number}` (identity desde 1001) es lo que la persona le dicta al
+operador por teléfono. La identidad es el uuid: los links van por `id`, y `q`
+matchea el código con `('AL-' || public_number) ilike …`.
+
+### Las notas internas están en hora de Buenos Aires
+
+`internal_notes` es un log append-only: el script
+`agregar-nota-interna-a-pedido-de-presupuesto.sql` agrega
+`YYYY-MM-DD HH24:MI — <nota>` con `now() AT TIME ZONE
+'America/Argentina/Buenos_Aires'`. `parseInternalNotes()` separa el sello y lo
+muestra **crudo**, con "(Buenos Aires)": no trae offset, y reinterpretarlo con la
+zona UTC de `~/lib/format` lo correría tres horas. Una línea escrita a mano sin
+prefijo se muestra entera, sin sello — no se descarta. Los timestamps de las
+columnas (`created_at`, `contacted_at`…) sí son UTC, y la ficha lo dice.
+
+### `user_id` es NULL más seguido de lo que parece
+
+Web y WhatsApp no tienen cuenta, **y un POST público con `channel = app`
+tampoco**. Por eso el join a `users` es `LEFT` y la UI dice "anónimo", no
+"sin usuario" como si fuera un error.
+
+### El vehículo lo vincula el operador, y puede quedar mal
+
+`vehicle_id` (nullable) lo setea el operador a mano, y puede apuntar a un auto
+**archivado** o **de otra cuenta**. La patente que tipeó la persona (`plate`)
+queda aparte. Tres flags en ámbar, ninguno corrige nada:
+
+- `vehicle_owner_mismatch` — `v.user_id IS DISTINCT FROM qr.user_id`, **sólo con
+  los dos lados presentes**. Un pedido de WhatsApp (sin cuenta) con auto
+  vinculado es lo normal, no un mismatch.
+- `plate_mismatch` — la patente tipeada vs la del vehículo, normalizadas
+  (`upper` + sólo alfanuméricos).
+- archivado.
+
+Los tres joins al vehículo son `LEFT` (vehículo → spec → catálogo, dos saltos
+porque `vehicles` apunta al SPEC — `vehicle-manuals.md`, trampa 3).
+
+### No hay columna de moneda
+
+`declared_amount` es `numeric(12,2)` — lo que la persona dice que le cotizaron
+en otro lado. Se asume ARS y se muestra con `formatArs`, que corta centavos: no
+es un monto contable. Llega de `pg` como string; `toNum` preserva el `null`
+("no declaró" ≠ `$0`).
+
+### Es dato personal, y hay una deuda legal abierta
+
+Teléfono, email, nombre y una descripción en texto libre, muchas veces de gente
+**sin cuenta** (o sea, que ni aceptó los términos en la app). Las dos lecturas
+pasan por `adminMiddleware`. Y el backend marcó como **bloqueante para
+producción** la deuda de Ley 25.326 (datos personales) de este flujo: que la
+pantalla esté lista no significa que el flujo pueda salir. No es decisión de
+este repo.
+
+### Search params calificados
+
+`quoteStatus` / `quoteChannel` / `quoteOutcome` / `quoteUncontacted`. `status`
+ya lo usan `/solicitudes` y `/leads/talleres`, `channel` `/notificaciones`.
+→ `.claude/rules/notifications.md`.
+
+### `leads.pedidos.index.tsx`, no `leads.pedidos.tsx`
+
+Con un `leads.pedidos.tsx` con componente, `leads.pedidos.$quoteRequestId.tsx`
+queda anidado adentro y renderiza en un `<Outlet/>` que la tabla no tiene: cambia
+la URL y no la pantalla. Mismo patrón que `chats.index.tsx` +
+`chats.$conversationId.tsx`.
+
+### Ni una escritura — y cuál es el próximo paso
+
+La pantalla es read-only. El operador sigue moviendo los pedidos con cuatro
+scripts de `autolibre-backend-hex/scripts/sql/`:
+`marcar-pedido-de-presupuesto-contactado.sql`,
+`marcar-pedido-de-presupuesto-respondido.sql`,
+`cerrar-pedido-de-presupuesto.sql` y
+`agregar-nota-interna-a-pedido-de-presupuesto.sql`.
+
+El backend **no tiene** un endpoint con `AdminGuard` en `src/quotes` para esas
+transiciones (sólo las del usuario: crear, cancelar, declarar resultado), así
+que cuando el panel las haga serán **stored procedures de `ops`** con los 8
+guardrails y su suite en `ROLLBACK` (`ops-write-actions.md`). Antes de
+escribirlos, re-correr el `grep` al backend: si aparece el endpoint, va por
+HTTP. Si aparece un `UPDATE quote_requests` en `quote-requests.repo.ts`, está
+mal.
 
 ## Cómo verificar un cambio acá
 

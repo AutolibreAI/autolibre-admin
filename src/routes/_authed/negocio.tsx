@@ -240,8 +240,8 @@ function NegocioPage() {
       <section className="mt-10">
         <h2 className="mb-3 font-heading text-base font-semibold">Pedidos</h2>
         <ComingSoonPipeline
-          what="Un pedido es una solicitud de cotización que abre un usuario para que varios talleres manden sus ofertas (1 a N, con ofertas de vuelta). No es un Lead, que es el usuario yendo hacia UN taller (1 a 1)."
-          blocker="No existe: no hay tabla, no hay flujo, no hay una sola fila. Es un aggregate nuevo del backend (candidatos: QuoteRequest / QuoteOffer, a confirmar), con su TDD — un pedido es DOMINIO, no operación del panel, así que no se modela en el schema ops. Mínimo que la métrica necesita: fecha de creación, estado, usuario y vehículo, una fila por oferta con su partner, y si genera ingreso el monto y la fecha del cobro."
+          what="Un pedido es una solicitud de presupuesto que abre una persona para que el operador le consiga talleres. No es un Lead, que es el usuario yendo hacia UN taller (1 a 1)."
+          blocker="El flujo ya existe en el backend (aggregate QuoteRequest, tabla quote_requests) pero todavía no está desplegado en producción, así que acá no hay filas que sumar — el detalle por pedido se ve en Leads › Pedidos cuando la tabla existe. El MVP no guarda una fila por oferta ni el cobro: sólo proposals_count y notas internas del operador. Para que la métrica de negocio exista falta, además del deploy, una fila por oferta con su partner y, si genera ingreso, el monto y la fecha del cobro."
         />
       </section>
     </>

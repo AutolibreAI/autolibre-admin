@@ -555,8 +555,8 @@ export const CANT_MEASURE_YET: ReadonlyArray<CantMeasureItem> = [
   },
   {
     question: 'Pedidos con/sin presupuesto y tiempo de entrega del presupuesto',
-    why: '`leads` tiene 0 filas y `lead_status` (`new/contacted/won/lost`) no tiene un estado de "presupuesto entregado".',
-    needs: 'Que exista el flujo de pedidos, y un sello de tiempo de presupuesto entregado.',
+    why: 'El flujo de pedidos ya existe en el backend (`quote_requests`, con `answered_at` y `proposals_count`), pero todavía no está desplegado en producción. `leads` tiene 0 filas y `lead_status` (`new/contacted/won/lost`) no tiene un estado de "presupuesto entregado".',
+    needs: 'Que `quote_requests` llegue a producción. El detalle por pedido ya se ve en /leads/pedidos.',
   },
   {
     question: 'Recurrencia de carga del odómetro',
