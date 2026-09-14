@@ -629,7 +629,13 @@ function SessionCard({ session: s }: { session: ScannerSessionDetail }) {
           >
             {SESSION_BUCKET_LABELS[s.bucket]}
           </span>
-          <span className="tabular-nums text-muted-foreground">{formatDateTime(s.startedAt)}</span>
+          <Link
+            to="/escaneres/sesiones/$sessionId"
+            params={{ sessionId: s.id }}
+            className="rounded tabular-nums text-muted-foreground outline-none hover:text-brand hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            {formatDateTime(s.startedAt)}
+          </Link>
           {duration ? (
             <span className="text-xs text-muted-foreground">· {duration}</span>
           ) : null}

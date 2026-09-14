@@ -1,13 +1,23 @@
 import '@tanstack/react-start/server-only'
 
-import { sql } from './db'
+import { sql, sqlOne } from './db'
 import { FAILED, NO_DATA, OK, PENDING } from './scanners.repo'
+import { lookupDtc } from './dtc-catalog'
 import { sessionBucket } from '~/lib/scanners'
 import type {
+  ScanAiDiagnostic,
   ScanAnomaly,
+  ScanAnomalyDetail,
+  ScanChunk,
+  ScanDtcDetail,
+  ScanEvidenceValue,
+  ScanMetric,
+  ScanNotEvaluable,
+  ScanSessionDetail,
   ScanSessionRow,
   ScanSessionSearch,
   ScanSessionSortKey,
+  ScanTelemetryAnalysis,
 } from '~/lib/scan-sessions'
 
 /**
@@ -271,4 +281,310 @@ export async function listScanSessions(
       engineTempMax: toNum(r.temp_max),
     }
   })
+}
+
+// ── El detalle de UNA sesión ─────────────────────────────────────────────────
+
+const SEVERITY_RANK: Record<string, number> = { red: 0, violet: 1, yellow: 2 }
+const byWorstSeverityFirst = (a: { severity: string }, b: { severity: string }) =>
+  (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
+
+interface DetailRow {
+  id: string
+  external_session_id: string
+  status: string
+  started_at: Date | string
+  ended_at: Date | string | null
+  created_at: Date | string
+  duration_s: number | string | null
+  user_id: string
+  user_email: string
+  user_name: string | null
+  vehicle_id: string
+  plate: string
+  alias: string | null
+  brand: string | null
+  model: string | null
+  trim: string | null
+  year: number | string | null
+  scanner_type: string
+  scanner_firmware: string | null
+  obd_protocol: string | null
+  battery_voltage: string | null
+  detected_vin: string | null
+  total_readings: number | string
+  total_chunks: number | string
+  chunk_size: number | string
+  distance_since_dtc_clear_km: number | string | null
+  dtc_codes: Array<string> | null
+}
+
+interface ChunkRow {
+  chunk_index: number
+  reading_count: number
+  object_key: string
+  content_sha256: string
+  created_at: Date | string
+}
+
+interface DtcDetailRow {
+  code: string
+  standard_description: string | null
+  raw_response: string | null
+  created_at: Date | string
+}
+
+interface TelemetrySummaryJson {
+  bySeverity?: { red?: number; violet?: number; yellow?: number }
+  totalAnomalies?: number
+  notEvaluable?: Array<{
+    type: string
+    study: string
+    reason: string
+    affectedPid?: string | null
+    justification: string
+    missingPidKeys?: Array<string>
+  }>
+}
+
+interface TelemetryAnomalyJson {
+  type: string
+  severity: string
+  affectedPid?: string | null
+  justification: string
+  probableCauses?: Array<string>
+  evidence?: Record<string, ScanEvidenceValue>
+}
+
+interface TelemetryRow {
+  summary: TelemetrySummaryJson | null
+  anomalies: Array<TelemetryAnomalyJson> | null
+  metrics: Record<string, ScanMetric> | null
+}
+
+interface AiDiagnosticRow {
+  id: string
+  text: string | null
+  model: string | null
+  status: string
+  failure_reason: string | null
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  embedding_tokens: number | null
+  embedding_model: string | null
+  rag_docs_used: Array<string> | null
+  created_at: Date | string
+}
+
+/**
+ * El detalle entero de UNA sesión — todo lo que las tablas colgadas de
+ * `session_id` tienen, no sólo los contadores de la fila de la lista.
+ *
+ * ── Por qué NO reusa el LEFT JOIN a `driving_telemetry_analysis` de la fila ──
+ *
+ * La fila (`listScanSessions`) sólo necesita contadores y el `max` de tres PIDs,
+ * así que trae el análisis por columnas sueltas. Acá hace falta el jsonb
+ * COMPLETO —`justification`, `probableCauses`, `evidence` por anomalía;
+ * `notEvaluable`; el objeto `metrics` entero, no sólo 3 claves— así que se trae
+ * aparte, en su propia consulta, y `speedMax`/`rpmMax`/`producedTelemetryAnalysis`
+ * se DERIVAN de ese resultado en vez de volver a pedirlos por columna.
+ *
+ * ── Cinco consultas en paralelo, no una JOIN gigante ─────────────────────────
+ *
+ * `driving_session_chunks`, `diagnostic_dtcs` y `ai_diagnostics` son 1\:N (hasta
+ * 5, y hasta 2 respectivamente, verificado contra producción) — traerlas por
+ * JOIN multiplicaría la fila principal. Como es UNA sesión (no un listado que
+ * necesite ordenar/filtrar por sus subtablas), no hace falta el envoltorio
+ * `select * from (...) s` que sí necesitan `listScanSessions` o `listUsers`.
+ *
+ * `null` si el id no resuelve a ninguna sesión — el caller lo traduce a 404.
+ */
+export async function getScanSessionDetail(
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ScanSessionDetail | null> {
+  void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
+
+  const [row, chunkRows, dtcRows, telemetryRow, aiRows] = await Promise.all([
+    sqlOne<DetailRow>(
+      `
+      select
+        ds.id,
+        ds.external_session_id,
+        ds.status::text                        as status,
+        ds.started_at,
+        ds.ended_at,
+        ds.created_at,
+        extract(epoch from (ds.ended_at - ds.started_at))::int as duration_s,
+        u.id as user_id, u.email as user_email, u.name as user_name,
+        v.id as vehicle_id, v.plate, v.alias,
+        vc.brand, vc.model, vc.trim, vc.year,
+        ds.scanner_type::text                  as scanner_type,
+        ds.scanner_firmware,
+        ds.obd_protocol,
+        ds.battery_voltage,
+        ds.detected_vin,
+        ds.total_readings,
+        ds.total_chunks,
+        ds.chunk_size,
+        ds.distance_since_dtc_clear_km,
+        coalesce(
+          (select s.codes from session_dtc_snapshots s where s.session_id = ds.id limit 1),
+          array[]::text[]
+        )                                      as dtc_codes
+      from driving_sessions ds
+      join users u on u.id = ds.user_id
+      join vehicles v on v.id = ds.vehicle_id
+      left join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+      left join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
+      where ds.id = $1
+      `,
+      [sessionId],
+    ),
+    sql<ChunkRow>(
+      `select chunk_index, reading_count, object_key, content_sha256, created_at
+       from driving_session_chunks where session_id = $1 order by chunk_index`,
+      [sessionId],
+    ),
+    sql<DtcDetailRow>(
+      `select code, standard_description, raw_response, created_at
+       from diagnostic_dtcs where session_id = $1 order by code`,
+      [sessionId],
+    ),
+    sqlOne<TelemetryRow>(
+      `select summary, anomalies, metrics
+       from driving_telemetry_analysis where session_id = $1`,
+      [sessionId],
+    ),
+    sql<AiDiagnosticRow>(
+      `select id, diagnosis->>'text' as text, model, status::text as status,
+              failure_reason, prompt_tokens, completion_tokens,
+              embedding_tokens, embedding_model, rag_docs_used, created_at
+       from ai_diagnostics where session_id = $1 order by created_at`,
+      [sessionId],
+    ),
+  ])
+
+  if (!row) return null
+
+  const dtcCodes = row.dtc_codes ?? []
+
+  const telemetry: ScanTelemetryAnalysis | null = telemetryRow
+    ? {
+        bySeverity: {
+          red: toInt(telemetryRow.summary?.bySeverity?.red),
+          violet: toInt(telemetryRow.summary?.bySeverity?.violet),
+          yellow: toInt(telemetryRow.summary?.bySeverity?.yellow),
+        },
+        totalAnomalies:
+          telemetryRow.summary?.totalAnomalies ?? (telemetryRow.anomalies ?? []).length,
+        anomalies: (telemetryRow.anomalies ?? [])
+          .map(
+            (a): ScanAnomalyDetail => ({
+              type: a.type,
+              severity: a.severity,
+              pid: a.affectedPid ?? null,
+              justification: a.justification,
+              probableCauses: a.probableCauses ?? [],
+              evidence: a.evidence ?? {},
+            }),
+          )
+          .sort(byWorstSeverityFirst),
+        notEvaluable: (telemetryRow.summary?.notEvaluable ?? []).map(
+          (n): ScanNotEvaluable => ({
+            type: n.type,
+            study: n.study,
+            reason: n.reason,
+            affectedPid: n.affectedPid ?? null,
+            justification: n.justification,
+            missingPidKeys: n.missingPidKeys ?? [],
+          }),
+        ),
+        metrics: telemetryRow.metrics ?? {},
+      }
+    : null
+
+  const aiDiagnostics: Array<ScanAiDiagnostic> = aiRows.map((r) => ({
+    id: r.id,
+    text: r.text,
+    model: r.model,
+    status: r.status,
+    failureReason: r.failure_reason,
+    promptTokens: r.prompt_tokens,
+    completionTokens: r.completion_tokens,
+    embeddingTokens: r.embedding_tokens,
+    embeddingModel: r.embedding_model,
+    ragDocsUsed: r.rag_docs_used ?? [],
+    createdAt: toIso(r.created_at) as string,
+  }))
+
+  const dtcDetails: Array<ScanDtcDetail> = dtcRows.map((r) => {
+    const info = lookupDtc(r.code)
+    return {
+      code: r.code,
+      title: info?.title ?? null,
+      system: info?.system ?? null,
+      standardDescription: r.standard_description,
+      rawResponse: r.raw_response,
+      createdAt: toIso(r.created_at) as string,
+    }
+  })
+
+  const chunks: Array<ScanChunk> = chunkRows.map((r) => ({
+    chunkIndex: r.chunk_index,
+    readingCount: r.reading_count,
+    objectKey: r.object_key,
+    contentSha256: r.content_sha256,
+    createdAt: toIso(r.created_at) as string,
+  }))
+
+  const anomalies: Array<ScanAnomaly> = (telemetry?.anomalies ?? []).map((a) => ({
+    type: a.type,
+    severity: a.severity,
+    pid: a.pid,
+  }))
+
+  return {
+    id: row.id,
+    externalSessionId: row.external_session_id,
+    bucket: sessionBucket(row.status, toInt(row.total_readings)),
+    status: row.status,
+    startedAt: toIso(row.started_at) as string,
+    endedAt: toIso(row.ended_at),
+    createdAt: toIso(row.created_at) as string,
+    durationSeconds: toNum(row.duration_s),
+    userId: row.user_id,
+    userEmail: row.user_email,
+    userName: row.user_name,
+    vehicleId: row.vehicle_id,
+    plate: row.plate,
+    alias: row.alias,
+    catalogLabel: row.brand
+      ? [row.brand, row.model, row.trim, row.year].filter(Boolean).join(' ')
+      : null,
+    scannerType: row.scanner_type,
+    firmware: row.scanner_firmware,
+    obdProtocol: row.obd_protocol,
+    batteryVoltage: row.battery_voltage,
+    detectedVin: row.detected_vin,
+    totalReadings: toInt(row.total_readings),
+    totalChunks: toInt(row.total_chunks),
+    chunkSize: toInt(row.chunk_size),
+    chunksUploaded: chunks.length,
+    distanceSinceDtcClearKm: toNum(row.distance_since_dtc_clear_km),
+    dtcCodes,
+    dtcCount: dtcCodes.length,
+    anomalies,
+    anomalyCount: anomalies.length,
+    anomaliesBySeverity: telemetry?.bySeverity ?? { red: 0, violet: 0, yellow: 0 },
+    producedAiDiagnostic: aiDiagnostics.length > 0,
+    producedTelemetryAnalysis: telemetry !== null,
+    speedMax: telemetry?.metrics.speed?.max ?? null,
+    rpmMax: telemetry?.metrics.rpm?.max ?? null,
+    engineTempMax: telemetry?.metrics.engineTemp?.max ?? null,
+    chunks,
+    dtcDetails,
+    telemetry,
+    aiDiagnostics,
+  }
 }
