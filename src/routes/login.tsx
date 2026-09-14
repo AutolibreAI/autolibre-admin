@@ -1,5 +1,7 @@
-import { SignIn } from '@clerk/tanstack-react-start'
+import { SignIn, SignOutButton, useAuth, useUser } from '@clerk/tanstack-react-start'
 import { createFileRoute, redirect } from '@tanstack/react-router'
+import { Button } from '~/components/ui/button'
+import { Card, CardContent } from '~/components/ui/card'
 import { loginSearchSchema } from '~/lib/search'
 
 export const Route = createFileRoute('/login')({
@@ -32,6 +34,8 @@ export const Route = createFileRoute('/login')({
 
 function LoginPage() {
   const { redirect: redirectTo } = Route.useSearch()
+  const { isLoaded, isSignedIn } = useAuth()
+  const { user: clerkUser } = useUser()
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
@@ -40,11 +44,44 @@ function LoginPage() {
       </div>
       <p className="mb-6 mt-1 text-sm text-muted-foreground">Panel de administración</p>
 
-      <SignIn
-        routing="hash"
-        forceRedirectUrl={redirectTo ?? '/dashboard'}
-        signUpUrl="/login"
-      />
+      {/*
+       * Clerk dice "hay sesión" y el servidor dijo "no hay usuario" (si no, el
+       * beforeLoad ya habría redirigido). Pasa cuando la identidad de Clerk no
+       * tiene fila en `users` — o no matchea por (auth_provider, external_auth_id).
+       * `<SignIn />` con una sesión activa NO renderiza nada, así que sin este
+       * bloque la pantalla queda en blanco y sin forma de cerrar sesión.
+       */}
+      {isLoaded && isSignedIn ? (
+        <Card>
+          <CardContent className="pt-6">
+            <h1 className="text-base font-semibold">Tu sesión no tiene usuario de AutoLibre</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {clerkUser?.primaryEmailAddress ? (
+                <>
+                  Entraste como{' '}
+                  <span className="font-medium text-foreground">
+                    {clerkUser.primaryEmailAddress.emailAddress}
+                  </span>
+                  , pero esa identidad no está vinculada a ningún usuario de la base.
+                </>
+              ) : (
+                <>Hay una sesión abierta, pero no está vinculada a ningún usuario de la base.</>
+              )}
+            </p>
+            <SignOutButton redirectUrl="/login">
+              <Button variant="outline" size="sm" className="mt-4">
+                Cerrar sesión y entrar con otra cuenta
+              </Button>
+            </SignOutButton>
+          </CardContent>
+        </Card>
+      ) : (
+        <SignIn
+          routing="hash"
+          forceRedirectUrl={redirectTo ?? '/dashboard'}
+          signUpUrl="/login"
+        />
+      )}
 
       <p className="mt-6 text-xs leading-relaxed text-muted-foreground">
         El acceso al panel requiere una cuenta con rol <span className="font-medium">admin</span>.

@@ -51,11 +51,12 @@ import { z } from 'zod'
 // ── Vocabulario del dominio ──────────────────────────────────────────────────
 
 /**
- * `notification_type` — los seis valores del enum de Postgres. Se listan a mano
- * (no hay forma de alcanzar el contrato del backend desde este repo) con la
- * misma red que el resto: un valor que no esté acá se renderiza CRUDO, no en
- * blanco. Los chips del filtro se arman con los `type` que de hecho aparecen en
- * la base, así que un valor nuevo del enum aparece solo aunque falte su label.
+ * `notification_type` — los valores del enum de Postgres (siete al 2026-09-14).
+ * Se listan a mano (no hay forma de alcanzar el contrato del backend desde este
+ * repo) con la misma red que el resto: un valor que no esté acá se renderiza
+ * CRUDO, no en blanco. Los chips del filtro se arman con los `type` que de hecho
+ * aparecen en la base, así que un valor nuevo del enum aparece solo aunque falte
+ * su label.
  */
 export const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   document_expiration: 'Vencimiento de documento',
@@ -64,6 +65,10 @@ export const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   fine_pending: 'Multa pendiente',
   dtc_active: 'DTC activo',
   vehicle_data_ready: 'Datos del vehículo listos',
+  // El único `type` que no nace de una entidad del dominio: lo manda un admin
+  // (`POST /notifications/broadcast`). El backend lo DERIVA de
+  // `source_type = 'broadcast'`; nadie lo elige.
+  announcement: 'Anuncio',
 }
 
 /**
@@ -81,6 +86,9 @@ export const NOTIFICATION_SOURCE_LABELS: Record<string, string> = {
   diagnostic_dtc: 'DTC',
   ai_diagnostic: 'Diagnóstico de IA',
   vehicle_data_query: 'Consulta de datos',
+  // No apunta a ninguna tabla: `source_id` es el `broadcastId` de la campaña,
+  // usado como clave de idempotencia. → `.claude/rules/notifications.md`
+  broadcast: 'Envío manual',
 }
 
 /**
@@ -235,6 +243,14 @@ export const notificationSearchSchema = z.object({
    * ya usa `state` con su propio enum (`all | active | archived`).
    */
   notificationState: z.enum(NOTIFICATION_STATE_FILTERS).optional(),
+  /**
+   * Las filas de UNA campaña ad-hoc: `source_type = 'broadcast'` y
+   * `source_id = <este uuid>`. Se llega así desde el resultado de
+   * `BroadcastComposer`. Calificado (no `broadcastId` ni `campaign`) por la
+   * regla de `FullSearchSchema`: un nombre genérico es un nombre que otra
+   * pantalla va a querer. `optional`, no `.catch`, igual que `userId`.
+   */
+  notificationBroadcastId: z.uuid().optional(),
   sort: z.enum(NOTIFICATION_SORT_KEYS).catch('scheduledAt').default('scheduledAt'),
   dir: z.enum(NOTIFICATION_SORT_DIRS).catch('desc').default('desc'),
 })
@@ -245,4 +261,99 @@ export interface NotificationFacets {
   /** `type`s presentes en la base, para los chips. */
   types: Array<string>
   channels: Array<string>
+}
+
+// ── Envío ad-hoc (`POST /notifications/broadcast`) ───────────────────────────
+
+/**
+ * Los topes del DTO del backend (`broadcast-notification.dto.ts`), espejados
+ * para avisar ANTES de mandar. Si el backend los cambia y acá no, el síntoma es
+ * un 400 legible, no un dato roto: el que decide sigue siendo el backend.
+ *
+ * El de 500 no es configurable del otro lado a propósito — el alta es un INSERT
+ * sincrónico dentro del request. Una campaña más grande es otra feature (un job
+ * de background), no un número más alto acá.
+ */
+export const BROADCAST_MAX_RECIPIENTS = 500
+export const BROADCAST_TITLE_MAX = 100
+export const BROADCAST_BODY_MAX = 500
+
+/** Debajo de esto el buscador de destinatarios ni pregunta: `ilike '%a%'` es el padrón. */
+export const RECIPIENT_SEARCH_MIN_CHARS = 2
+
+/**
+ * El payload del envío. Una sola definición para el server function y para el
+ * formulario — regla dura 5.
+ *
+ * Lo que NO está, y es a propósito: **el actor.** Quién manda la campaña lo dice
+ * el token de Clerk con el que `backend.ts` llama; un campo de payload sería
+ * una firma falsificable (mismo criterio que `p_actor_id` en los SP de `ops`).
+ *
+ * - `userIds` se deduplica ANTES de medir el tope: el mismo usuario agregado dos
+ *   veces es un usuario, y el índice único del backend lo colapsaría igual.
+ * - `title`/`body` se trimean acá porque `MaxLength` del DTO mide el string
+ *   crudo, mientras `Notification.create()` guarda el trimeado: sin trim, un
+ *   título de 98 letras con tres espacios rebota por "demasiado largo".
+ * - `scheduledAt` tiene que ser futuro. El backend acepta uno pasado sin quejarse
+ *   —el cron lo entrega en el próximo tick—, pero un "programar" en el pasado es
+ *   casi siempre un error de zona horaria, y mandar ya algo que se quería mandar
+ *   mañana no tiene vuelta atrás.
+ */
+export const broadcastNotificationSchema = z.object({
+  broadcastId: z.uuid(),
+  userIds: z
+    .array(z.uuid())
+    .transform((ids) => [...new Set(ids)])
+    .pipe(
+      z
+        .array(z.string())
+        .min(1, 'Elegí al menos un destinatario.')
+        .max(
+          BROADCAST_MAX_RECIPIENTS,
+          `Hasta ${BROADCAST_MAX_RECIPIENTS} destinatarios por envío.`,
+        ),
+    ),
+  title: z
+    .string()
+    .trim()
+    .min(1, 'El título no puede quedar vacío.')
+    .max(BROADCAST_TITLE_MAX, `El título admite hasta ${BROADCAST_TITLE_MAX} caracteres.`),
+  body: z
+    .string()
+    .trim()
+    .min(1, 'El mensaje no puede quedar vacío.')
+    .max(BROADCAST_BODY_MAX, `El mensaje admite hasta ${BROADCAST_BODY_MAX} caracteres.`),
+  scheduledAt: z.iso
+    .datetime({ offset: true })
+    .optional()
+    .refine((iso) => iso === undefined || new Date(iso).getTime() > Date.now(), {
+      message: 'La fecha programada ya pasó.',
+    }),
+})
+
+export type BroadcastNotificationInput = z.input<typeof broadcastNotificationSchema>
+
+export const recipientSearchSchema = z.object({
+  q: z.string().trim().min(RECIPIENT_SEARCH_MIN_CHARS).max(120),
+})
+
+/** Un candidato del buscador del compositor. */
+export interface NotificationRecipient {
+  id: string
+  email: string
+  name: string | null
+  /**
+   * Filas de `expo_push_tokens`. Con `0` la notificación se crea igual y queda
+   * `sin_token`, reintentando cada minuto para siempre — por eso la UI lo avisa
+   * al elegirlo, no después.
+   */
+  pushTokens: number
+}
+
+/** Lo que Postgres dice que quedó de una campaña, leído por `source_id`. */
+export interface BroadcastResult {
+  broadcastId: string
+  /** Filas creadas. Menos que los elegidos = silenciados o ya existentes. */
+  created: number
+  byState: Array<{ state: NotificationState; count: number }>
 }

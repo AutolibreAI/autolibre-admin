@@ -51,8 +51,14 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 > Y aunque el backend no lo tuviera, un SP tampoco alcanzaría: **el PDF va a DigitalOcean Spaces**,
 > y ninguna cantidad de SQL pone un archivo en un bucket.
 >
-> Eso hace de `/vehiculos/catalogo` la ÚNICA pantalla del panel cuyas escrituras no son SQL, y el único
-> consumidor HTTP del backend. → `.claude/rules/vehicle-manuals.md`
+> Eso hizo de `/vehiculos/catalogo` la primera pantalla del panel cuyas escrituras no son SQL.
+> → `.claude/rules/vehicle-manuals.md`
+>
+> **El 2026-09-14 el `grep` dio positivo por segunda vez**: `POST /notifications/broadcast`
+> (`AdminGuard`) existe, y `/notificaciones` lo usa para mandar push ad-hoc. Ahí un SP no sólo
+> sobra, estaría mal: se saltearía el filtro de preferencias (`announcement` silenciado) y las
+> invariantes de `Notification.create()`. Son dos las pantallas que escriben por HTTP, y un solo
+> cliente: `src/server/backend.ts`. → `.claude/rules/notifications.md`
 
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
 > El que manda es el `-hex`. Si una ruta te lleva al otro, estás mirando el lugar equivocado.
@@ -102,7 +108,7 @@ migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.s
 | Var | Para qué | Si falta |
 |---|---|---|
 | `POSTGRES_DATABASE_URL` | Todo el SQL del panel | Falla en la primera consulta, no al arrancar |
-| `AUTOLIBRE_BACKEND_URL` | Subir manuales al backend hex. **Con el prefijo `/api/v1` incluido** | En dev usa `http://localhost:3005/api/v1`; en producción **falla** — adivinar una URL de producción es peor que fallar |
+| `AUTOLIBRE_BACKEND_URL` | Subir manuales y mandar notificaciones ad-hoc, contra el backend hex. **Con el prefijo `/api/v1` incluido** | En dev usa `http://localhost:3005/api/v1`; en producción **falla** — adivinar una URL de producción es peor que fallar |
 
 Las dos fallan en el **primer uso**, nunca al cargar el módulo. En Vercel el entry serverless
 importa todos los handlers de ruta por adelantado, así que un `throw` en scope de módulo se lleva
@@ -166,7 +172,7 @@ src/
 │   └── middleware.ts        # request/function middleware (sesión, roles)
 ├── server/                  # SERVER-ONLY. Acceso a datos y secretos.
 │   ├── db.ts                #   pool de pg — todo el SQL pasa por acá
-│   ├── backend.ts           #   el ÚNICO cliente HTTP al backend hex (manuales)
+│   ├── backend.ts           #   el ÚNICO cliente HTTP al backend hex (manuales + notificaciones ad-hoc)
 │   └── session.ts           #   Clerk (quién) + users.role (qué puede)
 ├── lib/                     # Contratos compartidos: types, schemas de search, format, cn
 ├── components/
@@ -200,7 +206,7 @@ pantalla no va todavía.
 | `/usuarios/:id` | `true` | **La consulta que nadie corría**: los ~29 `select` sueltos que hacían falta para saber qué tiene un usuario. En la práctica se miraban dos y el resto no se auditaba nunca |
 | `/vehiculos` | — | Layout de 3 pestañas. Antes era `/catalogo`. Redirige a `/vehiculos/catalogo`. → `.claude/rules/vehicles.md` |
 | `/vehiculos/catalogo` | `true` | Nada previo, y no por descuido: `vehicle_catalog_manuals` tenía CERO filas contra ~80 catálogos. El `INSERT` que hacía falta era **imposible** a mano — `file_id` referencia una fila de `files` que sólo existe si el PDF se subió a DigitalOcean Spaces |
-| `/vehiculos/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Única pantalla del panel cuyas escrituras van por HTTP al backend hex, no por SQL** |
+| `/vehiculos/catalogo/:id` | `true` | Ídem, más el `select` de variantes de powertrain por modelo. **Escribe por HTTP al backend hex, no por SQL** (la otra que lo hace es `/notificaciones`) |
 | `/vehiculos/listado` | `true` | El padrón entero de autos, uno por fila, sin deduplicar por patente, con lo que cuelga de cada uno (VTV, seguro, multas, deuda, tareas, escaneos). Es `UserVehicleSummary` de `/usuarios` pero transversal y con dueño |
 | `/vehiculos/metricas` | `true` | La flota agrupada por modelo del catálogo: cuántos autos de cada uno (`TOYOTA COROLLA XEI …`, no "un Corolla") y las métricas que eso habilita — usuarios, km promedio, con multas, deuda total, escaneados, manuales |
 | `/escaneres` | — | Layout de 3 pestañas. Redirige a `/escaneres/compatibilidad`. → `.claude/rules/scanner-compatibility.md` · `.claude/rules/scan-sessions.md` · `.claude/rules/scan-detections.md` |
@@ -211,7 +217,7 @@ pantalla no va todavía.
 | `/chats/:id` | `true` | El chat completo, en orden — hoy inexistente como pantalla, sólo reconstruible mensaje por mensaje en DBeaver |
 | `/documentos` | `true` | Los `select * from insurances / registration_cards / driver_licenses / vehicle_inspections where user_id = '…'` sueltos que hoy hacen falta para auditar lo que el OCR extrajo de un documento, más el cruce contra `vehicles` (patente OCR vs patente real, VIN, marca) que nadie corre. **Read-only**: editar necesita un SP de `ops` con auditoría, y mostrar el archivo necesita un endpoint admin en el backend — las dos cosas son un paso aparte |
 | `/documentos/:tipo/:id` | `true` | Todos los campos que el OCR extrajo de un documento, contrastados campo por campo contra el vehículo. Los `:tipo` son `seguro`/`cedula`/`registro`/`vtv` |
-| `/notificaciones` | `true` | El `select * from notifications where user_id = '…'` que hoy es la única forma de ver de qué le avisamos a alguien y si le llegó — con lo que ese select no contesta solo: el estado de entrega leído de `status` + `delivery_status` juntos (`sin_token` reintenta para siempre, `rechazada` es terminal), y `atrasada` deducido del reloj con el MISMO umbral que el `stuck` de `/operacion`. Relevado el 2026-09-07: 35 de 72 filas estaban atrasadas |
+| `/notificaciones` | `true` | El `select * from notifications where user_id = '…'` que hoy es la única forma de ver de qué le avisamos a alguien y si le llegó — con lo que ese select no contesta solo: el estado de entrega leído de `status` + `delivery_status` juntos (`sin_token` reintenta para siempre, `rechazada` es terminal), y `atrasada` deducido del reloj con el MISMO umbral que el `stuck` de `/operacion`. Relevado el 2026-09-07: 35 de 72 filas estaban atrasadas. **Escribe**: "Nueva notificación" (`BroadcastComposer`) manda un push ad-hoc a usuarios elegidos — reemplaza el `curl` a `POST /notifications/broadcast` con ids pegados a mano. Va por HTTP al backend, no por SQL; `?notificationBroadcastId=` filtra las filas de un envío |
 | `/operacion` | `'data-only'` | Los cuatro `group by status` de las colas asincrónicas, el `where status='failed'` de motivos, y `vehicle_plate_lookup_misses` — que hoy nadie consultaba |
 | `/ai-costos` | `'data-only'` | Nada previo: el consumo de IA no se medía |
 | `GET /api/metricas` | — | Lo mismo que `/dashboard` + `/operacion`, en JSON, para un cron de guardia |
@@ -276,7 +282,7 @@ Lo que esto **no** habilita:
 ### 4. Los manuales de vehículos se cargan por HTTP contra el backend hex
 
 **Decidido el 2026-09-04.** Es la excepción a la decisión 1 (*"el panel habla con Postgres directo"*)
-y la única que hay. Dos motivos, y cualquiera de los dos alcanza:
+y fue la primera (la segunda es la 4b, abajo). Dos motivos, y cualquiera de los dos alcanza:
 
 1. **El PDF va a DigitalOcean Spaces, no a Postgres.** El panel no tiene ese adapter, ni las
    credenciales, ni el sniffing de magic bytes con el que el backend rechaza un `.zip` renombrado a
@@ -312,6 +318,17 @@ Lo que esto **no** habilita:
   así que el admin que subió es el único que puede bajarlo. No se arregla desde este repo.
 
 → `.claude/rules/vehicle-manuals.md`
+
+### 4b. Las notificaciones ad-hoc se mandan por HTTP contra el backend hex
+
+**Decidido el 2026-09-14.** Segunda excepción a la decisión 1, con el mismo cliente
+(`src/server/backend.ts`) y la misma identidad (el token de Clerk del admin). El grep da positivo:
+`POST /notifications/broadcast` bajo `AdminGuard`. Y un SP de `ops` estaría mal, no sólo de más:
+el backend filtra a quien silenció `announcement` y arma cada fila con `Notification.create()`.
+
+Lo que esto **no** habilita: ningún `INSERT INTO notifications` desde el panel, y ningún
+`broadcastId` generado en el servidor (es la clave de idempotencia; lo genera el cliente, una vez
+por campaña). → `.claude/rules/notifications.md`
 
 ## ⚠ Riesgo abierto: admins `native` heredados
 
@@ -489,7 +506,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `chats.md` | Chats de IA: por qué `type` y `title` no son columnas y cómo se derivan, por qué el modelo es texto libre y no un enum, por qué `q` va en el `where` de afuera, y las tres patas `LEFT` del join al vehículo |
 | `documents.md` | Documentos OCR (`/documentos`): el predicado "es OCR" (`file_id IS NOT NULL`, + `source='manual'` para VTV), por qué el filtro de tipo se llama `kind` y no `type`, `mismatch` vs `missing` como flags separados, y por qué la pantalla es read-only y sin preview del archivo |
 | `leads.md` | Las pestañas de `/leads`: por qué "sección" acá es vista de producto y no el `Lead` del backend, qué pestaña tiene datos y por qué las otras tres son "próximamente", por qué Contactos no se puede arrancar desde este repo, las trampas de Seguros (días del vencimiento y no de `status`, `JOIN` y no `LEFT`, aseguradora cruda, PDF no descargable) y las de Multas (grano = vehículo consultado, `$0` ≠ null, predicado `pending` compartido con `users.repo`, `ORDER BY` desde `Record` cerrado, "desactualizada" como lectura del reloj) |
-| `notifications.md` | Notificaciones: por qué `status` y `delivery_status` son dos ejes y cómo se combinan en un estado derivado, `sin_token` vs `rechazada` (reintenta para siempre vs terminal), el umbral de `atrasada` compartido con `ops.repo.ts`, por qué el search param se llama `kind` y no `type`, y por qué no hay ni una escritura |
+| `notifications.md` | Notificaciones: por qué `status` y `delivery_status` son dos ejes y cómo se combinan en un estado derivado, `sin_token` vs `rechazada` (reintenta para siempre vs terminal), el umbral de `atrasada` compartido con `ops.repo.ts`, por qué los search params van calificados (`notificationType`/`notificationState`/`notificationBroadcastId`), y la única escritura: el envío ad-hoc por HTTP a `POST /notifications/broadcast` (idempotencia por `broadcastId`, 204 sin cuenta, un id malo tira el lote) |
 | `scanner-compatibility.md` | La matriz `/escaneres/compatibilidad`: las tres cosas que una celda puede decir (vacía ≠ `0/N` ≠ `K/N`), `noData` como deducción nuestra sobre `total_readings`, el grano = catálogo y no spec, el `GROUPING SETS` para `count(distinct)`, el pivot en JS, y `MIN_VEHICLES_FOR_CONFIDENCE` |
 | `scan-sessions.md` | La lista `/escaneres/sesiones`: el corte de estado que se IMPORTA de `scanners.repo.ts` en vez de recopiarse, `scanState` calificado por dominio, anomalías leídas de un jsonb compactadas a `{type,severity,pid}` + `bySeverity` del summary, DTCs de `session_dtc_snapshots.codes`, `battery_volts` parseado sólo para ordenar, y por qué no hay escrituras ni detalle por sesión |
 | `scan-detections.md` | La tabla `/escaneres/detecciones`: fila = código DTC o tipo de anomalía; el `UNION ALL` de dos ramas con el CTE `scan_sessions`; **los DOS universos distintos** (DTC sobre sesiones `completed`, anomalía sobre las que trajeron datos — con el corte único P0171/P0170 desaparecían); el título del DTC desde `src/server/dtc-codes.json` server-only (`diagnostic_dtcs.standard_description` está 100% NULL) y el bloque de códigos sin cargar calculado sin los filtros; `sesiones` vs `disparos` para una anomalía multi-PID; severidad como `array_agg` + rank; search params calificados (`detectionKind`/`detectionSeverity`/`detectionFamily`); y por qué no hay escrituras ni detalle por fila |

@@ -3,8 +3,10 @@ import '@tanstack/react-start/server-only'
 import { sql } from './db'
 import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
 import type {
+  BroadcastResult,
   NotificationFacets,
   NotificationListItem,
+  NotificationRecipient,
   NotificationSearch,
   NotificationSortKey,
   NotificationState,
@@ -18,11 +20,18 @@ import type {
  * pero `rg` lo encuentra y el diff queda versionado.
  *
  * Corolario literal: **ninguna consulta de este archivo escribe nada.** Una
- * notificación es un hecho que pasó, no un estado que el admin mueva — mismo
- * criterio que `driving_sessions` y `conversations`. Y `ops-write-actions.md`
- * ya descartó explícitamente reintentar o cortar el loop desde el panel: el
- * backend ya reintenta solo, y "cancelar" necesita un estado terminal que el
- * enum `notification_status` no tiene. Si aparece un `UPDATE`/`INSERT` acá,
+ * notificación existente es un hecho que pasó, no un estado que el admin mueva
+ * — mismo criterio que `driving_sessions` y `conversations`. Y
+ * `ops-write-actions.md` ya descartó explícitamente reintentar o cortar el loop
+ * desde el panel: el backend ya reintenta solo, y "cancelar" necesita un estado
+ * terminal que el enum `notification_status` no tiene.
+ *
+ * El panel SÍ crea notificaciones desde el 2026-09-14 — pero no por acá: por
+ * HTTP a `POST /notifications/broadcast` (`broadcastNotification` en
+ * `backend.ts`), que aplica las preferencias del usuario y las invariantes de
+ * `Notification.create()`. Un `INSERT` en este archivo se las saltearía. Lo que
+ * sí vive acá es la lectura de vuelta (`broadcastResult`) y el buscador de
+ * destinatarios, los dos de solo lectura. Si aparece un `UPDATE`/`INSERT` acá,
  * está mal.
  */
 
@@ -140,6 +149,14 @@ export async function listNotifications(
     innerWhere.push(`n.user_id = $${params.length}`)
   }
 
+  // Columnas crudas de `notifications`, como `user_id`: van adentro y acotan el
+  // barrido. `source_type` se compara contra el literal del enum — el uuid
+  // solo no alcanza, `source_id` de otra fuente podría coincidir.
+  if (search.notificationBroadcastId) {
+    params.push(search.notificationBroadcastId)
+    innerWhere.push(`n.source_type = 'broadcast' and n.source_id = $${params.length}`)
+  }
+
   if (search.q) {
     params.push(`%${search.q}%`)
     const p = `$${params.length}`
@@ -252,5 +269,97 @@ export async function listNotificationFacets(
   return {
     types: rows.filter((r) => r.kind === 'type').map((r) => r.value).sort(),
     channels: rows.filter((r) => r.kind === 'channel').map((r) => r.value).sort(),
+  }
+}
+
+// ── Envío ad-hoc: buscar destinatarios y leer lo que quedó ───────────────────
+
+const RECIPIENT_SEARCH_LIMIT = 20
+
+/**
+ * Candidatos para el compositor de `/notificaciones`. Mismo `ilike` sobre email
+ * y nombre que `listUsers`, pero NO reusa esa función: aquella arma el
+ * expediente (seis subconsultas, 500 filas) y acá hacen falta 20 filas y un
+ * solo número.
+ *
+ * Ese número es `push_tokens`, y es lo que justifica la consulta: con `0` el
+ * backend crea la notificación igual y queda `sin_token` para siempre. Decirlo
+ * al elegir al destinatario es barato; descubrirlo en el listado, después, no
+ * sirve de nada. Subconsulta escalar y no JOIN, por el fan-out de siempre
+ * (`users.md`, trampa 2).
+ *
+ * Los que empiezan con el texto buscado van primero: quien tipea `juan` quiere a
+ * `juan@…` antes que a `mejuan@…`.
+ */
+export async function searchRecipients(
+  q: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<NotificationRecipient>> {
+  void opts.signal
+
+  const rows = await sql<{
+    id: string
+    email: string
+    name: string | null
+    push_tokens: number | string
+  }>(
+    `
+    select
+      u.id,
+      u.email,
+      u.name,
+      (select count(*) from expo_push_tokens t where t.user_id = u.id)::int as push_tokens
+    from users u
+    where u.email ilike $1 or coalesce(u.name, '') ilike $1
+    order by (u.email ilike $2) desc, u.email
+    limit $3
+    `,
+    [`%${q}%`, `${q}%`, RECIPIENT_SEARCH_LIMIT],
+  )
+
+  return rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    name: r.name,
+    pushTokens: toInt(r.push_tokens),
+  }))
+}
+
+/**
+ * Qué creó de verdad una campaña, preguntándole a Postgres.
+ *
+ * Hace falta porque `POST /notifications/broadcast` devuelve 204 SIN cuerpo: no
+ * dice cuántas filas dio de alta. Y el número puede ser menor que los elegidos
+ * sin que nada haya fallado — quien silenció `announcement` queda afuera, y un
+ * reenvío del mismo `broadcastId` choca `idx_notifications_adhoc_source_unique`
+ * y no crea nada nuevo.
+ *
+ * El estado usa `DERIVED_STATE` tal cual, con el MISMO `$1`: si esta cuenta y el
+ * listado filtrado por `notificationBroadcastId` dijeran estados distintos para
+ * las mismas filas, una de las dos pantallas mentiría.
+ */
+export async function broadcastResult(
+  broadcastId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<BroadcastResult> {
+  void opts.signal
+
+  const rows = await sql<{ state: NotificationState; count: number | string }>(
+    `
+    select (${DERIVED_STATE}) as state, count(*)::int as count
+    from notifications n
+    where n.source_type = 'broadcast' and n.source_id = $2
+    group by 1
+    order by 2 desc
+    `,
+    [NOTIFICATION_DELAYED_AFTER_MIN, broadcastId],
+  )
+
+  const byState = rows.map((r) => ({ state: r.state, count: toInt(r.count) }))
+
+  return {
+    broadcastId,
+    created: byState.reduce((total, s) => total + s.count, 0),
+    byState,
   }
 }

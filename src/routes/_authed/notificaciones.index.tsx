@@ -15,6 +15,7 @@ import {
 } from '~/lib/notifications'
 import { listAppNotificationFacets, listAppNotifications } from '~/fn/notifications'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { BroadcastComposer } from '~/components/BroadcastComposer'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { Badge } from '~/components/ui/badge'
 import { Input } from '~/components/ui/input'
@@ -81,20 +82,55 @@ function NotificationsList() {
     Boolean(search.notificationType) ||
     Boolean(search.channel) ||
     Boolean(search.notificationState) ||
-    Boolean(search.userId)
+    Boolean(search.userId) ||
+    Boolean(search.notificationBroadcastId)
 
   // Cuando se filtra por usuario mostramos su email — sale de las propias filas,
   // sin una consulta extra. Si el filtro no matchea nada, no hay email que
   // mostrar y el aviso queda genérico.
   const scopedEmail = search.userId ? (notifications[0]?.userEmail ?? null) : null
 
+  // Mismo truco para un envío: todas sus filas comparten el título.
+  const broadcastTitle = search.notificationBroadcastId ? (notifications[0]?.title ?? null) : null
+
   return (
     <>
       <PageHeader
         title="Notificaciones"
         subtitle={`${formatInt(notifications.length)} ${filtered ? 'con este filtro' : 'en total'}`}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <>
+            {/* La única escritura de la pantalla, y no es SQL: va por HTTP al
+                backend hex. → `BroadcastComposer` */}
+            <BroadcastComposer />
+            <SsrTag>ssr: full</SsrTag>
+          </>
+        }
       />
+
+      {search.notificationBroadcastId ? (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-sm">
+          <span className="min-w-0 truncate text-muted-foreground">
+            Filtrando por el envío{' '}
+            <span className="font-mono text-xs text-foreground">
+              {search.notificationBroadcastId.slice(0, 8)}
+            </span>
+            {broadcastTitle ? (
+              <>
+                {' '}— <span className="text-foreground">{broadcastTitle}</span>
+              </>
+            ) : null}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSearch({ notificationBroadcastId: undefined })}
+            className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <X className="size-3" aria-hidden />
+            quitar
+          </button>
+        </div>
+      ) : null}
 
       {search.userId ? (
         <div className="mb-4 flex items-center gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-sm">

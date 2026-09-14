@@ -1,8 +1,10 @@
 # Notificaciones (`/notificaciones`)
 
 Alcance: `src/lib/notifications.ts`, `src/server/notifications.repo.ts`,
-`src/fn/notifications.ts`, `src/routes/_authed/notificaciones.index.tsx`, y el
-link en el bloque `Notifications` de `src/routes/_authed/usuarios.$userId.tsx`.
+`src/fn/notifications.ts`, `src/routes/_authed/notificaciones.index.tsx`,
+`src/components/BroadcastComposer.tsx`, `broadcastNotification` en
+`src/server/backend.ts`, y el link en el bloque `Notifications` de
+`src/routes/_authed/usuarios.$userId.tsx`.
 
 ## Qué consulta reemplaza
 
@@ -64,7 +66,7 @@ está perdida), igual que `stuck` en `/operacion` y `noData` en `/escaneres`.
 > estado real de más de la mitad de la base, y `/operacion` ya lo estaba
 > contando como `stuck`. La pantalla lo hace visible fila por fila.
 
-## Los search params se llaman `notificationType` y `notificationState`
+## Los search params se llaman `notificationType`, `notificationState` y `notificationBroadcastId`
 
 No es cosmética: **las dos colisiones que estos nombres esquivan ya rompieron
 un build de producción**, el 2026-09-07, al mergear esta rama contra `main`.
@@ -97,6 +99,10 @@ nombre que otra pantalla va a querer.
 
 - La columna en la base y el campo de `NotificationListItem` siguen siendo
   `type` y `state`. Sólo cambia la llave de la URL.
+- `notificationBroadcastId` (uuid) filtra `source_type = 'broadcast' and
+  source_id = …`, en el WHERE INTERNO igual que `user_id` (son columnas
+  crudas). No se llama `broadcastId` por la misma regla, aunque hoy nadie más
+  lo use.
 - `q`, `sort`, `dir`, `userId` se comparten sin problema: coinciden en tipo
   (`string`, o enums que cada ruta valida por su lado). El conflicto es
   `string` contra `enum`, o dos enums disjuntos.
@@ -107,8 +113,9 @@ nombre que otra pantalla va a querer.
 - `notificationType` y `channel`: las opciones salen de `listNotificationFacets()` —
   `select distinct` sobre la base. Un valor nuevo del enum aparece en los chips
   sin tocar código, mismo criterio que `listDistinctChatModels` en
-  `chats.repo.ts`. `NOTIFICATION_TYPE_LABELS` tiene los seis valores del enum a
-  mano sólo para la etiqueta legible; un valor sin label se muestra CRUDO.
+  `chats.repo.ts`. `NOTIFICATION_TYPE_LABELS` tiene los valores del enum a
+  mano (siete, con `announcement`) sólo para la etiqueta legible; un valor sin
+  label se muestra CRUDO.
 - `notificationState`: es vocabulario NUESTRO (derivado, no un enum del backend), así que la
   lista es cerrada en `~/lib/notifications` y los chips son fijos.
 
@@ -137,22 +144,68 @@ calculada (el `CASE`) y `q` busca sobre `title` / `body` / `vehicle_plate`, que
 no son columnas de `notifications` — son el join o el CASE, y no existen todavía
 en el nivel del WHERE interno. El envoltorio `select * from (...) s` está por
 eso. **La única excepción es `user_id`**: es columna cruda de `notifications`,
-así que va en el WHERE interno y acota el barrido antes de calcular nada.
+así que va en el WHERE interno y acota el barrido antes de calcular nada (lo
+mismo `source_type`/`source_id` de `notificationBroadcastId`).
 
-## `adminMiddleware` en las tres lecturas
+## `adminMiddleware` en todos los server functions
 
 El cuerpo de una notificación es lo que le mostramos a la persona sobre su auto:
 patente, vencimiento de documentos, códigos de falla. Un server function es un
 endpoint HTTP público — mismo criterio que `users.ts` y `chats.ts`. Sin el guard
-cualquier sesión válida de la app se baja el historial de avisos de cualquiera.
+cualquier sesión válida de la app se baja el historial de avisos de cualquiera,
+o le manda un push a quien quiera.
 
-## Ni una escritura
+## La única escritura: el envío ad-hoc, por HTTP
 
-`notifications` la escribe el backend (`notifications/`). Un aviso es un hecho
-que pasó, no un estado que el admin mueva — mismo criterio que `driving_sessions`
-y `conversations`.
+"Nueva notificación" (`BroadcastComposer`) manda un push a usuarios elegidos a
+mano. **No escribe Postgres**: llama a `POST /notifications/broadcast` del
+backend hex (`AdminGuard`) con el token de Clerk del admin, desde
+`broadcastNotification` en `backend.ts`. `notifications.repo.ts` sigue siendo de
+solo lectura; lo que suma es el buscador de destinatarios y la lectura de vuelta.
 
-Y las dos escrituras que van a tentar ya se descartaron en
+**Por qué no un SP de `ops`**: el grep al backend da positivo, y con eso alcanza
+(`ops-write-actions.md`). Pero además un `INSERT` estaría mal: se saltearía el
+filtro de preferencias (`CreateNotificationsHandler` descarta a quien silenció
+`announcement` en push) y `Notification.create()`, que deriva `type` de
+`source_type` (`broadcast → announcement`) y trimea título y cuerpo.
+
+Las trampas, todas verificadas contra el código del backend:
+
+- **`broadcastId` es la clave de idempotencia y la genera el CLIENTE.** Cada fila
+  queda `source_type = 'broadcast'`, `source_id = broadcastId`, y
+  `idx_notifications_adhoc_source_unique (user_id, source_type, source_id)` + `ON
+  CONFLICT DO NOTHING` descartan la repetida. El compositor genera UNO al abrirse
+  y lo conserva tras un error, un cierre del panel o un doble click; lo regenera
+  sólo después de un envío exitoso. Un timeout puede haber creado las filas:
+  reintentar con el mismo id es lo que evita el push doble.
+- **Mismo id + texto editado no hace nada** para quien ya tenía su fila. Si el
+  intento fallido llegó al backend, esas personas se quedan con el texto viejo.
+  La UI lo avisa después de un intento.
+- **Un userId inexistente tira el lote ENTERO con 400** (FK `23503` →
+  `VALIDATION_ERROR`; es un solo INSERT). El picker elige de nuestro SELECT, así
+  que significa "se borró entre que lo elegiste y enviaste". Se traduce en
+  `readableBroadcastError` (sentinela `BROADCAST_REJECTED:`).
+- **204 sin cuerpo: el backend no dice cuántas creó.** Menos filas que
+  elegidos es normal (silenciados, o ya existentes). La cuenta se lee de vuelta
+  por `source_id` en `broadcastResult`, con el MISMO `DERIVED_STATE` que el
+  listado.
+- **Sin token no es error**: la fila se crea y queda `sin_token`, reintentando
+  para siempre. Por eso el buscador trae `pushTokens` y el chip lo pinta ámbar
+  AL ELEGIR, no después.
+- **Sin deep link todavía.** La fila no lleva destino en la app; agregarlo toca
+  backend y mobile, es otra feature.
+- `scheduledAt` sale de un `datetime-local` (hora local del navegador) pasado a
+  UTC con `toISOString()`. El schema exige futuro: el backend acepta uno pasado y
+  lo manda ya, que casi siempre es un error de zona horaria sin vuelta atrás.
+- Los topes (500 destinatarios, título 100, mensaje 500) espejan el DTO del
+  backend. El de 500 no se configura del otro lado: el alta es un INSERT
+  sincrónico.
+
+## Las escrituras que se descartaron
+
+Una notificación existente es un hecho que pasó, no un estado que el admin mueva
+— mismo criterio que `driving_sessions` y `conversations`. Y las dos escrituras
+que van a tentar ya se descartaron en
 `.claude/rules/ops-write-actions.md`, con motivo técnico y no con la regla:
 
 - **Reintentar una fallida** → no-op. `notification-delivery.cron` ya reintenta
@@ -163,7 +216,8 @@ Y las dos escrituras que van a tentar ya se descartaron en
   del backend. Empujar `scheduled_at` al futuro es un workaround que reescribe
   un campo del dominio para un efecto que ese campo no significa.
 
-Si aparece un `UPDATE` / `INSERT` en `notifications.repo.ts`, está mal.
+Si aparece un `UPDATE` / `INSERT` en `notifications.repo.ts`, está mal — también
+para crear: eso va por `backend.ts`.
 
 ## `notification_rules` NO tiene `user_id`
 

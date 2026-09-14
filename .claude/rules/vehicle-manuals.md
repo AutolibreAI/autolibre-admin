@@ -30,7 +30,10 @@ subir el mismo PDF N veces y a mantenerlos sincronizados a mano.
 Por eso la ficha muestra las variantes en una tarjeta **sin ningún botón de carga al lado**: verlas
 ahí, inertes, es lo que hace que la relación se lea de una.
 
-## Ésta es la única pantalla del panel cuyas escrituras NO son SQL
+## Ésta fue la primera pantalla del panel cuyas escrituras NO son SQL
+
+> Desde el 2026-09-14 no es la única: `/notificaciones` manda push ad-hoc por
+> HTTP con el mismo cliente (`backend.ts`). → `.claude/rules/notifications.md`
 
 El resto del panel escribe con stored procedures de `ops`. Acá no, y hay **dos** motivos
 independientes — cualquiera de los dos alcanza:

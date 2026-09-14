@@ -11,12 +11,18 @@ import '@tanstack/react-start/server-only'
 import { auth } from '@clerk/tanstack-react-start/server'
 
 /**
- * El primer —y por ahora único— cliente HTTP del panel contra
- * `autolibre-backend-hex`.
+ * El único cliente HTTP del panel contra `autolibre-backend-hex`.
+ *
+ * Nació para los manuales de vehículos y ya no es sólo eso: desde el
+ * 2026-09-14 también da de alta las notificaciones ad-hoc de `/notificaciones`
+ * (`broadcastNotification`, al final del archivo). Los dos consumidores llegaron
+ * acá por el mismo camino — el `grep` al backend dio POSITIVO — y los dos viajan
+ * con el token del admin real. Un tercero entra igual: con su grep y su motivo
+ * escritos al lado de la función.
  *
  * ── Por qué existe, si el panel habla Postgres directo ───────────────────────
  *
- * Porque acá no hay alternativa, y por DOS motivos independientes:
+ * Para los manuales no hay alternativa, y por DOS motivos independientes:
  *
  *  1. **El PDF va a DigitalOcean Spaces.** No a Postgres. El panel no tiene ese
  *     adapter, ni las credenciales, ni el sniffing de magic bytes con el que
@@ -83,8 +89,8 @@ function baseUrl(): string {
     if (import.meta.env.DEV) return DEFAULT_BASE_URL
 
     throw new Error(
-      'Falta AUTOLIBRE_BACKEND_URL — el panel no puede subir manuales sin saber ' +
-        'a qué backend hablarle. Va con el prefijo incluido, por ejemplo ' +
+      'Falta AUTOLIBRE_BACKEND_URL — el panel no puede subir manuales ni mandar ' +
+        'notificaciones sin saber a qué backend hablarle. Va con el prefijo incluido, por ejemplo ' +
         'https://api.autolibre.app/api/v1. En Vercel es una env var del proyecto ' +
         'y hay que redeployar después de cargarla.',
     )
@@ -142,7 +148,18 @@ async function backendError(response: Response, what: string): Promise<Error> {
     body = null
   }
 
-  const message = typeof body?.message === 'string' ? body.message : null
+  /**
+   * `message` es un string cuando lo arma `ApplicationExceptionFilter`, pero un
+   * ARRAY cuando el 400 lo tira el `ValidationPipe` de class-validator (un
+   * mensaje por campo). Sin juntar el array, un DTO rechazado se leía como "falló
+   * sin explicación" justo en el caso donde el backend sí explicaba.
+   */
+  const message =
+    typeof body?.message === 'string'
+      ? body.message
+      : Array.isArray(body?.message)
+        ? body.message.filter((m): m is string => typeof m === 'string').join('; ') || null
+        : null
 
   if (response.status === 401) return new Error('BACKEND_UNAUTHENTICATED')
   if (response.status === 403) return new Error('BACKEND_FORBIDDEN')
@@ -346,4 +363,83 @@ export async function fileSignedUrl(fileId: string): Promise<{
     url: body.url,
     expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : '',
   }
+}
+
+// ── Notificaciones ad-hoc ────────────────────────────────────────────────────
+
+/**
+ * Dar de alta una notificación push para una lista de usuarios elegidos a mano.
+ *
+ * ── Por qué HTTP y no un stored procedure de `ops` ──────────────────────────
+ *
+ * El grep al backend da POSITIVO: `POST /notifications/broadcast` existe, bajo
+ * `AdminGuard`, en `notifications/notification/presentation`. Con eso ya
+ * alcanza (`ops-write-actions.md`: el SP se gana sólo donde el backend no tiene
+ * camino). Pero además un `INSERT INTO notifications` desde el panel estaría
+ * MAL, no sólo de más:
+ *
+ *  - **Se saltearía las preferencias.** `CreateNotificationsHandler` filtra a
+ *    quien silenció `announcement` en push antes de insertar. Un SP tendría que
+ *    reimplementar `findSilenced()`, y el día que el backend cambie esa regla
+ *    el panel le mandaría push a quien pidió que no.
+ *  - **Se saltearía `Notification.create()`**, que deriva `type` de
+ *    `source_type` (`broadcast → announcement`) y trimea título y cuerpo. Una
+ *    fila escrita a mano puede ser incoherente de una forma que el cron de
+ *    entrega no espera.
+ *
+ * ── El contrato, y las tres cosas que muerden ───────────────────────────────
+ *
+ *  - **`broadcastId` es la clave de idempotencia y la genera el CLIENTE.** Cada
+ *    fila queda con `source_type = 'broadcast'`, `source_id = broadcastId`, y
+ *    `idx_notifications_adhoc_source_unique (user_id, source_type, source_id)`
+ *    + `ON CONFLICT DO NOTHING` hacen que reenviar el mismo id no duplique. Por
+ *    eso NO se genera acá: un id nuevo por request convertiría cada reintento en
+ *    un push repetido. Lo genera `BroadcastComposer`, una vez por campaña.
+ *  - **Un userId inexistente tira el lote ENTERO con 400** (FK `23503` →
+ *    `VALIDATION_ERROR`). Es un solo INSERT: o entran todos los permitidos, o
+ *    ninguno. El panel elige los ids de su propio SELECT, así que en la práctica
+ *    significa "alguien se borró entre que lo elegiste y apretaste Enviar".
+ *  - **Devuelve 204 SIN cuerpo.** No dice cuántas filas creó — los silenciados y
+ *    los ya existentes quedan afuera sin error. La cuenta real se lee después de
+ *    Postgres por `source_id` (`broadcastResult` en `notifications.repo.ts`).
+ *    Leer un JSON de un 204 tira, y ese throw se leería como "no se mandó".
+ *
+ * `scheduledAt` se omite cuando no viene: omitido es "ahora", o sea el próximo
+ * tick de `notification-delivery.cron` (hasta un minuto). El actor es el token
+ * — el backend no guarda quién mandó la campaña, y el panel no lo inventa por
+ * payload.
+ */
+export async function broadcastNotification(input: {
+  broadcastId: string
+  userIds: Array<string>
+  title: string
+  body: string
+  scheduledAt?: string
+}): Promise<void> {
+  const token = await bearerToken()
+
+  const response = await fetch(`${baseUrl()}/notifications/broadcast`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      broadcastId: input.broadcastId,
+      userIds: input.userIds,
+      title: input.title,
+      body: input.body,
+      ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
+    }),
+    signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+  })
+
+  if (response.status === 400) {
+    // Se separa del `BACKEND_ERROR` genérico porque acá el 400 casi siempre
+    // quiere decir una cosa concreta que el texto crudo del backend no dice.
+    const error = await backendError(response, 'El alta de la notificación')
+    throw new Error(`BROADCAST_REJECTED:${error.message.split(':').slice(2).join(':')}`)
+  }
+
+  if (!response.ok) throw await backendError(response, 'El alta de la notificación')
 }

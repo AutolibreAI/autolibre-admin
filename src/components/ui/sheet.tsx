@@ -12,7 +12,10 @@ import { cn } from "~/lib/utils"
  * de sombras: el design system separa superficies con BORDES, así que el panel
  * lleva `border-r` y el scrim es Action Dark con alpha, no una sombra.
  *
- * Sólo se contempla `side="left"`; agregá los otros lados el día que haga falta.
+ * `side="left"` (default) es el drawer de navegación; `side="right"` es el
+ * compositor de `/notificaciones`. Arriba y abajo no están: agregalos el día que
+ * haga falta. El borde cambia de lado con el panel — es lo único que lo separa
+ * del fondo.
  */
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -56,16 +59,22 @@ function SheetOverlay({
 function SheetContent({
   className,
   children,
+  side = "left",
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content>) {
+}: React.ComponentProps<typeof SheetPrimitive.Content> & {
+  side?: "left" | "right"
+}) {
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-r border-border bg-sidebar",
-          "transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:slide-in-from-left data-[state=closed]:slide-out-to-left data-[state=open]:duration-300 data-[state=closed]:duration-200",
+          "fixed inset-y-0 z-50 flex h-full w-72 max-w-[85vw] flex-col border-border bg-sidebar",
+          "transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-300 data-[state=closed]:duration-200",
+          side === "left"
+            ? "left-0 border-r data-[state=open]:slide-in-from-left data-[state=closed]:slide-out-to-left"
+            : "right-0 border-l data-[state=open]:slide-in-from-right data-[state=closed]:slide-out-to-right",
           className,
         )}
         {...props}
