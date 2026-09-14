@@ -9,6 +9,7 @@ import type {
   UsageByUser,
   UsageDay,
   UsageSummary,
+  UsageUnitEconomics,
   UsageWindow,
 } from '~/lib/ai-usage'
 
@@ -164,6 +165,116 @@ export async function usageSummary(
     firstEvent: toIso(row.first_event),
     lastEvent: toIso(row.last_event),
     internalEvents: toInt(row.internal_events),
+  }
+}
+
+interface UnitEconomicsRow {
+  period_usd: string | null
+  unpriced_events: string
+  active_users: string
+  active_chat_users: string
+}
+
+/**
+ * `internal` por IDENTIDAD, no por nombre de modelo — copiado LITERAL de
+ * `ops.v_ai_usage` y de `INTERNAL_PREDICATE` en `ops.repo.ts`. Si diverge, el
+ * denominador de estos valores y el `internal_events` de `ai_usage_summary`
+ * dejan de hablar de la misma gente. → `ops-metrics.md`, trampa 1.
+ */
+const REAL_USER_PREDICATE = `NOT coalesce(
+  split_part(lower(u.email), '@', 2) IN (SELECT d.domain FROM ops.excluded_email_domains d),
+  false
+)`
+
+/**
+ * `last_activity_at` = la MISMA definición que `listUsers` en `users.repo.ts`:
+ * `greatest()` de la última alta de vehículo, conversación y sesión de manejo.
+ * `users` no tiene `last_seen_at` y no se inventa una (regla dura 8). Si esas
+ * tres subconsultas cambian allá, cambian acá.
+ */
+const APP_ACTIVITY_EXPR = `greatest(
+  (SELECT max(v.created_at) FROM vehicles v WHERE v.user_id = u.id),
+  (SELECT max(c.created_at) FROM conversations c WHERE c.user_id = u.id),
+  (SELECT max(d.created_at) FROM driving_sessions d WHERE d.user_id = u.id)
+)`
+
+/**
+ * Los tres valores de "costo del período":
+ *
+ *  1. `periodUsd`   — gasto de la ventana (= el tile "Gasto estimado").
+ *  2. `activeUsers` — usuarios reales con actividad EN LA APP dentro de la
+ *     ventana (`last_activity_at >= p_from`). Con ventana `all` no hay corte:
+ *     son todos los usuarios reales.
+ *  3. `activeChatUsers` — usuarios reales que ALGUNA VEZ usaron el chat (una
+ *     `conversation` con ≥1 mensaje). NO se acota a la ventana, a propósito: la
+ *     pregunta es "de nuestra gente que chatea, cuánto sale la IA por cabeza".
+ *
+ * (2) y (3) son subconjuntos distintos de "usuario real" — ninguno contiene al
+ * otro (alguien pudo chatear hace un año y no abrir la app esta semana).
+ *
+ * ── Por qué un SELECT crudo y no una función de `ops` ───────────────────────
+ *
+ * El resto de este archivo invoca funciones de `migrations/`. Acá no: (1) esto
+ * cruza a `public.users` / `vehicles` / `conversations` / `conversation_messages`
+ * / `driving_sessions`, y una función de `ops` que lee `public` es la
+ * dependencia de schema cruzada que `ops-metrics.md` desaconseja —con el SQL
+ * acá, un rename rompe en runtime igual pero `rg` lo encuentra y el diff queda
+ * versionado—; (2) es lectura pura que no justifica una migración nueva
+ * (`ops.schema_migrations` es por base: habría que aplicarla a mano en prod).
+ *
+ * `ops.v_ai_usage_costed` ya trae el LEFT JOIN a la tarifa y el flag `internal`.
+ * `sum(total_usd)` preserva el NULL (da NULL sólo si NINGÚN evento tiene
+ * precio), igual que `ops.ai_usage_summary`.
+ */
+export async function usageUnitEconomics(
+  filters: Filters,
+  opts: { signal?: AbortSignal } = {},
+): Promise<UsageUnitEconomics> {
+  void opts.signal
+
+  const rows = await sql<UnitEconomicsRow>(
+    `
+    WITH ev AS (
+      SELECT total_usd
+      FROM ops.v_ai_usage_costed
+      WHERE NOT internal
+        AND ($1::timestamptz IS NULL OR occurred_at >= $1)
+        AND ($2::text IS NULL OR surface = $2)
+    ),
+    real_users AS (
+      SELECT u.id FROM users u WHERE ${REAL_USER_PREDICATE}
+    ),
+    app_active AS (
+      SELECT u.id
+      FROM users u
+      WHERE u.id IN (SELECT id FROM real_users)
+        AND ($1::timestamptz IS NULL OR ${APP_ACTIVITY_EXPR} >= $1)
+    ),
+    chat_ever AS (
+      SELECT u.id
+      FROM users u
+      WHERE u.id IN (SELECT id FROM real_users)
+        AND EXISTS (
+          SELECT 1 FROM conversations c
+          WHERE c.user_id = u.id
+            AND EXISTS (SELECT 1 FROM conversation_messages m WHERE m.conversation_id = c.id)
+        )
+    )
+    SELECT
+      (SELECT sum(total_usd) FROM ev)                                   AS period_usd,
+      (SELECT count(*) FILTER (WHERE total_usd IS NULL) FROM ev)::int   AS unpriced_events,
+      (SELECT count(*) FROM app_active)::int                            AS active_users,
+      (SELECT count(*) FROM chat_ever)::int                             AS active_chat_users
+    `,
+    [windowStart(filters.window), filters.surface ?? null],
+  )
+
+  const row = rows[0]
+  return {
+    periodUsd: toNum(row?.period_usd ?? null),
+    unpricedEvents: toInt(row?.unpriced_events),
+    activeUsers: toInt(row?.active_users),
+    activeChatUsers: toInt(row?.active_chat_users),
   }
 }
 

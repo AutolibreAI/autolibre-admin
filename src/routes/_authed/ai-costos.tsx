@@ -6,6 +6,8 @@ import {
   ExternalLink,
   EyeOff,
   Hash,
+  MessagesSquare,
+  Users,
 } from 'lucide-react'
 import {
   SURFACE_LABELS,
@@ -15,6 +17,7 @@ import {
   aiUsageSearchSchema,
   formatTokens,
   formatUsd,
+  formatUsdPrecise,
 } from '~/lib/ai-usage'
 import {
   getAiModelPrices,
@@ -23,6 +26,7 @@ import {
   getAiUsageByUser,
   getAiUsageDaily,
   getAiUsageSummary,
+  getAiUsageUnitEconomics,
 } from '~/fn/ai-usage'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
@@ -44,6 +48,7 @@ import type {
   UsageByUser,
   UsageDay,
   UsageSummary,
+  UsageUnitEconomics,
 } from '~/lib/ai-usage'
 
 export const Route = createFileRoute('/_authed/ai-costos')({
@@ -75,13 +80,14 @@ export const Route = createFileRoute('/_authed/ai-costos')({
     const byUserPromise = getAiUsageByUser({ data: deps, signal })
     const pricesPromise = getAiModelPrices({ signal })
 
-    const [summary, daily, byModel] = await Promise.all([
+    const [summary, unitEconomics, daily, byModel] = await Promise.all([
       getAiUsageSummary({ data: deps, signal }),
+      getAiUsageUnitEconomics({ data: deps, signal }),
       getAiUsageDaily({ data: deps, signal }),
       getAiUsageByModel({ data: deps, signal }),
     ])
 
-    return { summary, daily, byModel, coveragePromise, byUserPromise, pricesPromise }
+    return { summary, unitEconomics, daily, byModel, coveragePromise, byUserPromise, pricesPromise }
   },
 
   head: () => ({ meta: [{ title: 'Costos de IA — AutoLibre' }] }),
@@ -89,7 +95,7 @@ export const Route = createFileRoute('/_authed/ai-costos')({
 })
 
 function AiCostsPage() {
-  const { summary, daily, byModel, coveragePromise, byUserPromise, pricesPromise } =
+  const { summary, unitEconomics, daily, byModel, coveragePromise, byUserPromise, pricesPromise } =
     Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -162,6 +168,8 @@ function AiCostsPage() {
           <code className="font-mono">valid_from</code> correcto y el histórico se recalcula solo.
         </Notice>
       ) : null}
+
+      <UnitEconomicsTiles data={unitEconomics} window={search.window} />
 
       {daily.length > 0 ? <DailyChart days={daily} /> : null}
 
@@ -259,6 +267,91 @@ function SummaryTiles({ summary }: { summary: UsageSummary }) {
             accent ? 'border-status-yellow/30 bg-status-yellow-bg' : 'border-border bg-card',
           )}
         >
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Icon className="size-4 shrink-0" aria-hidden />
+            <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
+          </div>
+          <div className="mt-2 font-heading text-2xl font-bold tracking-tight">{value}</div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hint}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Costo del período: total y por usuario ───────────────────────────────────
+
+/**
+ * Los tres valores que pidió producto, en fila:
+ *
+ *  1. Gasto de la ventana (mismo número que el tile "Gasto estimado" — acá es el
+ *     numerador de los otros dos, así que se repite a propósito).
+ *  2. Ese gasto ÷ usuarios reales con actividad EN LA APP dentro de la ventana.
+ *  3. Ese gasto ÷ usuarios reales que ALGUNA VEZ usaron el chat del asistente.
+ *
+ * (2) y (3) son denominadores de escopos distintos —"activo ahora" vs "cliente
+ * de chat alguna vez"— y ninguno contiene al otro. Ver `UsageUnitEconomics`.
+ *
+ * Las razones se derivan acá (`periodUsd / n`) y son "—" —nunca 0— si el gasto
+ * es desconocido (`null`) o el divisor es 0. Cero se leería como "gratis".
+ */
+function UnitEconomicsTiles({
+  data,
+  window,
+}: {
+  data: UsageUnitEconomics
+  window: keyof typeof WINDOW_LABELS
+}) {
+  const perUser =
+    data.periodUsd === null || data.activeUsers === 0
+      ? null
+      : data.periodUsd / data.activeUsers
+  const perChatUser =
+    data.periodUsd === null || data.activeChatUsers === 0
+      ? null
+      : data.periodUsd / data.activeChatUsers
+
+  const ventana = WINDOW_LABELS[window].toLowerCase()
+
+  const tiles = [
+    {
+      key: 'total',
+      icon: CircleDollarSign,
+      value: formatUsd(data.periodUsd),
+      label: `Gasto · ${ventana}`,
+      hint:
+        data.unpricedEvents > 0
+          ? `${formatInt(data.unpricedEvents)} llamada(s) sin tarifa quedan afuera`
+          : 'Total del período elegido',
+    },
+    {
+      key: 'per-user',
+      icon: Users,
+      value: formatUsdPrecise(perUser),
+      label: 'Por usuario activo en la app',
+      hint:
+        data.activeUsers === 0
+          ? 'Ningún usuario real con actividad en el período'
+          : `${formatInt(data.activeUsers)} usuario(s) real(es) con actividad ${
+              window === 'all' ? '(padrón completo)' : 'en el período'
+            }`,
+    },
+    {
+      key: 'per-chat-user',
+      icon: MessagesSquare,
+      value: formatUsdPrecise(perChatUser),
+      label: 'Por usuario que usó el chat',
+      hint:
+        data.activeChatUsers === 0
+          ? 'Ningún usuario real chateó nunca'
+          : `${formatInt(data.activeChatUsers)} usuario(s) real(es) con una conversación, alguna vez`,
+    },
+  ] as const
+
+  return (
+    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      {tiles.map(({ key, icon: Icon, value, label, hint }) => (
+        <div key={key} className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Icon className="size-4 shrink-0" aria-hidden />
             <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
