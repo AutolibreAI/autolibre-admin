@@ -197,7 +197,7 @@ pantalla no va todavía.
 | `/partners/listado` | `true` | El listado del directorio, con los rubros (categorías) y servicios de cada uno, ordenable y filtrable por esas columnas. Antes era `/partners` |
 | `/partners/cobertura` | `true` | **La consulta que nadie corría**: qué oferta tiene cubierta el marketplace y cuál falta. Cruza las 16 `service_categories` contra `partners.coverage_zone` (texto crudo), con los huecos absolutos y los puntos únicos de falla |
 | `/partners/$partnerId` | — | La ficha: carga manual de rubros (consultas 7–8 del runbook) + editor de estado, coordenadas, contacto, perfil y links |
-| `/leads` | — | Layout de pestañas de las líneas de captación. Redirige a `/leads/talleres`. → `.claude/rules/leads.md` |
+| `/leads` | — | Layout de pestañas de las líneas de captación. Redirige a `/leads/pedidos` (default desde el 2026-09-15; Talleres pasó a ser la última pestaña). → `.claude/rules/leads.md` |
 | `/leads/talleres` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
 | `/leads/seguros` | `true` | El `select … from insurances where expiration_date < now() + interval '30 days'` que hoy nadie corre — la cola de pólizas por vencer para ofrecer alternativas |
 | `/leads/multas` | `true` | El `select` que cruza `vehicle_fine_syncs` → `fines` → `vehicles` → `users`: qué autos tienen deuda de multas, cuánto, desde cuándo y de quién. Ordenable y filtrable por columna. `/usuarios` ya lo tiene por vehículo dentro de una ficha; esto es la vista transversal |

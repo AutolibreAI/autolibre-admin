@@ -294,6 +294,13 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
   internalNotes: string | null
   /** `raw_submission` ya serializado con indentación — viaja como string, no como `unknown`. */
   rawSubmissionJson: string
+  /**
+   * `location_address`, texto ya armado por el backend (device vs typed —
+   * ver `.claude/rules/leads.md`). `null` cuando el pedido no trae ubicación
+   * (WhatsApp, o un `typed` sin dirección). Es lo que rellena `{{zona}}` en
+   * `~/lib/quote-templates`.
+   */
+  locationAddress: string | null
 }
 
 export type QuoteRequestsListResult =

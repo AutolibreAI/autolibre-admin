@@ -16,6 +16,7 @@ import { getQuoteRequestFn } from '~/fn/quote-requests'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteTemplates } from '~/components/QuoteTemplates'
 import { Card, CardContent } from '~/components/ui/card'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
@@ -28,6 +29,10 @@ import type { ReactNode } from 'react'
  * corre en DBeaver para ver un pedido antes de llamar — con lo que ese select no
  * contesta solo: en qué orden pasaron las cosas, las notas como hilo, y si el
  * vehículo que se vinculó es de verdad de esa persona.
+ *
+ * `<QuoteTemplates detail={d}/>` es texto para copiar y pegar al contactar,
+ * completado con los datos DE ESTE pedido — no vive en el listado porque no
+ * tiene sentido sin un pedido puntual al que referirse. → `~/lib/quote-templates`.
  */
 export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
   /**
@@ -103,6 +108,8 @@ function QuoteRequestScreen() {
         Solo lectura. Las transiciones (contactado, respondido, cerrar) y las notas se siguen cargando con
         los scripts SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
       </p>
+
+      <QuoteTemplates detail={d} />
 
       <Card className="mb-4">
         <CardContent className="pt-6">
