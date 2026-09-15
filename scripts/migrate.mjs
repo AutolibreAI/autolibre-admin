@@ -284,8 +284,22 @@ async function bootstrap(client) {
  *
  * `inet_server_port()` puede venir NULL sobre un socket unix — ahí no hay
  * pooler de por medio y se sigue de largo.
+ *
+ * ── CONTRA LOCALHOST NO SE COMPARA ───────────────────────────────────────
+ *
+ * El Docker de desarrollo publica `5435:5432`: se disca al 5435 y el Postgres
+ * del contenedor contesta 5432. Es la misma firma que un pooler, y el runner
+ * se negaba a migrar la base local (pasó el 2026-09-15, con la 008–011).
+ *
+ * Se decide por el host que DISCAMOS —la URL—, nunca por lo que el servidor
+ * dice de sí mismo: detrás del pooler de DigitalOcean `inet_server_addr()`
+ * devuelve `127.0.0.1`. Producción disca `…ondigitalocean.com`, que nunca es
+ * loopback, así que ahí el chequeo sigue entero. Lo que se resigna: un
+ * pgBouncer corriendo en la propia máquina no se detecta, y hoy no hay ninguno.
  */
 async function assertNotBehindPooler(client) {
+  if (targetsLocalhost(connectionString)) return
+
   let dialedPort
   try {
     const parsed = new URL(connectionString)
