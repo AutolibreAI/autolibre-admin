@@ -4,6 +4,7 @@ import { sql, sqlOne } from './db'
 import {
   QUOTE_UNCONTACTED_AFTER_HOURS,
   type AdvanceQuoteRequestInput,
+  type CreateQuoteRequestInput,
   type QuoteRequestDetail,
   type QuoteRequestListItem,
   type QuoteRequestSearch,
@@ -207,7 +208,11 @@ const SELECT_COLUMNS = `
   (select count(*)::int
      from regexp_split_to_table(coalesce(qr.internal_notes, ''), chr(10)) as l(line)
     where btrim(replace(l.line, chr(13), '')) <> '') as note_count,
-  ${uncontactedPredicate('qr.', '$1')} as uncontacted
+  ${uncontactedPredicate('qr.', '$1')} as uncontacted,
+  -- ops.create_quote_request (migracion 012) marca las filas que cargo un
+  -- admin a mano asi, en vez de una columna aparte que el backend tendria que
+  -- agregar. Ver el comentario de cabecera de esa migracion.
+  (qr.raw_submission->>'source' = 'admin_manual_entry') as entered_manually
 `
 
 const FROM_JOINS = `
@@ -252,6 +257,7 @@ interface ListRow {
   user_outcome: string | null
   note_count: number | string
   uncontacted: boolean
+  entered_manually: boolean
 }
 
 /** Campo por campo, nunca un spread de la fila — mismo criterio que `mapCensus`. */
@@ -290,6 +296,7 @@ function mapListRow(r: ListRow): QuoteRequestListItem {
     userOutcome: r.user_outcome,
     noteCount: toInt(r.note_count),
     uncontacted: r.uncontacted,
+    enteredManually: r.entered_manually,
   }
 }
 
@@ -575,4 +582,53 @@ export async function advanceQuoteRequest(
   )
   if (!row) throw new Error(`QUOTE_REQUEST_NOT_FOUND:${input.quoteRequestId}`)
   return { id: row.q.id, status: row.q.status }
+}
+
+// ── Escritura: cargar un pedido a mano ──────────────────────────────────────
+
+/**
+ * Cargar un pedido que llegó de forma informal (llamada, en persona, un
+ * referido), vía `ops.create_quote_request` (migración 012).
+ *
+ * ── Por qué no es un INSERT desde acá ───────────────────────────────────────
+ *
+ * Mismo motivo que `advanceQuoteRequest`: el SP escribe `ops.action_log` en la
+ * MISMA unidad de trabajo que el `INSERT`, así que la fila y su auditoría no
+ * se pueden separar.
+ *
+ * ── Por qué no es el POST público del backend ───────────────────────────────
+ *
+ * Ese endpoint es anónimo por diseño — así es como app/web/whatsapp aceptan
+ * pedidos de gente sin cuenta. Llamarlo desde acá dejaría el pedido sin rastro
+ * de qué admin lo tipeó. Ver el comentario de cabecera de la migración 012.
+ *
+ * ── Retorno mínimo, mismo criterio que `advanceQuoteRequest` ───────────────
+ *
+ * `{ id, publicNumber }` alcanza para que la UI arme el link a la ficha nueva
+ * y muestre el código `AL-…`; el resto del estado calculado lo trae el loader
+ * de `/leads/pedidos` cuando `router.invalidate()` lo vuelve a correr.
+ */
+export async function createQuoteRequest(
+  input: CreateQuoteRequestInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ id: string; publicNumber: number }> {
+  void opts.signal
+
+  const row = await sqlOne<{ q: { id: string; public_number: number } }>(
+    'SELECT ops.create_quote_request($1, $2, $3, $4, $5, $6, $7, $8, $9) AS q',
+    [
+      actorId,
+      input.channel,
+      input.contactPhone,
+      input.plate,
+      input.description,
+      input.contactName ?? null,
+      input.contactEmail ?? null,
+      input.declaredAmount ?? null,
+      input.note ?? null,
+    ],
+  )
+  if (!row) throw new Error('QUOTE_REQUEST_CREATE_FAILED')
+  return { id: row.q.id, publicNumber: toInt(row.q.public_number) }
 }

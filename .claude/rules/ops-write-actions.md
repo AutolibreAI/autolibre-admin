@@ -9,7 +9,10 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`. La 011 suma
 `migrations/011_ops_avanzar_pedido.sql`, `advanceQuoteRequest` de
 `src/server/quote-requests.repo.ts`, `advanceQuoteRequestFn` de
-`src/fn/quote-requests.ts` y `src/components/QuoteStatusControl.tsx`.
+`src/fn/quote-requests.ts` y `src/components/QuoteStatusControl.tsx`. La 012
+suma `migrations/012_ops_crear_pedido.sql`, `createQuoteRequest` de
+`src/server/quote-requests.repo.ts`, `createQuoteRequestFn` de
+`src/fn/quote-requests.ts` y `src/components/QuoteRequestComposer.tsx`.
 
 ## La regla que esto reemplaza, y por qué
 
@@ -565,3 +568,81 @@ de la transacción y el `CHECK >=` pasa), `INVALID_STATUS`,
 `QUOTE_REQUEST_NOT_FOUND`, `ACTOR_NOT_FOUND`/`ACTOR_REQUIRED`, el log con
 `before`/`after`, que el SP no escriba `updated_at`, y una integración con
 parámetros nombrados. **Repetir ese patrón para cualquier SP nuevo.**
+
+---
+
+# Migración 012 — cargar un pedido de presupuesto a mano
+
+Alcance añadido: `migrations/012_ops_crear_pedido.sql`, su `.test.sql`,
+`ops.create_quote_request`, `createQuoteRequest` de
+`src/server/quote-requests.repo.ts`, `createQuoteRequestFn` de
+`src/fn/quote-requests.ts`, `createQuoteRequestSchema` +
+`readableCreateQuoteRequestError` de `src/lib/quote-requests.ts`,
+`src/components/QuoteRequestComposer.tsx`.
+
+## El primer SP de `quote_requests` que EXISTE al lado de un camino del backend, y se usa igual
+
+007-011 se justificaron porque el backend no tenía NINGÚN camino (007-010) o
+porque el que tenía no aplicaba a un admin autenticado (011, sección
+correspondiente). La 012 es distinta: el backend SÍ tiene un endpoint para
+crear un `quote_request` — el POST público que usan app/web/whatsapp,
+mencionado en `.claude/rules/leads.md` ("un POST público con `channel = app`
+tampoco [tiene cuenta]"). Y el panel usa un SP igual.
+
+La razón no es que el POST no alcance funcionalmente — probablemente los
+mismos campos servirían. Es que ese endpoint es **anónimo por diseño**: así
+es como app/web/whatsapp aceptan pedidos de gente sin cuenta de AutoLibre. No
+hay forma de pasarle qué admin del equipo lo está cargando, y sin eso
+`ops.action_log` — la única auditoría de quién tipeó qué en este panel —
+queda ciego para esas filas. Mismo argumento de fondo que 007-011, aplicado al
+revés: ahí el backend no tenía camino y el panel lo suplía; acá tiene un
+camino, pero es el camino equivocado para un actor identificado.
+
+**El `grep` tampoco se pudo correr** — mismo estado que 010 y 011:
+`autolibre-backend-hex` no está clonado en esta máquina. Antes de que esto
+llegue a producción sigue pendiente confirmar que no exista una variante
+`AdminGuard` del alta.
+
+## Guardrail 7 (`FOR UPDATE`) no aplica — y es la primera vez
+
+Los guardrails de 007-011 asumen un SP que EDITA una fila existente: por eso
+el 7 dice "lockear antes de escribir". La 012 es la primera función de
+escritura de este archivo que CREA, no edita — no hay fila previa que
+lockear, y el único punto de contención (la `id` nueva) lo resuelve
+`gen_random_uuid()` sin colisión posible. El resto de los guardrails se
+sostiene igual, incluido el 8: como es un `INSERT` y no un `UPDATE`, el
+trigger `trg_quote_requests_updated_at` ni siquiera dispara — `created_at` y
+`updated_at` toman su propio `DEFAULT now()`.
+
+## El canal es una aproximación, y está anotado como tal
+
+`quote_request_channel` (relevado con `pg_enum`: `app | web | whatsapp`, nada
+más) no tiene un valor para "cargado a mano" — es un enum de `public`, este
+repo no lo puede ampliar. El formulario pide elegir uno de los tres
+igual (default `whatsapp`) en vez de inventar un cuarto valor. La fila queda
+marcada aparte (`raw_submission->>'source' = 'admin_manual_entry'`,
+expuesta como `enteredManually`), así que el canal elegido no oculta que el
+pedido se cargó a mano — sólo aproxima por dónde "se pareció más" a haber
+entrado.
+
+## `raw_submission` documenta el origen en vez de mentir con `'{}'`
+
+La columna es NOT NULL y las tres vías digitales la llenan con el body real
+del cliente. Acá no hay body — lo tipea el operador — así que en vez de un
+`'{}'::jsonb` vacío (que se leería como una submission real sin datos) el SP
+guarda `{"source": "admin_manual_entry", "enteredBy": <actor>, "enteredAt":
+<now()>}`. Es metadata verdadera sobre la fila, no dato inventado, y es lo
+que le permite al repo derivar `enteredManually` sin que el backend tenga que
+agregar una columna.
+
+## Cómo se probó
+
+`migrations/012_ops_crear_pedido.test.sql`: 29 casos, `BEGIN … ROLLBACK`, sin
+fixture de `quote_requests` (esta migración crea filas, no las edita). Cubre:
+los 3 guardrails de forma, el camino feliz con los 8 campos y la
+normalización de la patente (`upper`+`btrim`), los tres opcionales ausentes
+→ `NULL`, los tres `*_REQUIRED` de las columnas NOT NULL, `INVALID_CHANNEL`,
+`ACTOR_NOT_FOUND`/`ACTOR_REQUIRED`, el log con `before IS NULL` (no hay
+estado previo) y `after` completo, que el SP no escriba `updated_at`, y una
+integración con parámetros nombrados. **Repetir ese patrón para cualquier SP
+nuevo.**

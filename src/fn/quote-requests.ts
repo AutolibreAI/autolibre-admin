@@ -1,11 +1,13 @@
 import { createServerFn } from '@tanstack/react-start'
 import {
   advanceQuoteRequestSchema,
+  createQuoteRequestSchema,
   quoteRequestIdSchema,
   quoteRequestSearchSchema,
 } from '~/lib/quote-requests'
 import {
   advanceQuoteRequest,
+  createQuoteRequest,
   findQuoteRequestDetail,
   listQuoteRequests,
   quoteRequestStatusSummary,
@@ -82,4 +84,21 @@ export const advanceQuoteRequestFn = createServerFn({ method: 'POST' })
       throw new Error(`QUOTE_REQUESTS_UNAVAILABLE:${availability.reason}`)
     }
     return advanceQuoteRequest(data, context.user.id, { signal })
+  })
+
+/**
+ * Cargar un pedido a mano — llegó por teléfono, en persona, o referido, así
+ * que nunca pasó por el POST público de app/web/whatsapp. El actor sale de la
+ * sesión, NUNCA del payload, mismo criterio que `advanceQuoteRequestFn`.
+ */
+export const createQuoteRequestFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(createQuoteRequestSchema)
+  .handler(async ({ data, context }): Promise<{ id: string; publicNumber: number }> => {
+    const signal = requestSignal()
+    const availability = await quoteRequestsAvailability({ signal })
+    if (!availability.available) {
+      throw new Error(`QUOTE_REQUESTS_UNAVAILABLE:${availability.reason}`)
+    }
+    return createQuoteRequest(data, context.user.id, { signal })
   })

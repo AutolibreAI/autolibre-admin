@@ -11,7 +11,8 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
 `src/lib/quote-templates.ts`, `src/components/QuoteTemplates.tsx`,
 `src/components/QuoteStatusControl.tsx`, `migrations/011_ops_avanzar_pedido.sql`
-(+ su `.test.sql`).
+(+ su `.test.sql`), `src/components/QuoteRequestComposer.tsx`,
+`migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`).
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
 regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
@@ -524,6 +525,87 @@ no un estado que se pueda deshacer.
 Si aparece un `UPDATE quote_requests` suelto en `quote-requests.repo.ts` (en
 vez de pasar por `ops.advance_quote_request`), está mal — rompería la
 auditoría atómica en `ops.action_log` que el SP existe para garantizar.
+
+### Cargar un pedido a mano (`<QuoteRequestComposer/>`) — desde el 2026-09-15
+
+Segunda escritura de la pantalla: `ops.create_quote_request` (migración 012,
+`migrations/012_ops_crear_pedido.sql`) inserta una fila nueva en
+`quote_requests` para el pedido que llega de forma INFORMAL — llamada, en
+persona, un referido — y por eso nunca pasó por el POST público de
+app/web/whatsapp del backend.
+
+`<QuoteRequestComposer/>` (`src/components/QuoteRequestComposer.tsx`) es el
+botón "Cargar pedido" en el header de `leads.pedidos.index.tsx` — no vive en
+la ficha porque no hay ficha todavía hasta que el pedido existe.
+`createQuoteRequest()` en `quote-requests.repo.ts` llama al SP;
+`createQuoteRequestFn` en `fn/quote-requests.ts` es el borde RPC, con el mismo
+guard de disponibilidad que el resto.
+
+#### Por qué un SP y no el endpoint público de creación — a diferencia de 011, ACÁ el backend SÍ tiene un camino
+
+Éste es el primer caso de este archivo donde el backend tiene forma de crear
+un `quote_request` (el POST público que usan app/web/whatsapp) y el panel
+IGUAL usa un SP. No es una contradicción con la regla de "si el backend tiene
+el camino, va por HTTP" (decisiones 4/4b del `CLAUDE.md`): ese POST es
+ANÓNIMO por diseño — así se auto-atienden usuarios sin cuenta — y llamarlo
+desde el panel dejaría la fila sin ningún rastro de qué admin la cargó. El SP
+es lo que hace posible `ops.action_log` acá; el endpoint público ni siquiera
+sabe que existe ese concepto.
+
+**El `grep` al backend tampoco se pudo correr para esta migración** — mismo
+estado que 010 y 011.
+
+#### El canal es una aproximación — no hay valor "informal" en el enum
+
+`quote_request_channel` (relevado con `pg_enum`, no asumido) sólo tiene
+`app | web | whatsapp`. Es un enum de `public`, del backend — este repo no lo
+puede ampliar con un cuarto valor. El formulario pide elegir uno de los tres
+igual (default `whatsapp`) en vez de inventar un valor que rompería el tipo;
+el texto de ayuda en el compositor lo dice. La fila queda marcada aparte como
+cargada a mano (ver abajo), así que el canal elegido no miente sobre CÓMO se
+enteró el operador — es sólo la aproximación más cercana que el dominio del
+backend permite representar.
+
+#### `enteredManually` — leído de `raw_submission`, no de una columna nueva
+
+`raw_submission` es NOT NULL y las submissions reales traen el body crudo del
+cliente ahí. Un pedido cargado a mano no tiene ese body, así que en vez de
+`'{}'::jsonb` (que se leería como "vino vacía, raro") el SP guarda
+`{"source": "admin_manual_entry", "enteredBy": …, "enteredAt": …}` — metadata
+real sobre el origen de la fila. `SELECT_COLUMNS` en `quote-requests.repo.ts`
+deriva `entered_manually` de ahí (`raw_submission->>'source' = '
+admin_manual_entry'`) para el listado Y la ficha; el listado lo muestra como
+"Cargado a mano" bajo el código, la ficha lo suma al subtítulo. No hay columna
+nueva que el backend tuviera que agregar.
+
+#### Sin vincular usuario ni vehículo, a propósito — todavía
+
+El compositor no ofrece buscar una cuenta o un auto existente para linkear
+`user_id`/`vehicle_id`: hoy NINGUNA pantalla de `/leads/pedidos` tiene ese
+picker — el operador vincula el vehículo a mano por SQL, como documenta
+"El vehículo lo vincula el operador" más arriba. Agregar ese picker es
+funcionalidad nueva y separada, no parte de cargar el pedido.
+
+#### Sin idempotencia, a propósito
+
+A diferencia de `BroadcastComposer` (que manda push a decenas de personas y
+por eso necesita un `broadcastId` para no duplicar un envío masivo), acá un
+double-submit crea como mucho UN pedido de más — mismo costo que cargarlo dos
+veces en DBeaver. El componente usa un `inFlight` ref para el click doble;
+no hay clave de idempotencia contra el servidor.
+
+Si aparece un `INSERT INTO quote_requests` suelto en `quote-requests.repo.ts`
+(en vez de pasar por `ops.create_quote_request`), está mal.
+
+### El orden por default es el más nuevo primero — desde el 2026-09-15
+
+Antes era `createdAt asc` (el más viejo arriba, leído como cola de trabajo —
+"lo que más esperó va primero"). Pedido explícito: ahora es `createdAt desc`,
+así que lo que acaba de entrar —incluido lo recién cargado a mano— es lo
+primero que se ve al abrir la pantalla. `firstClick` del header "Pedido"
+también pasó a `'desc'`, para que saltar a esa columna desde otra active el
+mismo orden que el default. El orden viejo sigue disponible: clickear el
+header de "Pedido" invierte.
 
 ## Cómo verificar un cambio acá
 

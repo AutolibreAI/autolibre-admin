@@ -25,6 +25,7 @@ import { SortHeader } from '~/components/SortHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
 import { QuoteStatusControl } from '~/components/QuoteStatusControl'
+import { QuoteRequestComposer } from '~/components/QuoteRequestComposer'
 import { Input } from '~/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
@@ -118,7 +119,15 @@ function Pedidos() {
       <PageHeader
         title="Pedidos de presupuesto"
         subtitle={`${formatInt(rows.length)} ${filtered ? 'con este filtro' : 'pedidos'} · de ${formatInt(summary.total)} en total`}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <>
+            {/* El que llega de forma informal (llamada, en persona, referido) y
+                nunca pasó por app/web/whatsapp. → `QuoteRequestComposer`,
+                `ops.create_quote_request` (migración 012). */}
+            <QuoteRequestComposer />
+            <SsrTag>ssr: full</SsrTag>
+          </>
+        }
       />
 
       {/*
@@ -228,7 +237,7 @@ function Pedidos() {
           <Table>
             <TableHeader>
               <TableRow>
-                <Sort label="Pedido" sortKey="createdAt" search={search} firstClick="asc" />
+                <Sort label="Pedido" sortKey="createdAt" search={search} firstClick="desc" />
                 <Sort label="Estado" sortKey="status" search={search} />
                 <Sort label="Canal" sortKey="channel" search={search} />
                 <Sort label="Contacto" sortKey="contact" search={search} />
@@ -351,6 +360,11 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
         >
           {quotePublicCode(row.publicNumber)}
         </Link>
+        {row.enteredManually ? (
+          <div className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Cargado a mano
+          </div>
+        ) : null}
         <div className="text-xs tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)} UTC</div>
         <div className="text-xs text-muted-foreground">{ageLabel(row.ageHours)}</div>
       </TableCell>

@@ -140,6 +140,21 @@ export const quoteCancellationReasonLabel = (v: string) =>
   labelOf(QUOTE_REQUEST_CANCELLATION_REASON_LABELS, v)
 
 /**
+ * Sentinelas que comparten los tres SP de `quote_requests` (011 y 012) porque
+ * pasan por el mismo `ops.assert_actor` y el mismo guard de disponibilidad —
+ * no son de un SP en particular.
+ */
+function readableSharedQuoteRequestError(raw: string): string | null {
+  if (raw.includes('QUOTE_REQUESTS_UNAVAILABLE')) {
+    return 'Los pedidos de presupuesto todavía no están desplegados en esta base.'
+  }
+  if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED')) {
+    return 'Tu sesión no pudo identificarse como admin. Recargá la página.'
+  }
+  return null
+}
+
+/**
  * Traduce las sentinelas de `ops.advance_quote_request` (migración 011) a
  * texto legible para `QuoteStatusControl`. Vive acá, no en el componente,
  * porque leer las sentinelas exactas requiere conocer el SP — mismo criterio
@@ -164,13 +179,27 @@ export function readableAdvanceQuoteRequestError(raw: string): string {
   if (raw.includes('QUOTE_REQUEST_NOT_FOUND')) {
     return 'Este pedido ya no existe. Recargá la pantalla.'
   }
-  if (raw.includes('QUOTE_REQUESTS_UNAVAILABLE')) {
-    return 'Los pedidos de presupuesto todavía no están desplegados en esta base.'
+  return readableSharedQuoteRequestError(raw) ?? raw
+}
+
+/**
+ * Traduce las sentinelas de `ops.create_quote_request` (migración 012) a
+ * texto legible para `QuoteRequestComposer`.
+ */
+export function readableCreateQuoteRequestError(raw: string): string {
+  if (raw.includes('CONTACT_PHONE_REQUIRED')) {
+    return 'Falta el teléfono de contacto.'
   }
-  if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED')) {
-    return 'Tu sesión no pudo identificarse como admin. Recargá la página.'
+  if (raw.includes('PLATE_REQUIRED')) {
+    return 'Falta la patente.'
   }
-  return raw
+  if (raw.includes('DESCRIPTION_REQUIRED')) {
+    return 'Falta la descripción de qué necesita.'
+  }
+  if (raw.includes('INVALID_CHANNEL')) {
+    return 'Canal inválido.'
+  }
+  return readableSharedQuoteRequestError(raw) ?? raw
 }
 
 /**
@@ -256,11 +285,14 @@ export const quoteRequestSearchSchema = z.object({
   /** Sólo abiertos, sin `contacted_at`, con más de `QUOTE_UNCONTACTED_AFTER_HOURS`. */
   quoteUncontacted: z.coerce.boolean().catch(false).default(false),
   /**
-   * `createdAt asc` por default: el más viejo primero, igual que el `order by
-   * created_at` del script — es una cola de trabajo, lo que más esperó va arriba.
+   * `createdAt desc` por default: el más nuevo primero — pedido explícito del
+   * 2026-09-15, así que lo que acaba de entrar es lo primero que se ve al
+   * abrir la pantalla. Antes era `asc` (el más viejo arriba, igual que el
+   * `order by created_at` del script de DBeaver, leído como cola de trabajo);
+   * ese orden sigue disponible clickeando el header de "Pedido".
    */
   sort: z.enum(QUOTE_SORT_KEYS).catch('createdAt').default('createdAt'),
-  dir: z.enum(['asc', 'desc']).catch('asc').default('asc'),
+  dir: z.enum(['asc', 'desc']).catch('desc').default('desc'),
 })
 export type QuoteRequestSearch = z.infer<typeof quoteRequestSearchSchema>
 
@@ -286,6 +318,32 @@ export const advanceQuoteRequestSchema = z.object({
   note: z.string().trim().max(280).optional(),
 })
 export type AdvanceQuoteRequestInput = z.infer<typeof advanceQuoteRequestSchema>
+
+/**
+ * El payload de `ops.create_quote_request` (migración 012) — cargar un pedido
+ * que llegó de forma informal (llamada, en persona, referido) y por eso nunca
+ * pasó por el POST público de app/web/whatsapp.
+ *
+ * `p_actor_id` NO está acá, mismo motivo que `advanceQuoteRequestSchema`:
+ * sale de la sesión de Clerk, nunca del payload.
+ *
+ * `channel` es obligatorio igual: no hay un valor "informal" en
+ * `quote_request_channel` (sólo `app | web | whatsapp`, es un enum del
+ * backend), así que el operador elige el que más se parezca — `~/components/
+ * QuoteRequestComposer` lo defaultea a `whatsapp`.
+ */
+export const createQuoteRequestSchema = z.object({
+  channel: z.enum(QUOTE_REQUEST_CHANNELS),
+  contactPhone: z.string().trim().min(1).max(40),
+  plate: z.string().trim().min(1).max(20),
+  description: z.string().trim().min(1).max(2000),
+  contactName: z.string().trim().max(200).optional(),
+  contactEmail: z.string().trim().max(200).optional(),
+  declaredAmount: z.number().min(0).optional(),
+  /** Nota de auditoría en `ops.action_log`, no `quote_requests.internal_notes`. */
+  note: z.string().trim().max(280).optional(),
+})
+export type CreateQuoteRequestInput = z.infer<typeof createQuoteRequestSchema>
 
 // ── Tipos de salida ─────────────────────────────────────────────────────────
 
@@ -335,6 +393,13 @@ export interface QuoteRequestListItem {
   noteCount: number
   /** Abierto + sin `contacted_at` + más viejo que `QUOTE_UNCONTACTED_AFTER_HOURS`. Derivado. */
   uncontacted: boolean
+  /**
+   * `true` si lo cargó un admin a mano vía `ops.create_quote_request`
+   * (migración 012), en vez de llegar por app/web/whatsapp. Se lee de
+   * `raw_submission->>'source'`, no de una columna propia — el backend no
+   * tiene ninguna para esto. → `.claude/rules/leads.md`.
+   */
+  enteredManually: boolean
 }
 
 /**
