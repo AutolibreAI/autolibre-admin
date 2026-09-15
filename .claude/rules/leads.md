@@ -8,11 +8,13 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `src/components/ComingSoonPipeline.tsx`. Pedidos: `leads.pedidos.index.tsx`,
 `leads.pedidos.$quoteRequestId.tsx`, `src/lib/quote-requests.ts`,
 `src/server/quote-requests.repo.ts`, `src/fn/quote-requests.ts`,
-`src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`.
+`src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
+`src/components/QuoteRequestActions.tsx`.
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
-regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas, Pedidos y las
-dos pestañas "todavía no" no escriben nada.
+regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas, la LISTA de
+Pedidos y las dos pestañas "todavía no" no escriben nada. La ficha de un pedido
+sí (ver Pedidos, abajo).
 
 ## `/leads` es un layout, no una pantalla
 
@@ -319,6 +321,18 @@ resumen; el umbral entra por parámetro (`make_interval`), no interpolado.
 operador por teléfono. La identidad es el uuid: los links van por `id`, y `q`
 matchea el código con `('AL-' || public_number) ilike …`.
 
+### El link de WhatsApp sólo sale con el teléfono canónico
+
+`QuoteWhatsAppLink` (listado y ficha) abre `wa.me/<teléfono>` con un saludo que
+nombra el `AL-n`. `QuoteRequest.create()` del backend normaliza `contact_phone`
+a `549` + 10 dígitos "para WhatsApp", pero una fila rehidratada puede volver con
+el valor viejo (`15 2512-0472`, está en su spec). `quoteWhatsAppUrl` saca
+separadores y exige `^549\d{10}$`: **completar un prefijo sería adivinar la
+característica, y adivinarla mal le escribe a otra persona.** Sin forma
+canónica no hay link; la ficha lo dice, la tabla no (el número ya se ve).
+
+Abrir el chat no escribe nada: no marca contactado. Eso sigue siendo el botón.
+
 ### Las notas internas están en hora de Buenos Aires
 
 `internal_notes` es un log append-only: el script
@@ -381,23 +395,43 @@ queda anidado adentro y renderiza en un `<Outlet/>` que la tabla no tiene: cambi
 la URL y no la pantalla. Mismo patrón que `chats.index.tsx` +
 `chats.$conversationId.tsx`.
 
-### Las escrituras ya son SPs de `ops`, y todavía no tienen botón
+### Las escrituras son SPs de `ops`, con botones en la ficha
 
-La pantalla sigue read-only. Desde la migración 011, las transiciones del
-operador son **stored procedures de `ops`** con los 8 guardrails y su suite en
-`ROLLBACK` (`ops-write-actions.md`, sección 011):
-`ops.mark_quote_request_contacted`, `ops.mark_quote_request_answered`,
-`ops.close_quote_request` y `ops.add_quote_request_internal_note`. Reemplazan
-a los cuatro scripts que el backend tenía en `scripts/sql/` y borró el
-2026-09-15. Hoy se llaman desde DBeaver, con el `users.id` propio como
-`p_actor_id`.
+La lista sigue read-only. La ficha escribe (`QuoteRequestActions` +
+`QuoteRequestNoteComposer`) por los **stored procedures de `ops` de la 011**
+(`ops-write-actions.md`, sección 011), con el actor de la sesión. Botón por
+estado: `received` → contactado; `contacted` → respondido con cantidad (0 vale);
+abiertos → cerrar y nota interna; `closed` → ninguno, y lo dice. Reemplazan a los
+cuatro scripts que el backend tenía en `scripts/sql/` y borró el 2026-09-15.
+
+- **El guard corre también antes de cada SP**, en el handler, con sentinela
+  `QUOTE_REQUESTS_UNAVAILABLE:`. La 011 se aplica aunque la tabla no exista
+  (parámetros `text`), así que la función está y recién revienta al ejecutarse.
+  Sin tabla la ficha corta en `QuoteRequestsUnavailable` y no hay botones, pero
+  un `fetch` directo al endpoint no pasa por la UI.
+- **`cancelled_by_user` no se ofrece.** `operatorCloseReasonSchema` lo excluye
+  del enum derivado de `QUOTE_REQUEST_CLOSE_REASONS`; el SP igual lo rechaza.
+- **Nota de auditoría ≠ nota interna.** El campo opcional de las tres
+  transiciones es `p_note` → `ops.action_log`, y se rotula así. La nota interna
+  es otro formulario, al pie del hilo que alimenta.
+- **Una nota interna es UN renglón.** El SP concatena con salto de línea y
+  `parseInternalNotes` parte por línea: un salto adentro de la nota la partiría,
+  y la segunda mitad se leería como "sin fecha — escrita a mano". El schema
+  colapsa los espacios en blanco antes de viajar.
+- **El error vive en un componente que no se desmonta.** Una
+  `INVALID_QUOTE_REQUEST_TRANSITION` (la persona canceló desde la app mientras
+  el operador miraba) recarga la ficha para mostrar el estado real, y ese estado
+  desmonta el formulario que falló. Por eso los dos componentes quedan montados
+  en todos los estados, cerrado incluido, y el mensaje queda en ellos.
+- **Cerrar pide confirmación en línea** con el resumen de lo que viaja, y
+  bloquea los campos mientras tanto. "Sin preguntar" viaja `NULL`, no
+  `no_response`.
 
 El backend **no tiene** un endpoint con `AdminGuard` en `src/quotes` para esas
 transiciones (sólo las del usuario: crear, cancelar, declarar resultado),
 re-verificado con `grep` el 2026-09-15. Si algún día aparece, va por HTTP y
-los SP se retiran. Cuando se sumen los botones, `quote-requests.repo.ts` llama
-a los SP con el actor de la sesión: si aparece un `UPDATE quote_requests` en
-ese archivo, está mal.
+los SP se retiran. Si aparece un `UPDATE quote_requests` en
+`quote-requests.repo.ts`, está mal.
 
 ## Cómo verificar un cambio acá
 

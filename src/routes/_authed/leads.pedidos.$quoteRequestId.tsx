@@ -14,8 +14,9 @@ import {
 } from '~/lib/quote-requests'
 import { getQuoteRequestFn } from '~/fn/quote-requests'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
-import { QuoteStatusBadge, QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { Card, CardContent } from '~/components/ui/card'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
@@ -28,6 +29,10 @@ import type { ReactNode } from 'react'
  * corre en DBeaver para ver un pedido antes de llamar — con lo que ese select no
  * contesta solo: en qué orden pasaron las cosas, las notas como hilo, y si el
  * vehículo que se vinculó es de verdad de esa persona.
+ *
+ * Y escribe: las transiciones del operador y la nota interna, vía los SPs de
+ * `ops` de la 011 (`QuoteRequestActions`). Sólo en la rama con la tabla
+ * disponible — sin ella la pantalla corta antes y no hay botones.
  */
 export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
   /**
@@ -99,11 +104,6 @@ function QuoteRequestScreen() {
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 
-      <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Solo lectura. Las transiciones (contactado, respondido, cerrar) y las notas se cargan desde DBeaver con
-        las funciones de <code className="font-mono">ops</code> (<code className="font-mono">ops.close_quote_request</code> y afines).
-      </p>
-
       <Card className="mb-4">
         <CardContent className="pt-6">
           <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -147,6 +147,14 @@ function QuoteRequestScreen() {
         </CardContent>
       </Card>
 
+      {/* `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar. */}
+      <QuoteRequestActions
+        key={d.id}
+        quoteRequestId={d.id}
+        status={d.status}
+        closeReasonCode={d.closeReasonCode}
+      />
+
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardContent className="space-y-4 pt-6">
@@ -156,6 +164,12 @@ function QuoteRequestScreen() {
             </Field>
             <Field label="Teléfono">
               <span className="font-mono text-sm tabular-nums">{d.contactPhone}</span>
+              <QuoteWhatsAppLink
+                phone={d.contactPhone}
+                publicNumber={d.publicNumber}
+                contactName={d.contactName}
+                explainMissing
+              />
             </Field>
             <Field label="Email">
               <span className="text-sm">{d.contactEmail ?? <span className="text-muted-foreground">—</span>}</span>
@@ -248,9 +262,10 @@ function QuoteRequestScreen() {
             <SectionTitle>Notas internas</SectionTitle>
             <p className="mb-3 mt-1 text-xs text-muted-foreground">
               Las escribe el operador; la persona nunca las ve. El sello es hora de Buenos Aires, tal cual lo
-              escribió el script.
+              pone <code className="font-mono">ops.add_quote_request_internal_note</code>.
             </p>
             <NotesThread raw={d.internalNotes} />
+            <QuoteRequestNoteComposer key={d.id} quoteRequestId={d.id} status={d.status} />
           </CardContent>
         </Card>
       </div>

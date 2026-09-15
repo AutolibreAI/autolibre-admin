@@ -26,7 +26,13 @@ SELECT gen_random_uuid() AS actor_id,
        gen_random_uuid() AS answered_id,
        gen_random_uuid() AS cancelled_id,
        gen_random_uuid() AS closed_id,
-       gen_random_uuid() AS noted_id;
+       gen_random_uuid() AS noted_id,
+       -- Uno por SP para la integración con el SQL del repo (casos 60+). Propios,
+       -- porque los de arriba ya los movieron las pruebas anteriores.
+       gen_random_uuid() AS repo_to_contact_id,
+       gen_random_uuid() AS repo_to_answer_id,
+       gen_random_uuid() AS repo_to_close_id,
+       gen_random_uuid() AS repo_to_note_id;
 
 INSERT INTO users (id, email, role, auth_provider, external_auth_id)
 SELECT actor_id, 'test-011-' || actor_id || '@example.invalid', 'admin',
@@ -74,6 +80,26 @@ INSERT INTO quote_requests (id, channel, contact_phone, plate, description, raw_
                             internal_notes)
 SELECT noted_id, 'web', '5491100000000', 'AB123CD', 'Test 011 con notas', '{}'::jsonb,
        'Nota vieja'
+  FROM t_fix;
+
+INSERT INTO quote_requests (id, channel, contact_phone, plate, description, raw_submission)
+SELECT repo_to_contact_id, 'web', '5491100000000', 'AB123CD', 'Test 011 repo: a contactar', '{}'::jsonb
+  FROM t_fix;
+
+INSERT INTO quote_requests (id, channel, contact_phone, plate, description, raw_submission,
+                            status, contacted_at)
+SELECT repo_to_answer_id, 'web', '5491100000000', 'AB123CD', 'Test 011 repo: a responder', '{}'::jsonb,
+       'contacted', now() - interval '1 day'
+  FROM t_fix;
+
+INSERT INTO quote_requests (id, channel, contact_phone, plate, description, raw_submission,
+                            status, contacted_at, answered_at, proposals_count)
+SELECT repo_to_close_id, 'web', '5491100000000', 'AB123CD', 'Test 011 repo: a cerrar', '{}'::jsonb,
+       'answered', now() - interval '2 days', now() - interval '1 day', 1
+  FROM t_fix;
+
+INSERT INTO quote_requests (id, channel, contact_phone, plate, description, raw_submission)
+SELECT repo_to_note_id, 'web', '5491100000000', 'AB123CD', 'Test 011 repo: a anotar', '{}'::jsonb
   FROM t_fix;
 
 CREATE TEMP TABLE t_result (caso text, ok boolean, detalle text) ON COMMIT DROP;
@@ -432,6 +458,131 @@ BEGIN
     GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
     PERFORM pg_temp.check('56 pedido inexistente', v_msg LIKE 'QUOTE_REQUEST_NOT_FOUND%', v_msg);
   END;
+END $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Integración: el SQL EXACTO que manda `quote-requests.repo.ts`
+--
+-- Se copia la forma con parámetros nombrados que usa el repo. Una prueba que
+-- llame a la función de otra forma verifica la función, no el llamador.
+--
+-- Va con `PREPARE` SIN tipos, no con variables de plpgsql como la 008: `pg`
+-- manda cada `$n` con tipo desconocido (OID 0), y es Postgres el que lo resuelve
+-- contra la firma. Con variables tipadas esa resolución —la parte que puede
+-- fallar en runtime, p. ej. con dos sobrecargas vivas— no se ejercita nunca.
+-- `EXECUTE` no acepta subconsultas como argumento; por eso `pg_temp.fix_id`.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION pg_temp.fix_id(p_col text)
+RETURNS uuid LANGUAGE sql STABLE AS $$
+  SELECT (to_jsonb(f) ->> p_col)::uuid FROM t_fix f
+$$;
+
+PREPARE repo_mark_contacted AS
+SELECT ops.mark_quote_request_contacted(
+       p_quote_request_id => $1,
+       p_actor_id         => $2,
+       p_note             => $3
+     ) AS q;
+
+PREPARE repo_mark_answered AS
+SELECT ops.mark_quote_request_answered(
+       p_quote_request_id => $1,
+       p_proposals_count  => $2,
+       p_actor_id         => $3,
+       p_note             => $4
+     ) AS q;
+
+PREPARE repo_close AS
+SELECT ops.close_quote_request(
+       p_quote_request_id  => $1,
+       p_close_reason_code => $2,
+       p_actor_id          => $3,
+       p_closed_reason     => $4,
+       p_outcome           => $5,
+       p_outcome_note      => $6,
+       p_note              => $7
+     ) AS q;
+
+PREPARE repo_add_note AS
+SELECT ops.add_quote_request_internal_note(
+       p_quote_request_id => $1,
+       p_text             => $2,
+       p_actor_id         => $3
+     ) AS q;
+
+-- Los mismos valores que arma el repo: vacíos como NULL, outcome ausente NULL.
+CREATE TEMP TABLE t_repo_contacted ON COMMIT DROP AS
+  EXECUTE repo_mark_contacted(pg_temp.fix_id('repo_to_contact_id'), pg_temp.fix_id('actor_id'), 'Auditoría desde el repo');
+
+CREATE TEMP TABLE t_repo_answered ON COMMIT DROP AS
+  EXECUTE repo_mark_answered(pg_temp.fix_id('repo_to_answer_id'), 3, pg_temp.fix_id('actor_id'), NULL);
+
+CREATE TEMP TABLE t_repo_closed ON COMMIT DROP AS
+  EXECUTE repo_close(pg_temp.fix_id('repo_to_close_id'), 'no_workshops_found', pg_temp.fix_id('actor_id'),
+                     'Nadie en la zona', NULL, NULL, 'Cierre desde el repo');
+
+CREATE TEMP TABLE t_repo_noted ON COMMIT DROP AS
+  EXECUTE repo_add_note(pg_temp.fix_id('repo_to_note_id'), 'Nota desde el repo', pg_temp.fix_id('actor_id'));
+
+-- Los prepared statements son de la SESIÓN, no de la transacción: el ROLLBACK
+-- no se los lleva.
+DEALLOCATE repo_mark_contacted;
+DEALLOCATE repo_mark_answered;
+DEALLOCATE repo_close;
+DEALLOCATE repo_add_note;
+
+DO $$
+DECLARE
+  v_fix t_fix%ROWTYPE;
+  v_row quote_requests%ROWTYPE;
+  v_log ops.action_log%ROWTYPE;
+  v_out jsonb;
+  v_bad int;
+BEGIN
+  SELECT * INTO v_fix FROM t_fix;
+
+  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.repo_to_contact_id;
+  SELECT * INTO v_log FROM ops.action_log
+   WHERE target_id = v_fix.repo_to_contact_id AND action = 'quote_request.mark_contacted';
+  PERFORM pg_temp.check('60 integración: mark_quote_request_contacted con la nota de auditoría',
+    v_row.status = 'contacted' AND v_log.note = 'Auditoría desde el repo' AND v_log.actor_id = v_fix.actor_id,
+    v_row.status::text || ' / ' || coalesce(v_log.note, '(sin nota)'));
+
+  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.repo_to_answer_id;
+  SELECT * INTO v_log FROM ops.action_log
+   WHERE target_id = v_fix.repo_to_answer_id AND action = 'quote_request.mark_answered';
+  PERFORM pg_temp.check('61 integración: mark_quote_request_answered, nota de auditoría NULL',
+    v_row.status = 'answered' AND v_row.proposals_count = 3 AND v_log.id IS NOT NULL AND v_log.note IS NULL,
+    v_row.status::text || ' / ' || coalesce(v_row.proposals_count::text, '(null)'));
+
+  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.repo_to_close_id;
+  SELECT * INTO v_log FROM ops.action_log
+   WHERE target_id = v_fix.repo_to_close_id AND action = 'quote_request.close';
+  PERFORM pg_temp.check('62 integración: close_quote_request con outcome "sin preguntar"',
+    v_row.status = 'closed'
+      AND v_row.close_reason_code = 'no_workshops_found'
+      AND v_row.closed_reason = 'Nadie en la zona'
+      AND v_row.outcome IS NULL AND v_row.outcome_note IS NULL
+      AND v_log.note = 'Cierre desde el repo',
+    v_row.status::text || ' / ' || coalesce(v_row.outcome::text, '(null)'));
+
+  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.repo_to_note_id;
+  PERFORM pg_temp.check('63 integración: add_quote_request_internal_note',
+    v_row.status = 'received'
+      AND v_row.internal_notes ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} — Nota desde el repo$',
+    coalesce(v_row.internal_notes, '(null)'));
+
+  -- Lo que el repo lee de la columna `q`: `id` y `status`, y nada de la ubicación.
+  SELECT count(*) INTO v_bad
+    FROM (SELECT q FROM t_repo_contacted UNION ALL SELECT q FROM t_repo_answered
+          UNION ALL SELECT q FROM t_repo_closed UNION ALL SELECT q FROM t_repo_noted) r
+   WHERE jsonb_typeof(r.q -> 'id') <> 'string'
+      OR r.q ->> 'status' IS NULL
+      OR r.q ?| ARRAY['location_latitude', 'location_longitude', 'raw_submission'];
+  SELECT q INTO v_out FROM t_repo_closed;
+  PERFORM pg_temp.check('64 integración: la columna q trae id y status, sin coordenadas', v_bad = 0,
+    coalesce(v_out::text, '(sin fila)'));
 END $$;
 
 SELECT caso,

@@ -1,19 +1,35 @@
 import { createServerFn } from '@tanstack/react-start'
-import { quoteRequestIdSchema, quoteRequestSearchSchema } from '~/lib/quote-requests'
 import {
+  QUOTE_REQUESTS_UNAVAILABLE,
+  addQuoteRequestInternalNoteSchema,
+  closeQuoteRequestSchema,
+  markQuoteRequestAnsweredSchema,
+  markQuoteRequestContactedSchema,
+  quoteRequestIdSchema,
+  quoteRequestSearchSchema,
+} from '~/lib/quote-requests'
+import {
+  addQuoteRequestInternalNote,
+  closeQuoteRequest,
   findQuoteRequestDetail,
   listQuoteRequests,
+  markQuoteRequestAnswered,
+  markQuoteRequestContacted,
   quoteRequestStatusSummary,
   quoteRequestsAvailability,
 } from '~/server/quote-requests.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { QuoteRequestDetailResult, QuoteRequestsListResult } from '~/lib/quote-requests'
+import type {
+  QuoteRequestDetailResult,
+  QuoteRequestWriteResult,
+  QuoteRequestsListResult,
+} from '~/lib/quote-requests'
 
 /**
  * Pedidos de presupuesto — el borde RPC.
  *
- * ── `adminMiddleware` en las dos lecturas ──────────────────────────────────
+ * ── `adminMiddleware` en todo ──────────────────────────────────────────────
  *
  * Un pedido trae teléfono, email y nombre de una persona real —muchas veces sin
  * cuenta en AutoLibre, o sea que ni siquiera aceptó nuestros términos en la
@@ -27,6 +43,10 @@ import type { QuoteRequestDetailResult, QuoteRequestsListResult } from '~/lib/qu
  * producción (donde `quote_requests` no existe) sería un 500 con el texto de
  * Postgres. Chequearlo en el handler cuesta una consulta al catálogo y deja una
  * sola RPC por pantalla: la respuesta ya dice "no desplegado" o trae los datos.
+ *
+ * Las escrituras lo chequean ANTES del SP por lo mismo, con más razón: la 011
+ * se aplica aunque la tabla no exista (parámetros `text`), así que la función
+ * está y recién revienta al ejecutar su `SELECT … FOR UPDATE`.
  */
 
 export const listQuoteRequestsFn = createServerFn({ method: 'GET' })
@@ -55,4 +75,52 @@ export const getQuoteRequestFn = createServerFn({ method: 'GET' })
     const detail = await findQuoteRequestDetail(data.quoteRequestId, { signal })
     if (!detail) throw new Error(`NOT_FOUND:${data.quoteRequestId}`)
     return { availability, detail }
+  })
+
+// ── Escrituras ───────────────────────────────────────────────────────────────
+//
+// El actor sale de `context.user.id`, NUNCA del payload — ningún schema lo
+// tiene. Mismo criterio que `advanceMarketplaceLead`.
+
+async function assertQuoteRequestsAvailable(signal: AbortSignal | undefined): Promise<void> {
+  const availability = await quoteRequestsAvailability({ signal })
+  if (!availability.available) {
+    throw new Error(`${QUOTE_REQUESTS_UNAVAILABLE}:${availability.reason}`)
+  }
+}
+
+export const markQuoteRequestContactedFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(markQuoteRequestContactedSchema)
+  .handler(async ({ data, context }): Promise<QuoteRequestWriteResult> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return markQuoteRequestContacted(data, context.user.id, { signal })
+  })
+
+export const markQuoteRequestAnsweredFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(markQuoteRequestAnsweredSchema)
+  .handler(async ({ data, context }): Promise<QuoteRequestWriteResult> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return markQuoteRequestAnswered(data, context.user.id, { signal })
+  })
+
+export const closeQuoteRequestFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(closeQuoteRequestSchema)
+  .handler(async ({ data, context }): Promise<QuoteRequestWriteResult> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return closeQuoteRequest(data, context.user.id, { signal })
+  })
+
+export const addQuoteRequestInternalNoteFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(addQuoteRequestInternalNoteSchema)
+  .handler(async ({ data, context }): Promise<QuoteRequestWriteResult> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return addQuoteRequestInternalNote(data, context.user.id, { signal })
   })

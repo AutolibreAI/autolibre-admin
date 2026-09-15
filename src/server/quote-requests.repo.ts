@@ -3,6 +3,11 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import {
   QUOTE_UNCONTACTED_AFTER_HOURS,
+  type AddQuoteRequestInternalNoteInput,
+  type CloseQuoteRequestInput,
+  type MarkQuoteRequestAnsweredInput,
+  type MarkQuoteRequestContactedInput,
+  type QuoteRequestWriteResult,
   type QuoteRequestDetail,
   type QuoteRequestListItem,
   type QuoteRequestSearch,
@@ -12,16 +17,16 @@ import {
 } from '~/lib/quote-requests'
 
 /**
- * Pedidos de presupuesto — solo lectura.
+ * Pedidos de presupuesto.
  *
- * ── Ni una escritura (todavía) ─────────────────────────────────────────────
+ * ── Las escrituras son SÓLO llamadas a los SP de `ops` (migración 011) ──────
  *
- * Las transiciones (contactado / respondido / cerrar / agregar nota) son
- * stored procedures de `ops` (migración 011) que el operador hoy llama desde
- * DBeaver: el backend no expone un endpoint con `AdminGuard` en `quotes/`. El
- * día que el panel tenga los botones, este archivo llama a esos SP con el actor
- * de la sesión (`.claude/rules/ops-write-actions.md`) — nunca un `UPDATE`
- * suelto. Si aparece uno acá, está mal.
+ * Contactado / respondido / cerrar / agregar nota: el backend no expone un
+ * endpoint con `AdminGuard` en `quotes/`, así que el panel llama a
+ * `ops.mark_quote_request_contacted` y compañía con el actor de la sesión
+ * (`.claude/rules/ops-write-actions.md`). La guarda de estado, el `FOR UPDATE`
+ * y la fila de `ops.action_log` viven adentro del SP. Si aparece un
+ * `UPDATE quote_requests` acá, está mal.
  *
  * ── Columnas explícitas, nunca `select qr.*` ───────────────────────────────
  *
@@ -502,4 +507,119 @@ export async function findQuoteRequestDetail(
     // que el server function pueda garantizar serializable.
     rawSubmissionJson: JSON.stringify(r.raw_submission ?? null, null, 2),
   }
+}
+
+// ── Escrituras: los SP de `ops` de la migración 011 ─────────────────────────
+//
+// Parámetros NOMBRADOS, igual que `setPartnerProfile`: la llamada no depende
+// del orden de la firma, y `close_quote_request` tiene cuatro `text` opcionales
+// seguidos que por posición se cruzan sin que nada avise.
+//
+// Este SQL está copiado LITERAL en el bloque de integración de
+// `migrations/011_ops_pedidos_de_presupuesto.test.sql`, con `PREPARE` sin tipos
+// —como los manda `pg`—. Si se toca uno, se toca el otro.
+//
+// Ninguna escribe `quote_requests` desde acá: la guarda de estado, el lock y la
+// fila de `ops.action_log` son del SP, en la misma sentencia.
+
+/** `''` y ausente viajan como NULL: el SP trata `''` igual, pero `p_note` no lo normaliza. */
+const blankToNull = (v: string | undefined): string | null => (v === undefined || v === '' ? null : v)
+
+function toWriteResult(q: { id?: unknown; status?: unknown } | null | undefined, id: string): QuoteRequestWriteResult {
+  if (!q || typeof q.id !== 'string') throw new Error(`QUOTE_REQUEST_NOT_FOUND:${id}`)
+  return { id: q.id, status: String(q.status) }
+}
+
+type SpRow = { q: { id?: unknown; status?: unknown } | null }
+
+/** received → contacted. */
+export async function markQuoteRequestContacted(
+  input: MarkQuoteRequestContactedInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<SpRow>(
+    `SELECT ops.mark_quote_request_contacted(
+       p_quote_request_id => $1,
+       p_actor_id         => $2,
+       p_note             => $3
+     ) AS q`,
+    [input.quoteRequestId, actorId, blankToNull(input.auditNote)],
+  )
+  return toWriteResult(row?.q, input.quoteRequestId)
+}
+
+/** contacted → answered, con la cantidad de propuestas (0 es válido). */
+export async function markQuoteRequestAnswered(
+  input: MarkQuoteRequestAnsweredInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<SpRow>(
+    `SELECT ops.mark_quote_request_answered(
+       p_quote_request_id => $1,
+       p_proposals_count  => $2,
+       p_actor_id         => $3,
+       p_note             => $4
+     ) AS q`,
+    [input.quoteRequestId, input.proposalsCount, actorId, blankToNull(input.auditNote)],
+  )
+  return toWriteResult(row?.q, input.quoteRequestId)
+}
+
+/**
+ * Abierto → closed. `outcome` ausente viaja NULL ("no se preguntó"), nunca
+ * `no_response`.
+ */
+export async function closeQuoteRequest(
+  input: CloseQuoteRequestInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<SpRow>(
+    `SELECT ops.close_quote_request(
+       p_quote_request_id  => $1,
+       p_close_reason_code => $2,
+       p_actor_id          => $3,
+       p_closed_reason     => $4,
+       p_outcome           => $5,
+       p_outcome_note      => $6,
+       p_note              => $7
+     ) AS q`,
+    [
+      input.quoteRequestId,
+      input.closeReasonCode,
+      actorId,
+      blankToNull(input.closedReason),
+      input.outcome ?? null,
+      blankToNull(input.outcomeNote),
+      blankToNull(input.auditNote),
+    ],
+  )
+  return toWriteResult(row?.q, input.quoteRequestId)
+}
+
+/** Agrega una línea fechada (hora de Buenos Aires) al hilo de `internal_notes`. */
+export async function addQuoteRequestInternalNote(
+  input: AddQuoteRequestInternalNoteInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<SpRow>(
+    `SELECT ops.add_quote_request_internal_note(
+       p_quote_request_id => $1,
+       p_text             => $2,
+       p_actor_id         => $3
+     ) AS q`,
+    [input.quoteRequestId, input.text, actorId],
+  )
+  return toWriteResult(row?.q, input.quoteRequestId)
 }

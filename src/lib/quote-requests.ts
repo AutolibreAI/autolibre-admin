@@ -135,6 +135,36 @@ export const quoteCancellationReasonLabel = (v: string) =>
  */
 export const quotePublicCode = (publicNumber: number) => `AL-${publicNumber}`
 
+/** Móvil argentino en la forma canónica que guarda el backend: `549` + 10 dígitos. */
+const WHATSAPP_PHONE = /^549\d{10}$/
+
+/**
+ * El link para escribirle a la persona por WhatsApp, o `null`.
+ *
+ * `QuoteRequest.create()` del backend guarda `contact_phone` normalizado para
+ * WhatsApp (`5491125120472`), que es exactamente lo que pide `wa.me`: dígitos,
+ * con código de país. Pero una fila rehidratada puede traer un valor viejo tal
+ * cual (`15 2512-0472`), y ahí NO se adivina la característica: inferirla mal le
+ * escribe a otra persona. Sacar separadores no infiere nada; completar prefijos
+ * sí. Sin la forma canónica, no hay link.
+ *
+ * El texto precargado nombra el `AL-n`, que es lo que la persona ve y le dicta
+ * al operador: ubica la conversación desde el primer mensaje. Se puede editar
+ * en WhatsApp antes de mandarlo.
+ */
+export function quoteWhatsAppUrl(
+  phone: string,
+  publicNumber: number,
+  contactName: string | null,
+): string | null {
+  const digits = phone.replace(/\D/g, '')
+  if (!WHATSAPP_PHONE.test(digits)) return null
+
+  const greeting = contactName ? `Hola ${contactName}` : 'Hola'
+  const text = `${greeting}, te escribimos de AutoLibre por tu pedido de presupuesto ${quotePublicCode(publicNumber)}.`
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`
+}
+
 // ── Señal derivada del reloj ────────────────────────────────────────────────
 
 /**
@@ -220,6 +250,117 @@ export const quoteRequestSearchSchema = z.object({
 export type QuoteRequestSearch = z.infer<typeof quoteRequestSearchSchema>
 
 export const quoteRequestIdSchema = z.object({ quoteRequestId: z.uuid() })
+
+// ── Escrituras: las transiciones del operador (SPs de `ops`, migración 011) ──
+//
+// Ningún schema lleva un actor: `p_actor_id` sale de la sesión en el handler
+// (guardrail 4 de `ops-write-actions.md`). Un actor por payload sería una firma
+// falsificable en `ops.action_log`.
+
+/**
+ * Nota de AUDITORÍA: va a `ops.action_log.note` (`p_note`). NO es la nota
+ * interna del pedido — esa es `addQuoteRequestInternalNoteSchema` y alimenta el
+ * hilo de la ficha. Confundirlas deja el hilo sin la llamada y el log con texto
+ * que no es auditoría.
+ */
+const auditNote = z.string().trim().max(500).optional()
+
+export const markQuoteRequestContactedSchema = z.object({
+  quoteRequestId: z.uuid(),
+  auditNote,
+})
+export type MarkQuoteRequestContactedInput = z.infer<typeof markQuoteRequestContactedSchema>
+
+export const markQuoteRequestAnsweredSchema = z.object({
+  quoteRequestId: z.uuid(),
+  /** Cero es válido: "llamamos y no conseguimos nada". El techo es holgura, no regla. */
+  proposalsCount: z.number().int().min(0).max(1000),
+  auditNote,
+})
+export type MarkQuoteRequestAnsweredInput = z.infer<typeof markQuoteRequestAnsweredSchema>
+
+/**
+ * Los códigos que el OPERADOR puede elegir: todos menos `cancelled_by_user`, que
+ * lo pone sólo la app junto con el motivo de la persona (el SP lo rechaza con
+ * `CLOSE_REASON_RESERVED_FOR_APP`). Derivado del espejo, no una segunda lista:
+ * un código nuevo del backend aparece acá solo.
+ */
+export const operatorCloseReasonSchema = z.enum(QUOTE_REQUEST_CLOSE_REASONS).exclude(['cancelled_by_user'])
+export const OPERATOR_CLOSE_REASONS = operatorCloseReasonSchema.options
+export type OperatorCloseReason = z.infer<typeof operatorCloseReasonSchema>
+
+export const closeQuoteRequestSchema = z.object({
+  quoteRequestId: z.uuid(),
+  closeReasonCode: operatorCloseReasonSchema,
+  /** Nota interna del cierre (`closed_reason`). La persona nunca la ve. */
+  closedReason: z.string().trim().max(1000).optional(),
+  /** Ausente = "no se sabe / no se preguntó", que NO es `no_response`. */
+  outcome: z.enum(QUOTE_REQUEST_OUTCOMES).optional(),
+  outcomeNote: z.string().trim().max(1000).optional(),
+  auditNote,
+})
+export type CloseQuoteRequestInput = z.infer<typeof closeQuoteRequestSchema>
+
+export const addQuoteRequestInternalNoteSchema = z.object({
+  quoteRequestId: z.uuid(),
+  /**
+   * UNA línea. `internal_notes` es un log de una nota por renglón
+   * (`YYYY-MM-DD HH24:MI — texto`), y el SP agrega el texto tal cual: un salto
+   * adentro de la nota partiría la entrada en dos y la segunda mitad se leería
+   * como una línea "sin fecha — escrita a mano" en `parseInternalNotes`. Se
+   * colapsa acá, antes de viajar.
+   */
+  text: z
+    .string()
+    .overwrite((s) => s.replace(/\s+/g, ' ').trim())
+    .min(1, 'La nota no puede estar vacía.')
+    .max(2000),
+})
+export type AddQuoteRequestInternalNoteInput = z.infer<typeof addQuoteRequestInternalNoteSchema>
+
+/** Lo que devuelven las cuatro escrituras. El estado nuevo lo relee la ficha. */
+export interface QuoteRequestWriteResult {
+  id: string
+  status: string
+}
+
+/** Sentinela del handler cuando `quote_requests` no existe o le faltan columnas. */
+export const QUOTE_REQUESTS_UNAVAILABLE = 'QUOTE_REQUESTS_UNAVAILABLE'
+
+/**
+ * Traduce las sentinelas de los SP de la 011 (y la del guard) a algo legible.
+ * Client-safe a propósito: corre en el navegador, sobre el `message` del error.
+ *
+ * El fallback NO muestra el texto crudo de Postgres. Cada SP es una sola
+ * sentencia, así que si falló no se aplicó nada — eso sí se puede decir.
+ */
+export function readableQuoteRequestError(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause)
+
+  if (raw.includes(QUOTE_REQUESTS_UNAVAILABLE))
+    return 'Los pedidos de presupuesto no están desplegados en esta base (falta la tabla o columnas de la migración 0093 del backend). No se aplicó nada.'
+  if (raw.includes('QUOTE_REQUEST_NOT_FOUND')) return 'Este pedido ya no existe. Recargá la pantalla.'
+  if (raw.includes('INVALID_QUOTE_REQUEST_TRANSITION')) {
+    // El SP dice el estado REAL del pedido bloqueado: "… un pedido en closed".
+    const state = /un pedido en (\w+)/.exec(raw)?.[1]
+    return `El pedido cambió de estado mientras lo mirabas${state ? ` (hoy está «${quoteStatusLabel(state)}»)` : ''} — por ejemplo, la persona lo canceló desde la app. No se aplicó nada: recargá la pantalla.`
+  }
+  if (raw.includes('PROPOSALS_COUNT_REQUIRED'))
+    return 'Falta la cantidad de propuestas que se le pasaron. Cero es válido.'
+  if (raw.includes('INVALID_PROPOSALS_COUNT')) return 'La cantidad de propuestas no puede ser negativa.'
+  if (raw.includes('CLOSE_REASON_CODE_REQUIRED')) return 'Elegí un motivo de cierre.'
+  if (raw.includes('INVALID_CLOSE_REASON_CODE'))
+    return 'Ese motivo de cierre no existe en la base. Recargá la pantalla.'
+  if (raw.includes('CLOSE_REASON_RESERVED_FOR_APP'))
+    return '«Cancelado por el usuario» lo pone sólo la app, junto con el motivo de la persona. Elegí otro motivo.'
+  if (raw.includes('INVALID_OUTCOME')) return 'Ese resultado no existe en la base. Recargá la pantalla.'
+  if (raw.includes('INTERNAL_NOTE_REQUIRED')) return 'La nota no puede estar vacía.'
+  if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED'))
+    return 'Tu sesión no corresponde a un usuario de AutoLibre. Volvé a iniciar sesión.'
+  if (raw === 'FORBIDDEN') return 'Tu rol no tiene permiso para esta acción.'
+  if (raw === 'UNAUTHENTICATED') return 'Tu sesión expiró. Volvé a iniciar sesión.'
+  return 'No pudimos guardar. No se aplicó nada — cada acción es una sola operación en la base.'
+}
 
 // ── Tipos de salida ─────────────────────────────────────────────────────────
 

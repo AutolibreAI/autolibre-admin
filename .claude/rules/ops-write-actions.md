@@ -7,7 +7,9 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `migrations/010_ops_editar_solicitud.sql`, `updatePartnerApplication` de
 `src/server/partners.repo.ts`, `updatePartnerApplicationFn` de
 `src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`. La 011 suma
-`migrations/011_ops_pedidos_de_presupuesto.sql` y su `.test.sql`, sin pantalla todavía.
+`migrations/011_ops_pedidos_de_presupuesto.sql` y su `.test.sql`, las escrituras de
+`src/server/quote-requests.repo.ts` y `src/fn/quote-requests.ts`, y
+`src/components/QuoteRequestActions.tsx`.
 
 ## La regla que esto reemplaza, y por qué
 
@@ -455,9 +457,12 @@ escriba `updated_at`. **Repetir ese patrón para cualquier SP nuevo.**
 
 # Migración 011 — pedidos de presupuesto (`quote_requests`)
 
-Alcance añadido: `migrations/011_ops_pedidos_de_presupuesto.sql` y su `.test.sql`. **Sin pantalla
-todavía**: `/leads/pedidos` sigue read-only, y los SP se llaman desde DBeaver con el `users.id` propio
-como `p_actor_id`.
+Alcance añadido: `migrations/011_ops_pedidos_de_presupuesto.sql` y su `.test.sql`;
+`markQuoteRequestContacted` / `markQuoteRequestAnswered` / `closeQuoteRequest` /
+`addQuoteRequestInternalNote` de `src/server/quote-requests.repo.ts`, sus `*Fn` en
+`src/fn/quote-requests.ts`, los schemas y `readableQuoteRequestError` de `src/lib/quote-requests.ts`,
+y `src/components/QuoteRequestActions.tsx`. Los botones viven en `/leads/pedidos/:id`; la UI está en
+`leads.md`.
 
 ## Qué reemplaza
 
@@ -542,8 +547,8 @@ Confundirlas deja el hilo sin la llamada, y el log con texto que no es auditorí
 
 ## Cómo se probó
 
-`migrations/011_ops_pedidos_de_presupuesto.test.sql`: 41 casos, `BEGIN … ROLLBACK`, con su propio
-actor y seis pedidos (uno por estado, más uno con ubicación y otro con notas). Corrió primero en rojo,
+`migrations/011_ops_pedidos_de_presupuesto.test.sql`: 46 casos, `BEGIN … ROLLBACK`, con su propio
+actor y seis pedidos (más cuatro para la integración) (uno por estado, más uno con ubicación y otro con notas). Corrió primero en rojo,
 sin la migración, y después con la migración adentro de la misma transacción, contra el Postgres de
 Docker de desarrollo (`localhost:5435`). **Por eso la 011 no quedó aplicada en ninguna base.**
 
@@ -551,5 +556,12 @@ Cubre los guardrails de forma, las cuatro transiciones felices, cada sentinela, 
 retroceda y un cancelado por el usuario no se toque, la normalización de `''` a NULL, el hilo de notas,
 el log con `before`/`after`, y que ni el log ni lo devuelto traigan coordenadas.
 
-No tiene casos de integración con el SQL del repo porque todavía no hay repo que llame a estos SP. Se
-suman con los botones.
+Los casos 60–64 son la integración con el SQL exacto de `quote-requests.repo.ts`, y van con
+**`PREPARE` sin tipos**, no con variables de plpgsql como la 008: `pg` manda cada `$n` con tipo
+desconocido y es Postgres el que lo resuelve contra la firma, que es justo la parte que falla en
+runtime (una sobrecarga viva, un parámetro que no resuelve). Dos detalles del mecanismo: `EXECUTE` no
+acepta subconsultas como argumento (de ahí `pg_temp.fix_id`), y un prepared statement es de la
+SESIÓN, así que el `ROLLBACK` no se lo lleva y la suite hace `DEALLOCATE`.
+
+Al 2026-09-15 dio 46/46 en DEV (`autolibre_ai_hex`), con la 011 inyectada después del `BEGIN` porque
+esa base tenía aplicadas sólo 001–007.

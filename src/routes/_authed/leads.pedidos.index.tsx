@@ -23,7 +23,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
-import { QuoteStatusBadge, QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { Input } from '~/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
@@ -114,12 +114,12 @@ function Pedidos() {
       />
 
       {/*
-        Solo lectura, y se dice en pantalla: si el operador no lo lee acá, busca
-        el botón de "marcar contactado" que no existe.
+        La lista no escribe, y se dice en pantalla: si el operador no lo lee
+        acá, busca en la fila el botón de "marcar contactado" que vive en la ficha.
       */}
       <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Pantalla de solo lectura. Marcar contactado / respondido, cerrar y agregar notas se hace desde DBeaver
-        con las funciones de <code className="font-mono">ops</code> (<code className="font-mono">ops.close_quote_request</code> y afines).
+        La lista es de solo lectura. Marcar contactado / respondido, cerrar y agregar notas internas se hace desde
+        la ficha de cada pedido.
       </p>
 
       <SummaryTiles summary={summary} />
@@ -366,6 +366,7 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
       <TableCell>
         <div>{row.contactName ?? <Muted>sin nombre</Muted>}</div>
         <div className="font-mono text-xs tabular-nums text-muted-foreground">{row.contactPhone}</div>
+        <QuoteWhatsAppLink phone={row.contactPhone} publicNumber={row.publicNumber} contactName={row.contactName} />
         {row.contactEmail ? <div className="truncate text-xs text-muted-foreground">{row.contactEmail}</div> : null}
       </TableCell>
 
