@@ -227,6 +227,97 @@ export type EditApplicationInput = z.infer<typeof editApplicationSchema>
  * `Object.entries` con regex: una clave mal traducida es un campo que no se
  * guarda, en silencio.
  */
+// ── Derivación: candidatos para un pedido de presupuesto ────────────────────
+//
+// `.claude/plans/partners-derivacion.md`, Fase 2. Dado un pedido y un rubro,
+// qué partners activos lo cubren, para que el operador elija a quién
+// escribirle en vez de acordarse de memoria.
+
+export const listPartnerCandidatesSchema = z
+  .object({
+    categorySlug: z.string().trim().min(1).max(60),
+    /** El punto del PEDIDO. Las dos viajan juntas o ninguna, igual que `setPartnerLocationSchema`. */
+    lat: z.number().min(-90).max(90).nullable(),
+    lng: z.number().min(-180).max(180).nullable(),
+  })
+  .refine((d) => (d.lat === null) === (d.lng === null), {
+    message: 'Las dos coordenadas del pedido, o ninguna.',
+    path: ['lng'],
+  })
+export type ListPartnerCandidatesInput = z.infer<typeof listPartnerCandidatesSchema>
+
+export interface PartnerCandidate {
+  id: string
+  name: string
+  coverageZone: string
+  tier: string
+  /** `partners.modality` es texto libre — ver `.claude/plans/partners-derivacion.md` §1. */
+  modality: string | null
+  hours: string | null
+  whatsapp: string | null
+  address: string | null
+  /** Los `services` de ESTE rubro que el partner cubre, no todo su catálogo. */
+  matchedServices: Array<{ slug: string; name: string }>
+  /**
+   * `null` = no sabemos dónde está el partner (sin coordenadas cargadas) O no
+   * sabemos dónde está el pedido — NUNCA "está lejos". Ausencia de evidencia
+   * no es evidencia de ausencia, mismo error que documenta
+   * `scanner-compatibility.md` para las celdas vacías de esa matriz.
+   */
+  distanceKm: number | null
+}
+
+/**
+ * Móvil argentino canónico (`549` + 10 dígitos) — la forma que guarda el
+ * backend para poder pegarle a `wa.me` directo.
+ *
+ * Compartido entre pedidos (`quoteWhatsAppUrl`) y partners (`partnerWhatsAppUrl`):
+ * las dos superficies reciben el mismo tipo de dato mal cargado (un número
+ * viejo sin `54`, con guiones, con el `15` de antes de la portabilidad), y las
+ * dos toman la misma decisión ante eso — sacar separadores SÍ, adivinar el
+ * código de área NO. Adivinar mal le escribe a otra persona.
+ */
+export const AR_WHATSAPP_PHONE = /^549\d{10}$/
+
+/** Sólo los dígitos, si el número YA está en la forma canónica. `null` si no se puede confiar. */
+export function canonicalWhatsAppDigits(phone: string): string | null {
+  const digits = phone.replace(/\D/g, '')
+  return AR_WHATSAPP_PHONE.test(digits) ? digits : null
+}
+
+/**
+ * El link para escribirle al PARTNER, derivándole un pedido.
+ *
+ * `partners.whatsapp` es otra columna que `quote_requests.contact_phone`, con
+ * otro historial de carga (44 de 46 partners activos lo tienen, formato no
+ * verificado) — pero es el mismo criterio: sin la forma canónica, no hay
+ * link, y la fila lo dice en vez de arriesgar un mensaje a otra persona.
+ */
+export function partnerWhatsAppUrl(phone: string, partnerName: string, quoteCode: string): string | null {
+  const digits = canonicalWhatsAppDigits(phone)
+  if (!digits) return null
+
+  const text = `Hola ${partnerName}, te escribimos de AutoLibre para derivarte un pedido de presupuesto (${quoteCode}). ¿Tenés disponibilidad?`
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`
+}
+
+/**
+ * `partners.modality` es texto libre, no un enum — así que esto es una
+ * heurística sobre los valores que hoy existen en la base
+ * (`.claude/plans/partners-derivacion.md` §1: "Taller fijo" · "Mixto" ·
+ * "A distancia" · "A domicilio" · vacío), no una validación.
+ *
+ * Un partner "a domicilio" o "a distancia" NO necesita estar cerca del
+ * pedido: va él, o resuelve remoto. Ordenarlo por km lo hunde en la lista
+ * cuando podría ser la mejor opción — por eso el panel de candidatos los
+ * separa en su propio bloque, sin distancia.
+ */
+export function isRemoteModality(modality: string | null): boolean {
+  if (modality == null) return false
+  const v = modality.trim().toLowerCase()
+  return v === 'a domicilio' || v === 'a distancia'
+}
+
 export const APPLICATION_PATCH_KEYS: Record<
   Exclude<keyof EditApplicationInput, 'applicationId'>,
   string

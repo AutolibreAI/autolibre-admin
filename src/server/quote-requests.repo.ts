@@ -15,6 +15,7 @@ import {
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
   type QuoteSortKey,
+  type SetQuoteRequestRubroInput,
 } from '~/lib/quote-requests'
 
 /**
@@ -90,6 +91,8 @@ const READ_COLUMNS = [
   'created_at',
   'updated_at',
   'location_address',
+  'location_latitude',
+  'location_longitude',
 ] as const
 
 /**
@@ -476,6 +479,14 @@ interface DetailRow extends ListRow {
    * ubicación (WhatsApp, o un `typed` sin dirección).
    */
   location_address: string | null
+  /** Sólo con `location_source = 'device'`. Un `typed` no trae GPS. */
+  location_latitude: string | number | null
+  location_longitude: string | number | null
+}
+
+interface RubroRow {
+  category_slug: string
+  service_slug: string | null
 }
 
 /**
@@ -501,13 +512,26 @@ export async function findQuoteRequestDetail(
             qr.closed_reason,
             qr.internal_notes,
             qr.raw_submission,
-            qr.location_address
+            qr.location_address,
+            qr.location_latitude,
+            qr.location_longitude
      ${FROM_JOINS}
      left join users vu on vu.id = v.user_id
      where qr.id = $2`,
     [QUOTE_UNCONTACTED_AFTER_HOURS, id],
   )
   if (!r) return null
+
+  /**
+   * El rubro clasificado vive en `ops`, no en `quote_requests` — otra
+   * consulta y no un LEFT JOIN en la de arriba: es opcional (la mayoría de los
+   * pedidos todavía no se clasificó) y este repo no necesita mezclar sus
+   * columnas con el SELECT compartido de lista/detalle. → migración 013.
+   */
+  const rubro = await sqlOne<RubroRow>(
+    `select category_slug, service_slug from ops.quote_request_rubro where quote_request_id = $1`,
+    [id],
+  )
 
   return {
     ...mapListRow(r),
@@ -520,6 +544,10 @@ export async function findQuoteRequestDetail(
     closedReason: r.closed_reason,
     internalNotes: r.internal_notes,
     locationAddress: r.location_address,
+    locationLatitude: toNum(r.location_latitude),
+    locationLongitude: toNum(r.location_longitude),
+    rubroCategorySlug: rubro?.category_slug ?? null,
+    rubroServiceSlug: rubro?.service_slug ?? null,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.
@@ -640,6 +668,37 @@ export async function addQuoteRequestInternalNote(
     [input.quoteRequestId, input.text, actorId],
   )
   return toWriteResult(row?.q, input.quoteRequestId)
+}
+
+// ── Escritura: clasificar el rubro (migración 013) ──────────────────────────
+
+/**
+ * Clasificar (o reclasificar) el rubro de un pedido, vía
+ * `ops.set_quote_request_rubro`. Es un UPSERT sobre una tabla PROPIA de `ops`
+ * — no toca `quote_requests` — así que no pasa por `assertQuoteRequestsAvailable`
+ * con el mismo peso que las transiciones de la 011: el SP igual verifica que
+ * el pedido exista (`QUOTE_REQUEST_NOT_FOUND`), pero la tabla de destino de
+ * esta escritura es nuestra y no depende del deploy del backend.
+ */
+export async function setQuoteRequestRubro(
+  input: SetQuoteRequestRubroInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ categorySlug: string; serviceSlug: string | null }> {
+  void opts.signal
+
+  const row = await sqlOne<{ r: { category_slug: string; service_slug: string | null } }>(
+    `SELECT ops.set_quote_request_rubro(
+       p_quote_request_id => $1,
+       p_category_slug    => $2,
+       p_actor_id         => $3,
+       p_service_slug     => $4,
+       p_note             => $5
+     ) AS r`,
+    [input.quoteRequestId, input.categorySlug, actorId, input.serviceSlug ?? null, input.auditNote ?? null],
+  )
+  if (!row) throw new Error(`QUOTE_REQUEST_NOT_FOUND:${input.quoteRequestId}`)
+  return { categorySlug: row.r.category_slug, serviceSlug: row.r.service_slug }
 }
 
 // ── Escritura: cargar un pedido a mano ──────────────────────────────────────

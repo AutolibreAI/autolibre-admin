@@ -8,6 +8,7 @@ import {
   markQuoteRequestContactedSchema,
   quoteRequestIdSchema,
   quoteRequestSearchSchema,
+  setQuoteRequestRubroSchema,
 } from '~/lib/quote-requests'
 import {
   addQuoteRequestInternalNote,
@@ -19,6 +20,7 @@ import {
   markQuoteRequestContacted,
   quoteRequestStatusSummary,
   quoteRequestsAvailability,
+  setQuoteRequestRubro,
 } from '~/server/quote-requests.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -125,6 +127,23 @@ export const addQuoteRequestInternalNoteFn = createServerFn({ method: 'POST' })
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
     return addQuoteRequestInternalNote(data, context.user.id, { signal })
+  })
+
+/**
+ * Clasificar el rubro de un pedido (migración 013) — para el panel de
+ * candidatos de `.claude/plans/partners-derivacion.md`. El SP mismo valida que
+ * el pedido exista, pero esa validación es un `SELECT` crudo sobre
+ * `quote_requests`: en una base sin esa tabla explotaría con el error de
+ * Postgres, no con la sentinela legible. Se chequea acá antes, igual que las
+ * cuatro escrituras de la 011.
+ */
+export const setQuoteRequestRubroFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setQuoteRequestRubroSchema)
+  .handler(async ({ data, context }): Promise<{ categorySlug: string; serviceSlug: string | null }> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return setQuoteRequestRubro(data, context.user.id, { signal })
   })
 
 /**

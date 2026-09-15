@@ -11,7 +11,10 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/server/quote-requests.repo.ts` y `src/fn/quote-requests.ts`, y
 `src/components/QuoteRequestActions.tsx`. La 012 suma `migrations/012_ops_crear_pedido.sql`,
 `createQuoteRequest` de `src/server/quote-requests.repo.ts`, `createQuoteRequestFn` de
-`src/fn/quote-requests.ts` y `src/components/QuoteRequestComposer.tsx`.
+`src/fn/quote-requests.ts` y `src/components/QuoteRequestComposer.tsx`. La 013 suma
+`migrations/013_ops_rubro_de_pedido.sql` y su `.test.sql`, `setQuoteRequestRubro` de
+`src/server/quote-requests.repo.ts`, `setQuoteRequestRubroFn` de `src/fn/quote-requests.ts`
+y `src/components/PartnerCandidates.tsx` (`.claude/plans/partners-derivacion.md`).
 
 ## La regla que esto reemplaza, y por qué
 
@@ -685,3 +688,80 @@ nombrados (antes mandaba `$1…$9` por posición, así que la integración proba
 una forma que el repo no usaba). La integración de la 012 va con variables de
 plpgsql, no con el `PREPARE` sin tipos de la 011: resuelve la firma igual, pero
 no con parámetros de tipo desconocido como los manda `pg`.
+
+---
+
+# Migración 013 — clasificar el rubro de un pedido, para poder derivarlo
+
+Alcance añadido: `migrations/013_ops_rubro_de_pedido.sql` y su `.test.sql`,
+`setQuoteRequestRubro` de `src/server/quote-requests.repo.ts`,
+`setQuoteRequestRubroFn` de `src/fn/quote-requests.ts`,
+`src/components/PartnerCandidates.tsx`, `listPartnerCandidates` +
+`listPartnerZones` de `src/server/partners.repo.ts`. Nace de
+`.claude/plans/partners-derivacion.md`, que tiene el detalle completo (Fase 0
+a Fase 2); esto es el resumen que hay que mantener sincronizado con el código.
+
+## Una tabla nueva de `ops`, no una columna en `quote_requests`
+
+`quote_requests` es del backend y este repo no migra `public`. La
+clasificación por rubro es dato de OPERACIÓN del panel —nadie de la app la
+lee— así que vive en `ops.quote_request_rubro`, mismo criterio que
+`ops.excluded_email_domains` o los precios de IA: `quote_request_id` es un
+UUID pelado, **sin FK** a `quote_requests` (guardrail 6). El caso 22 de la
+suite lo verifica al revés de lo habitual: borra el `quote_request` y
+comprueba que la fila de `ops` SIGUE ahí.
+
+## Es un UPSERT, y el guardrail 7 se aplica distinto según el camino
+
+Igual que la 012 (que sólo inserta), el ALTA no lockea nada — no hay fila
+previa que lockear, y el `INSERT … ON CONFLICT` es atómico solo. Pero a
+diferencia de la 012, esta función SÍ puede pisar una clasificación anterior
+(reclasificar un pedido), y ahí el `SELECT … FOR UPDATE` antes del upsert sí
+corre — es la salvedad que anota la cabecera de la migración.
+
+`created_at` no se pisa en el `ON CONFLICT DO UPDATE` — mismo criterio que
+`upsertExcludedDomain` en `ops.repo.ts`: cuándo se clasificó por primera vez
+es el dato con valor.
+
+## Los slugs se validan contra el catálogo, no contra un enum
+
+`p_category_slug` y `p_service_slug` son `text`, y el cuerpo de la función los
+valida contra `service_categories`/`services` (activos, y el servicio
+colgando de la MISMA categoría que se está guardando) — sentinelas
+`INVALID_CATEGORY_SLUG` / `INVALID_SERVICE_SLUG`. **No valida que el rubro
+tenga sentido para la `description` del pedido**: eso es juicio del operador,
+no algo que la base pueda verificar.
+
+## La escritura que se decidió NO hacer: una tabla de derivaciones
+
+El plan evaluó guardar "a qué taller se derivó" como una fila más (una tabla
+`ops.quote_request_referrals`) y se decidió que NO, todavía. La derivación se
+registra como una línea de `internal_notes` vía
+`ops.add_quote_request_internal_note` (011) — la misma escritura que ya usa
+el hilo de notas de la ficha, sin SP nuevo.
+
+El costo es real y está anotado a propósito: **no se puede contestar "¿cuánto
+le mandamos a cada taller y cuánto convirtió?" con una consulta.** Esa
+respuesta queda en texto libre, y recuperarla parseando notas sería el mismo
+error que `leads.md` ya prohíbe para "ofertas" parseadas de `internal_notes`.
+Si esa pregunta se vuelve importante, el arreglo es la tabla — no un parser.
+
+## `listPartnerCandidates` no escribe nada — es lectura pura
+
+Cruza `partners` activos por rubro (vía `partner_services` → `services` →
+`service_categories`) con Haversine inline contra la coordenada del pedido
+(sin `postgis`/`earthdistance`: están disponibles pero no instaladas, e
+instalar una extensión es DDL global que cae en `public`, del backend — ver
+el plan, Fase 2). No es un SP de `ops`: es un `SELECT` en
+`partners.repo.ts`, igual que `listPartners` o `partnerCoverageBoard`.
+
+## Se probó como 007–012
+
+`migrations/013_ops_rubro_de_pedido.test.sql`: 23 casos, `BEGIN … ROLLBACK`,
+con su propio actor y su propio `quote_request` de fixture. Cubre los 3
+guardrails de forma, el camino feliz sin y con servicio puntual, el rubro
+inválido, el servicio de OTRO rubro rechazado, el pedido inexistente, actor
+inexistente/NULL, la reclasificación (misma fila, `created_at` intacto,
+`updated_at` avanza), el log con `before`/`after` en las dos escrituras, la
+ausencia de FK a `quote_requests`, y la integración con parámetros nombrados.
+**Repetir ese patrón para cualquier SP nuevo.**

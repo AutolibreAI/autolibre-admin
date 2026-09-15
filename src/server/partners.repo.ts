@@ -1,7 +1,12 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne, withTransaction } from './db'
-import { APPLICATION_PATCH_KEYS, type EditApplicationInput } from '~/lib/partners'
+import {
+  APPLICATION_PATCH_KEYS,
+  type EditApplicationInput,
+  type ListPartnerCandidatesInput,
+  type PartnerCandidate,
+} from '~/lib/partners'
 import { normalizeForMatch } from '~/lib/catalog'
 import type {
   PartnerLink,
@@ -646,6 +651,7 @@ export async function listPartners(
                 FROM partner_services ps3
                 JOIN services s3 ON s3.id = ps3.service_id
                WHERE ps3.partner_id = t.id AND s3.slug = $5))
+        AND ($6::text IS NULL OR t.coverage_zone ILIKE '%' || $6 || '%')
       ORDER BY ${orderBy} ${search.dir} NULLS LAST, t.name ASC`,
     [
       search.q ?? null,
@@ -653,6 +659,7 @@ export async function listPartners(
       search.partnerStatus,
       search.category ?? null,
       search.service ?? null,
+      search.partnerZone ?? null,
     ],
   )
 
@@ -668,6 +675,33 @@ export async function listPartners(
       .map(({ slug, name }) => ({ slug, name })),
     invisible: r.invisible,
   }))
+}
+
+/**
+ * Las zonas que hoy declaran los partners, para los chips del filtro.
+ *
+ * `select distinct` sobre la base, no una lista a mano — mismo patrón que
+ * `listDistinctChatModels` (`chats.md`), `listFineJurisdictions` (`leads.md`) y
+ * `listNotificationFacets` (`notifications.md`). Una zona nueva aparece sola.
+ *
+ * **No se normaliza a zonas canónicas.** Es la decisión que ya tomó
+ * `.claude/rules/partners-coverage.md` para el tablero de cobertura, y este
+ * filtro la hereda: 30 valores para 46 partners es una lista larga pero
+ * honesta, y un mapeo `"Pacheco" → "Zona Norte"` a mano reintroduciría
+ * exactamente lo que se decidió no hacer.
+ */
+export async function listPartnerZones(
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<string>> {
+  void opts.signal
+
+  const rows = await sql<{ zone: string }>(
+    `SELECT DISTINCT btrim(coverage_zone) AS zone
+       FROM partners
+      WHERE btrim(coalesce(coverage_zone, '')) <> ''
+      ORDER BY 1`,
+  )
+  return rows.map((r) => r.zone)
 }
 
 // ── Tablero de cobertura ────────────────────────────────────────────────────
@@ -1252,4 +1286,81 @@ export async function setPartnerLinks(
   )
   if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
   return row.links ?? []
+}
+
+// ── Derivación: candidatos para un pedido de presupuesto ────────────────────
+//
+// `.claude/plans/partners-derivacion.md`, Fase 2. Dado el rubro de un pedido y
+// (si existe) su coordenada, qué partners activos lo cubren, ordenados por
+// cercanía. Sólo LEE — no escribe `partners` ni `quote_requests`.
+
+interface CandidateRow {
+  id: string
+  name: string
+  coverage_zone: string
+  tier: string
+  modality: string | null
+  hours: string | null
+  whatsapp: string | null
+  address: string | null
+  matched_services: Array<{ slug: string; name: string }>
+  distance_km: string | number | null
+}
+
+/**
+ * Haversine inline, sin extensión — `postgis`/`earthdistance` están
+ * DISPONIBLES en el servidor pero no instaladas (verificado con
+ * `pg_extension`), e instalarlas es DDL global que cae en `public`, del
+ * backend. Con 46 partners la diferencia de performance es cero.
+ *
+ * `least(1, greatest(-1, …))` no es decorativo: el error de punto flotante
+ * puede empujar el argumento de `acos` apenas arriba de 1.0 para dos puntos
+ * casi idénticos, y `acos(1.0000000001)` es `NaN` en Postgres — un partner en
+ * la misma esquina que el pedido saldría con distancia nula en vez de ~0.
+ */
+export async function listPartnerCandidates(
+  input: ListPartnerCandidatesInput,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<PartnerCandidate>> {
+  void opts.signal
+
+  const rows = await sql<CandidateRow>(
+    `SELECT p.id, p.name, p.coverage_zone, p.tier::text AS tier, p.modality, p.hours,
+            p.whatsapp, p.address,
+            coalesce(
+              jsonb_agg(DISTINCT jsonb_build_object('slug', s.slug, 'name', s.name))
+                FILTER (WHERE s.id IS NOT NULL),
+              '[]'::jsonb) AS matched_services,
+            CASE
+              WHEN p.latitude IS NOT NULL AND $2::float8 IS NOT NULL THEN
+                6371 * acos(least(1, greatest(-1,
+                  sin(radians($2::float8)) * sin(radians(p.latitude)) +
+                  cos(radians($2::float8)) * cos(radians(p.latitude)) *
+                  cos(radians(p.longitude) - radians($3::float8)))))
+            END AS distance_km
+       FROM partners p
+       JOIN partner_services ps ON ps.partner_id = p.id
+       JOIN services s ON s.id = ps.service_id AND s.active
+       JOIN service_categories sc ON sc.id = s.category_id AND sc.active
+      WHERE p.status = 'active' AND sc.slug = $1
+      GROUP BY p.id
+      ORDER BY distance_km NULLS LAST,
+               -- founding antes que standard, a igualdad de distancia.
+               (p.tier = 'founding') DESC,
+               p.name ASC`,
+    [input.categorySlug, input.lat, input.lng],
+  )
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    coverageZone: r.coverage_zone,
+    tier: r.tier,
+    modality: r.modality,
+    hours: r.hours,
+    whatsapp: r.whatsapp,
+    address: r.address,
+    matchedServices: [...r.matched_services].sort((a, b) => a.name.localeCompare(b.name, 'es')),
+    distanceKm: r.distance_km === null ? null : Number(r.distance_km),
+  }))
 }

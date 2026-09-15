@@ -164,6 +164,16 @@ export const partnerSearchSchema = z.object({
   /** Slug de `services`: filtra a los que tienen ese servicio puntual. */
   service: z.string().trim().max(80).optional(),
   /**
+   * Filtra por `coverage_zone`, por CONTENCIÓN (`ILIKE '%…%'`) y no por
+   * igualdad: `coverage_zone` es texto crudo y 4 partners declaran DOS zonas en
+   * el mismo campo (`"CABA, Zona Norte"`, `"Zona Oeste / Zona Norte"`…). Con `=`
+   * esos quedan invisibles justo cuando el operador busca su zona.
+   *
+   * Calificado por dominio (`partnerZone`, no `zone` pelado): la misma regla que
+   * `partnerStatus` arriba, documentada en `.claude/rules/notifications.md`.
+   */
+  partnerZone: z.string().trim().max(200).optional(),
+  /**
    * Default `services` asc: los de menos servicios —los invisibles— van
    * primero. Reproduce el `ORDER BY count(ps.service_id), p.name` que la regla
    * de `partner-approval.md` puso a propósito para que el modo de falla no se

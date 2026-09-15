@@ -74,6 +74,18 @@ que cubre Motor. Si algún día `coverage_zone` se vuelve multivaluada (una tabl
 un `count(DISTINCT)` por categoría. El invariante está anotado en
 `~/lib/partners-coverage`.
 
+**Corrección relevada el 2026-09-15, contra producción**
+(`.claude/plans/partners-derivacion.md`, §1): el invariante es cierto a nivel
+de FILA (`coverage_zone` sigue siendo una columna sola, así que `categoryTotals`
+no cambia), pero **no es cierto a nivel semántico**. 4 de 46 partners activos
+declaran DOS zonas en el mismo campo de texto (`"CABA, Zona Norte"`,
+`"Zona Oeste / Zona Norte"`…). Consecuencia práctica: cualquier filtro nuevo
+sobre `coverage_zone` tiene que ser por **contención** (`ILIKE '%…%'`), nunca
+por igualdad exacta — ver el filtro de zona del listado, abajo. El tablero de
+cobertura no lo necesitó porque agrupa por el texto crudo entero (una fila de
+zona por VALOR distinto, no por zona semántica), así que esos 4 partners
+simplemente aparecen bajo su propia combinación de texto.
+
 ## Por qué `chasis-y-frenos` no es una columna
 
 Las 16 categorías están todas `active = true`, pero `chasis-y-frenos` tiene
@@ -106,6 +118,25 @@ el barrido antes de agrupar.
 `PARTNER_SORT_COLUMNS` es el `Record` cerrado que hace seguro interpolar la
 columna en el `ORDER BY` (mismo patrón que `SORT_COLUMNS` de `users.repo.ts`).
 El desempate por `t.name` va SIEMPRE al final — ver `partner-approval.md`.
+
+## El filtro de zona del listado (`partnerZone`) es por CONTENCIÓN
+
+Agregado el 2026-09-15 (`.claude/plans/partners-derivacion.md`, Fase 1):
+`listMarketplacePartners` acepta `partnerZone` y `listPartners` lo aplica como
+
+```sql
+AND ($6::text IS NULL OR t.coverage_zone ILIKE '%' || $6 || '%')
+```
+
+y no como `= $6`, exactamente por la corrección de arriba: con igualdad
+exacta, los 4 partners que declaran dos zonas en el mismo campo quedarían
+invisibles bajo cualquiera de sus dos zonas. `listPartnerZones()` arma las
+opciones del chip con `select distinct btrim(coverage_zone) … order by 1` —
+mismo patrón que `listDistinctChatModels` / `listFineJurisdictions` /
+`listNotificationFacets` — y **no normaliza a zonas canónicas**, por el mismo
+motivo que el tablero de cobertura ya decidió no hacerlo (ver más abajo, "El
+eje de zonas del tablero…"): 30 valores para 46 partners es una lista larga
+pero honesta.
 
 ## El search param del filtro de estado se llama `partnerStatus`, NO `status`
 

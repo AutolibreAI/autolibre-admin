@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { canonicalWhatsAppDigits } from '~/lib/partners'
 
 /**
  * Pedidos de presupuesto — `/leads/pedidos` y `/leads/pedidos/:id`.
@@ -135,9 +136,6 @@ export const quoteCancellationReasonLabel = (v: string) =>
  */
 export const quotePublicCode = (publicNumber: number) => `AL-${publicNumber}`
 
-/** Móvil argentino en la forma canónica que guarda el backend: `549` + 10 dígitos. */
-const WHATSAPP_PHONE = /^549\d{10}$/
-
 /**
  * El link para escribirle a la persona por WhatsApp, o `null`.
  *
@@ -148,6 +146,11 @@ const WHATSAPP_PHONE = /^549\d{10}$/
  * escribe a otra persona. Sacar separadores no infiere nada; completar prefijos
  * sí. Sin la forma canónica, no hay link.
  *
+ * `canonicalWhatsAppDigits` es el MISMO normalizador que usa
+ * `partnerWhatsAppUrl` en `~/lib/partners` para el WhatsApp del partner —
+ * misma decisión (sacar separadores sí, adivinar código de área no) ante el
+ * mismo tipo de dato mal cargado, en otra columna de otra tabla.
+ *
  * El texto precargado nombra el `AL-n`, que es lo que la persona ve y le dicta
  * al operador: ubica la conversación desde el primer mensaje. Se puede editar
  * en WhatsApp antes de mandarlo.
@@ -157,8 +160,8 @@ export function quoteWhatsAppUrl(
   publicNumber: number,
   contactName: string | null,
 ): string | null {
-  const digits = phone.replace(/\D/g, '')
-  if (!WHATSAPP_PHONE.test(digits)) return null
+  const digits = canonicalWhatsAppDigits(phone)
+  if (!digits) return null
 
   const greeting = contactName ? `Hola ${contactName}` : 'Hola'
   const text = `${greeting}, te escribimos de AutoLibre por tu pedido de presupuesto ${quotePublicCode(publicNumber)}.`
@@ -253,6 +256,37 @@ export const quoteRequestSearchSchema = z.object({
 export type QuoteRequestSearch = z.infer<typeof quoteRequestSearchSchema>
 
 export const quoteRequestIdSchema = z.object({ quoteRequestId: z.uuid() })
+
+/**
+ * Search param de la ficha (`/leads/pedidos/:id`) para el panel de candidatos.
+ *
+ * Calificado por dominio (`quoteRubro`, no `category` ni `rubro` pelados):
+ * `category` ya lo usa `/partners/listado` (`string`) y `coverageRubros` lo usa
+ * `/partners/cobertura` (`string[]`) — un tercer nombre genérico bajo la misma
+ * clave repetiría la colisión que ya documentó `.claude/rules/notifications.md`.
+ *
+ * Filtrar para MIRAR candidatos de un rubro no es lo mismo que CLASIFICAR el
+ * pedido: el search param es efímero (cambiar el chip no escribe nada), y
+ * `ops.set_quote_request_rubro` es la acción explícita que sí persiste.
+ */
+export const quoteRequestDetailSearchSchema = z.object({
+  quoteRubro: z.string().trim().max(60).optional(),
+})
+export type QuoteRequestDetailSearch = z.infer<typeof quoteRequestDetailSearchSchema>
+
+/**
+ * Clasificar el rubro de un pedido — `ops.set_quote_request_rubro` (013).
+ *
+ * `p_actor_id` no está acá: sale de la sesión, nunca del payload, mismo
+ * criterio que las cuatro escrituras de la 011.
+ */
+export const setQuoteRequestRubroSchema = z.object({
+  quoteRequestId: z.uuid(),
+  categorySlug: z.string().trim().min(1).max(60),
+  serviceSlug: z.string().trim().max(80).optional(),
+  auditNote: z.string().trim().max(500).optional(),
+})
+export type SetQuoteRequestRubroInput = z.infer<typeof setQuoteRequestRubroSchema>
 
 // ── Escrituras: las transiciones del operador (SPs de `ops`, migración 011) ──
 //
@@ -358,6 +392,9 @@ export function readableQuoteRequestError(cause: unknown): string {
     return '«Cancelado por el usuario» lo pone sólo la app, junto con el motivo de la persona. Elegí otro motivo.'
   if (raw.includes('INVALID_OUTCOME')) return 'Ese resultado no existe en la base. Recargá la pantalla.'
   if (raw.includes('INTERNAL_NOTE_REQUIRED')) return 'La nota no puede estar vacía.'
+  if (raw.includes('INVALID_CATEGORY_SLUG')) return 'Ese rubro no existe o no está activo. Recargá la pantalla.'
+  if (raw.includes('INVALID_SERVICE_SLUG'))
+    return 'Ese servicio no existe, no está activo, o no cuelga de este rubro.'
   if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED'))
     return 'Tu sesión no corresponde a un usuario de AutoLibre. Volvé a iniciar sesión.'
   if (raw === 'FORBIDDEN') return 'Tu rol no tiene permiso para esta acción.'
@@ -493,6 +530,22 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * `~/lib/quote-templates`.
    */
   locationAddress: string | null
+  /**
+   * El punto GPS de la persona, si lo dio (`location_source = 'device'`). Es
+   * lo que el panel de candidatos de `.claude/plans/partners-derivacion.md`
+   * usa para ordenar por cercanía — un `typed` (dirección tipeada a mano) no
+   * trae coordenadas, y el panel lo dice en vez de inventar un punto.
+   */
+  locationLatitude: number | null
+  locationLongitude: number | null
+  /**
+   * Rubro con el que el operador clasificó este pedido, vía
+   * `ops.set_quote_request_rubro` (migración 013). `null` = todavía no se
+   * clasificó. No es un campo de `quote_requests` — vive en `ops`, ver la
+   * cabecera de esa migración.
+   */
+  rubroCategorySlug: string | null
+  rubroServiceSlug: string | null
 }
 
 export type QuoteRequestsListResult =

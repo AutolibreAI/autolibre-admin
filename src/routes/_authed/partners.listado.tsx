@@ -5,7 +5,7 @@ import {
   PARTNER_STATUS_FILTER_LABELS,
   partnerSearchSchema,
 } from '~/lib/catalog'
-import { getServiceCatalog, listMarketplacePartners } from '~/fn/partners'
+import { getServiceCatalog, listMarketplacePartners, listPartnerZonesFn } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
@@ -39,18 +39,19 @@ export const Route = createFileRoute('/_authed/partners/listado')({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps, abortController }) => {
     const signal = abortController.signal
-    const [partners, catalog] = await Promise.all([
+    const [partners, catalog, zones] = await Promise.all([
       listMarketplacePartners({ data: deps, signal }),
       getServiceCatalog({ signal }),
+      listPartnerZonesFn({ signal }),
     ])
-    return { partners, catalog }
+    return { partners, catalog, zones }
   },
   head: () => ({ meta: [{ title: 'Partners · Listado — AutoLibre' }] }),
   component: PartnersListado,
 })
 
 function PartnersListado() {
-  const { partners, catalog } = Route.useLoaderData()
+  const { partners, catalog, zones } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -73,7 +74,8 @@ function PartnersListado() {
     search.onlyInvisible ||
     search.partnerStatus !== 'all' ||
     search.category != null ||
-    search.service != null
+    search.service != null ||
+    search.partnerZone != null
 
   return (
     <>
@@ -145,6 +147,27 @@ function PartnersListado() {
             Solo invisibles
             {invisibleCount > 0 && !search.onlyInvisible ? ` (${invisibleCount})` : ''}
           </Chip>
+        </FilterGroup>
+
+        {/*
+          Texto crudo de `coverage_zone`, sin normalizar a zonas canónicas —
+          decisión ya tomada en `.claude/rules/partners-coverage.md`. El
+          predicado del lado del server es por CONTENCIÓN (`ILIKE`), no
+          igualdad: 4 partners declaran dos zonas en el mismo campo de texto.
+        */}
+        <FilterGroup label="Zona">
+          <Chip active={search.partnerZone == null} onClick={() => setSearch({ partnerZone: undefined })}>
+            Todas
+          </Chip>
+          {zones.map((zone) => (
+            <Chip
+              key={zone}
+              active={search.partnerZone === zone}
+              onClick={() => setSearch({ partnerZone: search.partnerZone === zone ? undefined : zone })}
+            >
+              {zone}
+            </Chip>
+          ))}
         </FilterGroup>
       </div>
 

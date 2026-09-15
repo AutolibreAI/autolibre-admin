@@ -8,12 +8,15 @@ import {
   quoteCloseReasonLabel,
   quoteOutcomeLabel,
   quotePublicCode,
+  quoteRequestDetailSearchSchema,
   quoteRequestIdSchema,
   quoteUserOutcomeLabel,
   type QuoteRequestDetail,
 } from '~/lib/quote-requests'
 import { getQuoteRequestFn } from '~/fn/quote-requests'
+import { getServiceCatalog, listPartnerCandidatesFn } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
@@ -38,34 +41,71 @@ import type { ReactNode } from 'react'
  * `<QuoteTemplates detail={d}/>` es texto para copiar y pegar al contactar,
  * completado con los datos DE ESTE pedido — no vive en el listado porque no
  * tiene sentido sin un pedido puntual al que referirse. → `~/lib/quote-templates`.
+ *
+ * Desde `.claude/plans/partners-derivacion.md` (Fase 2) también monta
+ * `<PartnerCandidates/>`: dado el rubro del pedido (clasificado vía
+ * `ops.set_quote_request_rubro`, migración 013), qué partners activos lo
+ * cubren, ordenados por cercanía a la coordenada del pedido.
  */
 export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
+  /**
+   * `quoteRubro` es el ÚNICO search param de esta ruta: qué rubro se está
+   * MIRANDO en el panel de candidatos. Cambiarlo no clasifica el pedido —
+   * eso es la escritura explícita de `<PartnerCandidates/>` — pero sí hace
+   * que el `loader` vuelva a pedir los candidatos de ese rubro.
+   */
+  validateSearch: quoteRequestDetailSearchSchema,
+  loaderDeps: ({ search }) => ({ quoteRubro: search.quoteRubro }),
+
   /**
    * SSR completo (heredado). Es una ficha de CONTENIDO que se abre desde un
    * link pegado en un chat de equipo ("mirá AL-1042") y tiene que llegar
    * pintada. Mismo criterio que `/chats/:id` y `/usuarios/:id`.
+   *
+   * Un cambio de `quoteRubro` re-corre este loader desde el CLIENTE (la
+   * navegación de TanStack Router pega los server functions por RPC), no
+   * dispara un nuevo SSR completo — es lo que hace viable tener el rubro en
+   * la URL sin pagar un round trip de servidor por cada cambio de chip.
    */
-  loader: async ({ params, abortController }) => {
+  loader: async ({ params, deps, abortController }) => {
     // `parse` acá además del validator del server function: un id que no es
     // uuid es un 404 de la PANTALLA, no un 500 de validación.
     if (!quoteRequestIdSchema.safeParse(params).success) throw notFound()
 
-    const result = await getQuoteRequestFn({ data: params, signal: abortController.signal }).catch(
-      (cause: unknown) => {
-        if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
-        throw cause
-      },
-    )
+    const signal = abortController.signal
+    const result = await getQuoteRequestFn({ data: params, signal }).catch((cause: unknown) => {
+      if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
+      throw cause
+    })
     if (!result) throw notFound()
-    return result
+    if (!('detail' in result)) return { result, catalog: [], candidates: [], effectiveCategorySlug: null }
+
+    const catalog = await getServiceCatalog({ signal })
+
+    // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
+    // param gana; si no está, el default es el rubro guardado.
+    const effectiveCategorySlug = deps.quoteRubro ?? result.detail.rubroCategorySlug ?? null
+
+    const candidates = effectiveCategorySlug
+      ? await listPartnerCandidatesFn({
+          data: {
+            categorySlug: effectiveCategorySlug,
+            lat: result.detail.locationLatitude,
+            lng: result.detail.locationLongitude,
+          },
+          signal,
+        })
+      : []
+
+    return { result, catalog, candidates, effectiveCategorySlug }
   },
 
   head: ({ loaderData }) => ({
     meta: [
       {
         title:
-          loaderData && 'detail' in loaderData
-            ? `${quotePublicCode(loaderData.detail.publicNumber)} — Pedidos`
+          loaderData && 'detail' in loaderData.result
+            ? `${quotePublicCode(loaderData.result.detail.publicNumber)} — Pedidos`
             : 'Pedido — Pedidos',
       },
     ],
@@ -75,7 +115,12 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
 })
 
 function QuoteRequestScreen() {
-  const result = Route.useLoaderData()
+  const { result, catalog, candidates, effectiveCategorySlug } = Route.useLoaderData()
+  const search = Route.useSearch()
+  const navigate = Route.useNavigate()
+
+  const setQuoteRubro = (slug: string | undefined) =>
+    navigate({ search: { ...search, quoteRubro: slug }, replace: true, resetScroll: false })
 
   const back = (
     <Link
@@ -160,6 +205,18 @@ function QuoteRequestScreen() {
         quoteRequestId={d.id}
         status={d.status}
         closeReasonCode={d.closeReasonCode}
+      />
+
+      <PartnerCandidates
+        key={d.id}
+        quoteRequestId={d.id}
+        publicNumber={d.publicNumber}
+        pedidoHasLocation={d.locationLatitude !== null && d.locationLongitude !== null}
+        catalog={catalog}
+        savedCategorySlug={d.rubroCategorySlug}
+        selectedCategorySlug={effectiveCategorySlug}
+        candidates={candidates}
+        onSelectCategory={setQuoteRubro}
       />
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">

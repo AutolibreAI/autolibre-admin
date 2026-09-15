@@ -11,7 +11,9 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
 `src/components/QuoteRequestActions.tsx`, `src/lib/quote-templates.ts`,
 `src/components/QuoteTemplates.tsx`, `src/components/QuoteRequestComposer.tsx`,
-`migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`).
+`migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`),
+`src/components/PartnerCandidates.tsx`, `migrations/013_ops_rubro_de_pedido.sql`
+(+ su `.test.sql`), `scripts/geocode-partners.mjs`.
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
 regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
@@ -598,6 +600,63 @@ primero que se ve al abrir la pantalla. `firstClick` del header "Pedido"
 también pasó a `'desc'`, para que saltar a esa columna desde otra active el
 mismo orden que el default. El orden viejo sigue disponible: clickear el
 header de "Pedido" invierte.
+
+### Derivar a un taller (`<PartnerCandidates/>`) — desde el 2026-09-15
+
+Alcance: `src/components/PartnerCandidates.tsx`, `ops.set_quote_request_rubro`
+(migración 013), `listPartnerCandidates` + `listPartnerZones` de
+`src/server/partners.repo.ts`. Nace de
+`.claude/plans/partners-derivacion.md`, que tiene el detalle completo — la
+regla que sigue es el resumen operativo.
+
+Contesta *"me entró este pedido: ¿a qué taller se lo mando?"*, hoy resuelto de
+memoria por el operador. Cuelga de la FICHA (`leads.pedidos.$quoteRequestId.tsx`),
+no del listado — necesita el pedido puntual (su rubro, su coordenada) al que
+referirse.
+
+**Dos escrituras, deliberadamente de forma distinta:**
+
+- **Clasificar el rubro** es DATO: `ops.set_quote_request_rubro` guarda en
+  `ops.quote_request_rubro` (no en `quote_requests` — ver
+  `ops-write-actions.md`, sección de la 013). Habilita "¿qué rubros nos piden
+  más?" con un `group by`.
+- **Registrar la derivación** ("a qué taller se lo mandé") es NOTA INTERNA:
+  reusa `ops.add_quote_request_internal_note` (011), el mismo hilo que ya
+  muestra la ficha. **No hay una tabla de derivaciones** — no se puede
+  contestar "¿cuánto le mandamos a cada taller y cuánto convirtió?" con una
+  consulta, sólo leyendo el texto de las notas. Mismo límite que ya documenta
+  más arriba "Una sola tabla, sin presupuestos por taller": si esa pregunta se
+  vuelve importante, el arreglo es una tabla nueva con su SP, no un parser de
+  `internal_notes`.
+
+**El search param se llama `quoteRubro`**, calificado por dominio: `category`
+ya lo usa `/partners/listado` (`string`) y `coverageRubros` lo usa
+`/partners/cobertura` (`string[]`) bajo la misma clave semántica — un tercer
+nombre genérico repetiría la colisión de `.claude/rules/notifications.md`.
+Cambiar el chip de rubro sólo cambia qué se está MIRANDO (no persiste nada);
+la precedencia es **el search param gana, si no está el default es el rubro
+guardado** en `ops.quote_request_rubro`.
+
+**Un partner sin coordenada no es un partner lejos.** `listPartnerCandidates`
+calcula la distancia con Haversine inline (sin `postgis`/`earthdistance`:
+disponibles pero no instaladas, e instalarlas es DDL global de `public`) y
+devuelve `distanceKm: null` cuando falta la coordenada del partner O la del
+pedido — nunca una distancia inventada. La UI lo muestra "sin ubicación" en
+gris, mismo criterio que las celdas vacías de `scanner-compatibility.md`. Los
+partners con `modality` "A domicilio" o "A distancia" (texto libre, no un
+enum — ver `isRemoteModality` en `~/lib/partners`) van en un bloque aparte sin
+distancia: ordenarlos por km los hundiría cuando podrían ser la mejor opción.
+
+**El WhatsApp del partner usa el MISMO normalizador que el del pedido**
+(`canonicalWhatsAppDigits` en `~/lib/partners`, del que `quoteWhatsAppUrl`
+también depende): sin la forma canónica `549` + 10 dígitos, no hay link — 
+adivinar el código de área le escribiría a otra persona.
+
+La Fase 0 del plan (geocodificar las direcciones de los 43 partners sin
+coordenadas) es un script one-off (`scripts/geocode-partners.mjs`), corrido a
+mano, fuera del panel — no una dependencia de runtime. Sin ella el panel de
+candidatos funciona igual, sólo que con menos partners ubicados (lo dice en
+pantalla si son menos de la mitad).
 
 ## Cómo verificar un cambio acá
 

@@ -4,6 +4,7 @@ import {
   applicationSearchSchema,
   approveSchema,
   editApplicationSchema,
+  listPartnerCandidatesSchema,
   updateStatusSchema,
 } from '~/lib/partners'
 import {
@@ -21,7 +22,9 @@ import {
   findApplication,
   getPartnerServices,
   listApplications,
+  listPartnerCandidates,
   listPartners,
+  listPartnerZones,
   loadCatalog,
   partnerCoverageBoard,
   pipelineHealth,
@@ -39,6 +42,7 @@ import { adminMiddleware } from './middleware'
 import type {
   ApplicationDetail,
   ApplicationListItem,
+  PartnerCandidate,
   PipelineHealth,
 } from '~/lib/partners'
 import type {
@@ -258,4 +262,24 @@ export const setPartnerLinksFn = createServerFn({ method: 'POST' })
   .validator(setPartnerLinksSchema)
   .handler(async ({ data, context }): Promise<Array<{ kind: string; url: string }>> =>
     setPartnerLinks(data, context.user.id, { signal: requestSignal() }),
+  )
+
+// ── Derivación: zonas y candidatos (`.claude/plans/partners-derivacion.md`) ──
+
+/** Las zonas que hoy declaran los partners, para el chip de `/partners/listado`. */
+export const listPartnerZonesFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<Array<string>> => listPartnerZones({ signal: requestSignal() }))
+
+/**
+ * Candidatos para derivar un pedido de presupuesto. Devuelve teléfono y
+ * dirección de talleres — mismo criterio que el resto del marketplace
+ * (`adminMiddleware` en TODO, lecturas incluidas): un server function es un
+ * endpoint HTTP público.
+ */
+export const listPartnerCandidatesFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(listPartnerCandidatesSchema)
+  .handler(async ({ data }): Promise<Array<PartnerCandidate>> =>
+    listPartnerCandidates(data, { signal: requestSignal() }),
   )
