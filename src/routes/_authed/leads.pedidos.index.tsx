@@ -23,7 +23,8 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
-import { QuoteStatusBadge, QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteStatusControl } from '~/components/QuoteStatusControl'
 import { Input } from '~/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
@@ -43,6 +44,13 @@ import { cn } from '~/lib/utils'
  *
  * `QuoteRequest` es un aggregate de `quotes/`, NO un `Lead`. Vive bajo `/leads`
  * como línea de captación, igual que Seguros y Multas. → `.claude/rules/leads.md`
+ *
+ * ── El estado se cambia acá (migración 011) ─────────────────────────────────
+ *
+ * `<QuoteStatusControl/>`, en la columna Estado, llama a
+ * `ops.advance_quote_request` — reemplaza los tres scripts SQL de
+ * `marcar-…-contactado` / `-respondido` / `cerrar-…`. Agregar una nota interna
+ * sigue siendo el cuarto script, sin migrar.
  *
  * ── Es `leads.pedidos.index.tsx` y no `leads.pedidos.tsx` ──────────────────
  *
@@ -114,12 +122,13 @@ function Pedidos() {
       />
 
       {/*
-        Solo lectura, y se dice en pantalla: si el operador no lo lee acá, busca
-        el botón de "marcar contactado" que no existe.
+        Desde el 2026-09-15 (migración 011) el estado SÍ se cambia acá —
+        `QuoteStatusControl`, en la celda de Estado. Lo que sigue siendo
+        sólo lectura es agregar una nota interna.
       */}
       <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Pantalla de solo lectura. Marcar contactado / respondido, cerrar y agregar notas se sigue haciendo
-        con los scripts SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
+        El estado se cambia desde la columna Estado. Agregar una nota interna se sigue haciendo con el
+        script SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
       </p>
 
       <SummaryTiles summary={summary} />
@@ -347,7 +356,11 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
       </TableCell>
 
       <TableCell>
-        <QuoteStatusBadge status={row.status} />
+        <QuoteStatusControl
+          quoteRequestId={row.id}
+          status={row.status}
+          proposalsCount={row.proposalsCount}
+        />
         {row.closeReasonCode ? (
           <div className={cn('mt-1 text-xs', cancelledByUser ? 'text-foreground' : 'text-muted-foreground')}>
             {quoteCloseReasonLabel(row.closeReasonCode)}

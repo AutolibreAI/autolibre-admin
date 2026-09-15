@@ -15,7 +15,8 @@ import {
 import { getQuoteRequestFn } from '~/fn/quote-requests'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
-import { QuoteStatusBadge, QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteVehicleWarnings } from '~/components/QuoteRequestCells'
+import { QuoteStatusControl } from '~/components/QuoteStatusControl'
 import { QuoteTemplates } from '~/components/QuoteTemplates'
 import { Card, CardContent } from '~/components/ui/card'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
@@ -33,6 +34,10 @@ import type { ReactNode } from 'react'
  * `<QuoteTemplates detail={d}/>` es texto para copiar y pegar al contactar,
  * completado con los datos DE ESTE pedido — no vive en el listado porque no
  * tiene sentido sin un pedido puntual al que referirse. → `~/lib/quote-templates`.
+ *
+ * `<QuoteStatusControl/>` en el campo "Estado" cambia `status` vía
+ * `ops.advance_quote_request` (migración 011) — mismo componente que usa la
+ * fila del listado. → `.claude/rules/leads.md`.
  */
 export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
   /**
@@ -105,8 +110,8 @@ function QuoteRequestScreen() {
       />
 
       <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Solo lectura. Las transiciones (contactado, respondido, cerrar) y las notas se siguen cargando con
-        los scripts SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
+        El estado se cambia desde la tarjeta de abajo. Agregar una nota interna se sigue haciendo con el
+        script SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
       </p>
 
       <QuoteTemplates detail={d} />
@@ -115,7 +120,11 @@ function QuoteRequestScreen() {
         <CardContent className="pt-6">
           <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Estado">
-              <QuoteStatusBadge status={d.status} />
+              <QuoteStatusControl
+                quoteRequestId={d.id}
+                status={d.status}
+                proposalsCount={d.proposalsCount}
+              />
               {d.uncontacted ? (
                 <div className="mt-1 text-xs font-medium text-status-yellow">
                   sin contactar hace {formatInt(d.ageHours)} h (lectura del reloj)

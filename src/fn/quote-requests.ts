@@ -1,6 +1,11 @@
 import { createServerFn } from '@tanstack/react-start'
-import { quoteRequestIdSchema, quoteRequestSearchSchema } from '~/lib/quote-requests'
 import {
+  advanceQuoteRequestSchema,
+  quoteRequestIdSchema,
+  quoteRequestSearchSchema,
+} from '~/lib/quote-requests'
+import {
+  advanceQuoteRequest,
   findQuoteRequestDetail,
   listQuoteRequests,
   quoteRequestStatusSummary,
@@ -55,4 +60,26 @@ export const getQuoteRequestFn = createServerFn({ method: 'GET' })
     const detail = await findQuoteRequestDetail(data.quoteRequestId, { signal })
     if (!detail) throw new Error(`NOT_FOUND:${data.quoteRequestId}`)
     return { availability, detail }
+  })
+
+/**
+ * Mover el estado del pedido. El actor sale de la sesión, NUNCA del payload —
+ * mismo criterio que `advanceMarketplaceLead` y `approvePartnerApplication`:
+ * `ops.action_log` es el único registro de quién lo movió, y un actor por
+ * parámetro es una firma que cualquiera puede falsificar.
+ *
+ * Chequea disponibilidad antes de llamar al SP por el mismo motivo que las
+ * lecturas: un POST directo contra una base sin `quote_requests` tiene que
+ * volver "no desplegado", no el texto crudo de Postgres.
+ */
+export const advanceQuoteRequestFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(advanceQuoteRequestSchema)
+  .handler(async ({ data, context }): Promise<{ id: string; status: string }> => {
+    const signal = requestSignal()
+    const availability = await quoteRequestsAvailability({ signal })
+    if (!availability.available) {
+      throw new Error(`QUOTE_REQUESTS_UNAVAILABLE:${availability.reason}`)
+    }
+    return advanceQuoteRequest(data, context.user.id, { signal })
   })

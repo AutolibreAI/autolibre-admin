@@ -3,6 +3,7 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import {
   QUOTE_UNCONTACTED_AFTER_HOURS,
+  type AdvanceQuoteRequestInput,
   type QuoteRequestDetail,
   type QuoteRequestListItem,
   type QuoteRequestSearch,
@@ -12,16 +13,22 @@ import {
 } from '~/lib/quote-requests'
 
 /**
- * Pedidos de presupuesto — solo lectura.
+ * Pedidos de presupuesto — lectura + UNA escritura.
  *
- * ── Ni una escritura (todavía) ─────────────────────────────────────────────
+ * ── El estado se mueve por `ops.advance_quote_request` (migración 011) ─────
  *
- * Las transiciones (contactado / respondido / cerrar / agregar nota) hoy son
- * cuatro scripts de `autolibre-backend-hex/scripts/sql/` que el operador corre
- * en DBeaver. El backend no expone un endpoint con `AdminGuard` en `quotes/`
- * para moverlas, así que el día que el panel las haga serán stored procedures
- * de `ops` con sus 8 guardrails (`.claude/rules/ops-write-actions.md`) — nunca
- * un `UPDATE` suelto desde este archivo. Si aparece uno acá, está mal.
+ * `advanceQuoteRequest()` acá abajo es la ÚNICA escritura del archivo. Antes
+ * era read-only entera: las transiciones (contactado / respondido / cerrar)
+ * eran tres scripts de `autolibre-backend-hex/scripts/sql/` que el operador
+ * corría en DBeaver. `.claude/rules/leads.md` documentaba que el backend no
+ * expone un endpoint con `AdminGuard` en `quotes/` para eso — verificación
+ * que NO se pudo re-correr para la 011 (el repo del backend no está clonado en
+ * esta máquina; ver el comentario de cabecera de `migrations/011_ops_avanzar_
+ * pedido.sql`). Nunca un `UPDATE quote_requests` suelto desde este archivo —
+ * eso rompería la auditoría en `ops.action_log` que el SP escribe atómico con
+ * el cambio. Si aparece uno acá, está mal. El agregado de nota interna
+ * (`agregar-pedido-de-presupuesto…sql`) sigue siendo un script aparte, no
+ * migrado.
  *
  * ── Columnas explícitas, nunca `select qr.*` ───────────────────────────────
  *
@@ -513,4 +520,59 @@ export async function findQuoteRequestDetail(
     // que el server function pueda garantizar serializable.
     rawSubmissionJson: JSON.stringify(r.raw_submission ?? null, null, 2),
   }
+}
+
+// ── Escritura: cambiar el estado ────────────────────────────────────────────
+
+/**
+ * Mover un pedido entre `received | contacted | answered | closed`, vía
+ * `ops.advance_quote_request` (migración 011).
+ *
+ * ── Por qué no es un UPDATE desde acá ───────────────────────────────────────
+ *
+ * Mismo motivo que `advanceLead` en `leads.repo.ts`: el SP escribe
+ * `ops.action_log` en la MISMA unidad de trabajo que el cambio de estado. Un
+ * `UPDATE` acá más un `INSERT` de log serían dos sentencias separables, y el
+ * modo de falla es el peor — el cambio queda y el registro de quién lo hizo
+ * no.
+ *
+ * ── El retorno es mínimo A PROPÓSITO ────────────────────────────────────────
+ *
+ * `{ id, status }`, no el `QuoteRequestDetail` entero — mismo criterio que
+ * `advanceLead`. La UI no arma su vista a partir de esto: llama
+ * `router.invalidate()` después, que vuelve a correr el loader de la pantalla
+ * (listado o ficha, lo que esté montado) y trae el estado calculado
+ * completo — `uncontacted`, los tiempos, los flags de vehículo — con el MISMO
+ * SELECT que usa el resto de la pantalla. Devolver acá una segunda copia de
+ * esos cálculos sería la clase de duplicación que diverge en silencio.
+ *
+ * ── Los errores del SP viajan como el `message` de la excepción de Postgres ─
+ *
+ * `PROPOSALS_COUNT_REQUIRED`, `CLOSE_REASON_REQUIRED`,
+ * `CANNOT_CLOSE_AS_CANCELLED_BY_USER`, `INVALID_CLOSE_REASON: …`,
+ * `INVALID_STATUS: …`, `QUOTE_REQUEST_NOT_FOUND: …`. `QuoteStatusControl`
+ * (`~/components/QuoteStatusControl`) los traduce a texto legible — no se
+ * traducen acá porque este repo es el borde con Postgres, no con la UI.
+ */
+export async function advanceQuoteRequest(
+  input: AdvanceQuoteRequestInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ id: string; status: string }> {
+  void opts.signal
+
+  const row = await sqlOne<{ q: { id: string; status: string } }>(
+    'SELECT ops.advance_quote_request($1, $2, $3, $4, $5, $6, $7) AS q',
+    [
+      input.quoteRequestId,
+      input.status,
+      actorId,
+      input.proposalsCount ?? null,
+      input.closeReasonCode ?? null,
+      input.closedReason ?? null,
+      input.note ?? null,
+    ],
+  )
+  if (!row) throw new Error(`QUOTE_REQUEST_NOT_FOUND:${input.quoteRequestId}`)
+  return { id: row.q.id, status: row.q.status }
 }

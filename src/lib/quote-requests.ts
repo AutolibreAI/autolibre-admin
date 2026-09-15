@@ -99,6 +99,18 @@ export const QUOTE_REQUEST_CLOSE_REASON_LABELS: Record<QuoteRequestCloseReason, 
   duplicate: 'Duplicado',
 }
 
+/**
+ * Los motivos de cierre que el OPERADOR puede elegir al cerrar un pedido desde
+ * el panel — los cinco de `QUOTE_REQUEST_CLOSE_REASONS` menos
+ * `cancelled_by_user`. Ese motivo lo declara la PERSONA al cancelar desde la
+ * app (junto con `cancellation_reason`/`cancellation_comment`, que sólo ella
+ * puede escribir); `ops.advance_quote_request` lo rechaza explícitamente si
+ * llega en el payload. → `.claude/rules/leads.md`, sección Pedidos.
+ */
+export const QUOTE_REQUEST_ADMIN_CLOSE_REASONS = QUOTE_REQUEST_CLOSE_REASONS.filter(
+  (r) => r !== 'cancelled_by_user',
+)
+
 export const QUOTE_REQUEST_CANCELLATION_REASONS = [
   'already_solved',
   'no_longer_needed',
@@ -126,6 +138,40 @@ export const quoteUserOutcomeLabel = (v: string) => labelOf(QUOTE_REQUEST_USER_O
 export const quoteCloseReasonLabel = (v: string) => labelOf(QUOTE_REQUEST_CLOSE_REASON_LABELS, v)
 export const quoteCancellationReasonLabel = (v: string) =>
   labelOf(QUOTE_REQUEST_CANCELLATION_REASON_LABELS, v)
+
+/**
+ * Traduce las sentinelas de `ops.advance_quote_request` (migración 011) a
+ * texto legible para `QuoteStatusControl`. Vive acá, no en el componente,
+ * porque leer las sentinelas exactas requiere conocer el SP — mismo criterio
+ * que el resto de los `*Label()` de este archivo.
+ */
+export function readableAdvanceQuoteRequestError(raw: string): string {
+  if (raw.includes('PROPOSALS_COUNT_REQUIRED')) {
+    return 'Para marcar "respondido" hace falta cuántas propuestas se devolvieron.'
+  }
+  if (raw.includes('CLOSE_REASON_REQUIRED')) {
+    return 'Para cerrar el pedido hace falta elegir un motivo.'
+  }
+  if (raw.includes('CANNOT_CLOSE_AS_CANCELLED_BY_USER')) {
+    return 'Ese motivo lo declara la persona al cancelar desde la app — no se puede elegir acá.'
+  }
+  if (raw.includes('INVALID_CLOSE_REASON')) {
+    return 'Motivo de cierre inválido.'
+  }
+  if (raw.includes('INVALID_STATUS')) {
+    return 'Estado inválido.'
+  }
+  if (raw.includes('QUOTE_REQUEST_NOT_FOUND')) {
+    return 'Este pedido ya no existe. Recargá la pantalla.'
+  }
+  if (raw.includes('QUOTE_REQUESTS_UNAVAILABLE')) {
+    return 'Los pedidos de presupuesto todavía no están desplegados en esta base.'
+  }
+  if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED')) {
+    return 'Tu sesión no pudo identificarse como admin. Recargá la página.'
+  }
+  return raw
+}
 
 /**
  * `AL-1001`. `public_number` es SÓLO para mostrar (se lo dicta la persona al
@@ -219,6 +265,27 @@ export const quoteRequestSearchSchema = z.object({
 export type QuoteRequestSearch = z.infer<typeof quoteRequestSearchSchema>
 
 export const quoteRequestIdSchema = z.object({ quoteRequestId: z.uuid() })
+
+/**
+ * El payload de `ops.advance_quote_request` (migración 011).
+ *
+ * `p_actor_id` NO está acá: sale de la sesión de Clerk en el server function,
+ * mismo criterio que `advanceLeadSchema` — `ops.action_log` es el único
+ * registro de quién movió un pedido, y un actor por payload lo volvería una
+ * firma falsificable.
+ */
+export const advanceQuoteRequestSchema = z.object({
+  quoteRequestId: z.uuid(),
+  status: z.enum(QUOTE_REQUEST_STATUSES),
+  /** Sólo hace falta la PRIMERA vez que el pedido llega a `answered`; el SP lo exige ahí. */
+  proposalsCount: z.number().int().min(0).optional(),
+  /** Nunca `cancelled_by_user` — ver `QUOTE_REQUEST_ADMIN_CLOSE_REASONS`. El SP lo rechaza igual. */
+  closeReasonCode: z.enum(QUOTE_REQUEST_ADMIN_CLOSE_REASONS).optional(),
+  closedReason: z.string().trim().max(500).optional(),
+  /** Nota de auditoría en `ops.action_log`, no `quote_requests.internal_notes`. */
+  note: z.string().trim().max(280).optional(),
+})
+export type AdvanceQuoteRequestInput = z.infer<typeof advanceQuoteRequestSchema>
 
 // ── Tipos de salida ─────────────────────────────────────────────────────────
 

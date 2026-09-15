@@ -6,7 +6,10 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/routes/_authed/leads.tsx`. La 010 suma
 `migrations/010_ops_editar_solicitud.sql`, `updatePartnerApplication` de
 `src/server/partners.repo.ts`, `updatePartnerApplicationFn` de
-`src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`.
+`src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`. La 011 suma
+`migrations/011_ops_avanzar_pedido.sql`, `advanceQuoteRequest` de
+`src/server/quote-requests.repo.ts`, `advanceQuoteRequestFn` de
+`src/fn/quote-requests.ts` y `src/components/QuoteStatusControl.tsx`.
 
 ## La regla que esto reemplaza, y por qué
 
@@ -449,3 +452,116 @@ feliz de los ~19 campos, los 4 `*_REQUIRED`, `INVALID_FOLLOW_UP_DATE`, la
 normalización de arrays (ausente ≠ `[]` ≠ con vacíos), `APPLICATION_NOT_FOUND` /
 `ACTOR_NOT_FOUND` / `ACTOR_REQUIRED`, el log con `before`/`after`, y que el SP no
 escriba `updated_at`. **Repetir ese patrón para cualquier SP nuevo.**
+
+---
+
+# Migración 011 — cambiar el estado de un pedido de presupuesto
+
+Alcance añadido: `migrations/011_ops_avanzar_pedido.sql`, su `.test.sql`,
+`ops.advance_quote_request`, `advanceQuoteRequest` de
+`src/server/quote-requests.repo.ts`, `advanceQuoteRequestFn` de
+`src/fn/quote-requests.ts`, `advanceQuoteRequestSchema` +
+`QUOTE_REQUEST_ADMIN_CLOSE_REASONS` + `readableAdvanceQuoteRequestError` de
+`src/lib/quote-requests.ts`, `src/components/QuoteStatusControl.tsx`.
+
+## El primer SP de este archivo cuyo `grep` al backend NO se corrió
+
+Todos los SP de 007 a 010 se ganaron la excepción con un `grep` real contra
+`autolibre-backend-hex`. La 011 no pudo: el repo del backend no está clonado en
+esta máquina. Lo que hay es la palabra de `.claude/rules/leads.md`, escrita el
+2026-09-14 cuando se construyó la pantalla de sólo lectura: *"el backend no
+tiene un endpoint con `AdminGuard` en `src/quotes` para esas transiciones"*.
+
+Se decidió proceder igual —no es una excepción nueva, es la MISMA que ya
+regía la pantalla read-only, ahora ejercida— con dos apoyos, ninguno
+equivalente a un `grep` fresco:
+
+1. Es una afirmación reciente (un día antes), no una nota vieja que pudo
+   quedar desactualizada.
+2. `quotes/` sacó `quotes`/`quote_messages` del MVP del backend: falta el
+   aggregate necesario para que exista un caso de uso de transición, no sólo
+   el endpoint.
+
+**Esto es una asunción, no una verificación, y hay que tratarla así.** Antes
+de que la 011 llegue a producción:
+
+```
+rg -n "AdminGuard" ../autolibre-backend-hex/src/quotes
+```
+
+Si aparece un endpoint de transición de estado, la 011 queda obsoleta y el
+camino correcto es `src/server/backend.ts` — mismo patrón que manuales
+(decisión 4) y notificaciones (decisión 4b) del `CLAUDE.md`.
+
+## Los 8 guardrails, iguales a 007/008/009/010
+
+Nada nuevo acá: `SECURITY INVOKER`, `search_path` fijo, `assert_actor`,
+`FOR UPDATE`, log dentro de la función, sin FK a `public`, `updated_at` lo
+pone `trg_quote_requests_updated_at`, versionado en `migrations/`.
+
+## La representabilidad la definen los `CHECK` que la tabla YA tenía
+
+A diferencia de 007-010, acá el SP no inventa reglas de representabilidad:
+las lee de nueve `CHECK` constraints que `quote_requests` ya tiene (relevados
+con `pg_get_constraintdef`, no adivinados). El comentario de cabecera de la
+migración los lista uno por uno. Los tres que importan para entender el
+comportamiento:
+
+- **`chk_quote_requests_close_reason_code_iff_closed` /
+  `chk_quote_requests_closed_at_iff_closed`** son IFF: entrar a `closed` los
+  exige, SALIR los vacía. Reabrir un pedido cerrado limpia `closed_at` /
+  `close_reason_code` / `closed_reason` a `NULL` — no es un efecto colateral,
+  es lo que el propio schema exige.
+- **`chk_quote_requests_answered_has_proposals_count`** liga `proposals_count`
+  a `answered_at`, no a `status`. Como `answered_at` se SELLA (nunca vuelve a
+  `NULL`, mismo criterio que `contacted_at` en `advance_lead`),
+  `proposals_count` sólo hace falta la PRIMERA vez que se llega a `answered`
+  — después queda conservado por `coalesce()` sin importar a qué estado se
+  mueva el pedido.
+- **`chk_quote_requests_cancellation_iff_cancelled`** es la mina: cerrar con
+  `close_reason_code = 'cancelled_by_user'` exige `cancellation_reason`, que
+  es lo que la PERSONA declaró al cancelar desde la app. El SP no puede
+  fabricar ese dato, así que **rechaza ese motivo de cierre explícitamente**
+  (`CANNOT_CLOSE_AS_CANCELLED_BY_USER`) — es el único de los cinco valores de
+  `quote_request_close_reason` que el operador no puede elegir desde acá.
+  `QUOTE_REQUEST_ADMIN_CLOSE_REASONS` en `~/lib/quote-requests` es esa lista
+  ya filtrada, y es lo que puebla el desplegable de `QuoteStatusControl`.
+
+## Sin máquina de estados impuesta desde el SP
+
+A diferencia de `leads` (`idx_leads_open_user_partner_vehicle_unique`),
+`quote_requests` no tiene ningún índice único parcial sobre `status`
+(relevado con `pg_indexes`) — no hay ninguna "mina" tipo `LEAD_ALREADY_OPEN`
+acá. Cualquier estado es representable desde cualquier otro; la función no
+impone un orden. La UI ofrece los tres estados que no son el actual como
+botones sueltos — es sugerencia visual, no un enforcement.
+
+## Por qué el retorno del SP es mínimo, y por qué el repo lo respeta
+
+`ops.advance_quote_request` devuelve `to_jsonb(quote_requests)` — la fila
+CRUDA, sin los joins ni los campos derivados (`uncontacted`, `ageHours`,
+`catalogLabel`, …) que arma `SELECT_COLUMNS` en `quote-requests.repo.ts`.
+`advanceQuoteRequest()` del repo no intenta reconstruir esos derivados a mano:
+devuelve `{ id, status }` nomás, y `QuoteStatusControl` llama
+`router.invalidate()` después — el loader de la pantalla vuelve a correr con
+el SELECT real y trae todo recalculado. Armar una segunda copia de esos
+cálculos en la respuesta del SP sería la misma clase de divergencia silenciosa
+que `INTERNAL_PREDICATE` entre `ops.repo.ts` y `v_ai_usage`.
+
+## Cómo se probó
+
+`migrations/011_ops_avanzar_pedido.test.sql`: 36 casos, `BEGIN … ROLLBACK`,
+dos pedidos de fixture (uno para la progresión completa
+received→…→closed→reabierto, otro INTACTO para probar que
+`PROPOSALS_COUNT_REQUIRED` sólo dispara la primera vez que se llega a
+`answered`, y el salto directo received→answered sin pasar por `contacted`).
+Cubre: los 3 guardrails de forma, la progresión completa con sus sellados
+(`contacted_at`, `answered_at`, `closed_at`), el rechazo sin
+`proposals_count`, el rechazo sin `close_reason_code`, el rechazo de
+`cancelled_by_user`, el rechazo de un motivo inválido, que reabrir limpia las
+tres columnas del cierre y CONSERVA `answered_at`/`proposals_count`, el salto
+directo `received → answered` (las dos marcas se sellan con el mismo `now()`
+de la transacción y el `CHECK >=` pasa), `INVALID_STATUS`,
+`QUOTE_REQUEST_NOT_FOUND`, `ACTOR_NOT_FOUND`/`ACTOR_REQUIRED`, el log con
+`before`/`after`, que el SP no escriba `updated_at`, y una integración con
+parámetros nombrados. **Repetir ese patrón para cualquier SP nuevo.**

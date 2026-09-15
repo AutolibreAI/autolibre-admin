@@ -9,11 +9,14 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `leads.pedidos.$quoteRequestId.tsx`, `src/lib/quote-requests.ts`,
 `src/server/quote-requests.repo.ts`, `src/fn/quote-requests.ts`,
 `src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
-`src/lib/quote-templates.ts`, `src/components/QuoteTemplates.tsx`.
+`src/lib/quote-templates.ts`, `src/components/QuoteTemplates.tsx`,
+`src/components/QuoteStatusControl.tsx`, `migrations/011_ops_avanzar_pedido.sql`
+(+ su `.test.sql`).
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
-regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas, Pedidos y las
-dos pestañas "todavía no" no escriben nada.
+regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
+la migración 011. Seguros, Multas y las dos pestañas "todavía no" no escriben
+nada. Pedidos escribe el estado desde el 2026-09-15 — ver más abajo.
 
 ## `/leads` es un layout, no una pantalla
 
@@ -269,10 +272,16 @@ alguien arma "ofertas" parseando las notas, está inventando dominio.
 
 ### El guard de disponibilidad, y por qué no es opcional
 
-Al 2026-09-14 **`to_regclass('public.quote_requests')` es `NULL` en producción**
-(`autolibre` / `doadmin`) y la tabla existe en DEV con la migración 0093
-aplicada. La pantalla se escribió contra la tabla real igual (build-now,
-deploy-later), protegida por `quoteRequestsAvailability()`:
+**Al 2026-09-14 `to_regclass('public.quote_requests')` era `NULL` en
+producción** (`autolibre` / `doadmin`) y la tabla sólo existía en DEV con la
+migración 0093 aplicada. **Al 2026-09-15 ya no**: relevado contra la misma
+base (`current_user = doadmin`, puerto `25060`), `quote_requests` existe en
+producción con 3 filas, `location_address` incluido. El backend mergeó la
+rama entre esas dos fechas. La pantalla se escribió contra la tabla real desde
+el principio igual (build-now, deploy-later), protegida por
+`quoteRequestsAvailability()` — el guard sigue estando ahí por las bases que
+todavía no migraron (una preview vieja, un fork), no porque producción lo siga
+necesitando:
 
 - `no_table` → la tabla no existe.
 - `missing_0093` → existe pero le falta alguna de las columnas que el repo LEE
@@ -391,8 +400,8 @@ la URL y no la pantalla. Mismo patrón que `chats.index.tsx` +
 `src/lib/quote-templates.ts` (la lista `QUOTE_TEMPLATES` + `renderQuoteTemplate()`)
 + `src/components/QuoteTemplates.tsx` (la UI, con pestañas cuando hay más de una
 plantilla). Texto para copiar y pegar al contactar a la persona o al taller —
-no toca `quote_requests` ni ninguna otra tabla, así que no rompe "read-only
-entero" de la sección de abajo.
+no toca `quote_requests` ni ninguna otra tabla (a diferencia del cambio de
+estado de la sección de abajo, que sí escribe vía `ops.advance_quote_request`).
 
 **Cuelga de `leads.pedidos.$quoteRequestId.tsx`, no de `leads.pedidos.index.tsx`.**
 Primera versión la puso en el listado con placeholders `[corchetes]` a
@@ -441,22 +450,80 @@ plantilla)— y nunca escribe `QUOTE_TEMPLATES`. Cambiar de pedido (el component
 se remonta con la ficha) o recargar la página lo pierde a propósito: la
 plantilla es la fuente de verdad, esto es un borrador de un solo uso.
 
-### Ni una escritura — y cuál es el próximo paso
+### El estado SÍ se escribe, desde el 2026-09-15 — el resto sigue siendo read-only
 
-La pantalla es read-only. El operador sigue moviendo los pedidos con cuatro
-scripts de `autolibre-backend-hex/scripts/sql/`:
-`marcar-pedido-de-presupuesto-contactado.sql`,
-`marcar-pedido-de-presupuesto-respondido.sql`,
-`cerrar-pedido-de-presupuesto.sql` y
-`agregar-nota-interna-a-pedido-de-presupuesto.sql`.
+**Corregido.** Esta sección decía "la pantalla es read-only entera". Ya no:
+`ops.advance_quote_request` (migración 011, `migrations/011_ops_avanzar_
+pedido.sql`) mueve `status` entre `received | contacted | answered | closed`
+— reemplaza `marcar-pedido-de-presupuesto-contactado.sql`,
+`-respondido.sql` y `cerrar-pedido-de-presupuesto.sql`. El operador sigue
+usando el cuarto script sin migrar,
+`agregar-nota-interna-a-pedido-de-presupuesto.sql` (agregar una nota interna,
+no un cambio de estado).
 
-El backend **no tiene** un endpoint con `AdminGuard` en `src/quotes` para esas
-transiciones (sólo las del usuario: crear, cancelar, declarar resultado), así
-que cuando el panel las haga serán **stored procedures de `ops`** con los 8
-guardrails y su suite en `ROLLBACK` (`ops-write-actions.md`). Antes de
-escribirlos, re-correr el `grep` al backend: si aparece el endpoint, va por
-HTTP. Si aparece un `UPDATE quote_requests` en `quote-requests.repo.ts`, está
-mal.
+`<QuoteStatusControl/>` (`src/components/QuoteStatusControl.tsx`) es el
+componente COMPARTIDO entre `leads.pedidos.index.tsx` (una fila) y
+`leads.pedidos.$quoteRequestId.tsx` (la ficha) — mismo criterio que
+`QuoteStatusBadge`/`QuoteVehicleWarnings` en `QuoteRequestCells.tsx`: si el
+control se ve o se comporta distinto en las dos pantallas, una está mal.
+`advanceQuoteRequest()` en `quote-requests.repo.ts` llama al SP;
+`advanceQuoteRequestFn` en `fn/quote-requests.ts` es el borde RPC, con el
+mismo guard de disponibilidad que las lecturas (un POST contra una base sin
+`quote_requests` tiene que volver "no desplegado", no un 500).
+
+**El `grep` al backend NO se pudo re-correr para esta migración** — mismo
+estado que dejó constancia la 010 para `partner_applications`:
+`autolibre-backend-hex` no está clonado en esta máquina. Se asumió que la
+afirmación de más abajo ("el backend no tiene un endpoint con `AdminGuard`
+para estas transiciones") seguía vigente porque es reciente y porque
+`quotes/` sacó `quotes`/`quote_messages` del MVP. **Antes de que la 011 llegue
+a producción, correr**:
+
+```
+rg -n "AdminGuard" ../autolibre-backend-hex/src/quotes
+```
+
+Si aparece un endpoint de transición de estado, la 011 sobra y hay que migrar
+esto a `src/server/backend.ts` — mismo criterio que manuales y notificaciones
+(decisiones 4 y 4b del `CLAUDE.md`).
+
+#### Los tres estados que el operador NO puede elegir al cerrar
+
+`QUOTE_REQUEST_ADMIN_CLOSE_REASONS` = los cinco `close_reason_code` menos
+`cancelled_by_user`. Ese motivo lo declara la PERSONA al cancelar desde la
+app — junto con `cancellation_reason`/`cancellation_comment`, que sólo ella
+puede escribir (`chk_quote_requests_cancellation_iff_cancelled` exige el
+segundo si el primero es `cancelled_by_user`, y el SP nunca toca
+`cancellation_reason`). El SP rechaza `cancelled_by_user` explícitamente
+(`CANNOT_CLOSE_AS_CANCELLED_BY_USER`) aunque alguien lo mande a mano por HTTP.
+
+#### `proposals_count` se pide UNA vez, no en cada llamada
+
+`chk_quote_requests_answered_has_proposals_count` exige que, si `answered_at`
+quedó no-nulo, `proposals_count` no sea `NULL` — y `answered_at` se SELLA la
+primera vez que se llega a `answered` y nunca se vuelve a NULL (mismo criterio
+que `contacted_at` en `advance_lead`). Consecuencia: el SP sólo exige
+`proposals_count` cuando el pedido NUNCA pasó por `answered`; una vez cargado,
+`coalesce()` lo conserva en cualquier transición posterior — cerrar, reabrir,
+lo que sea. `QuoteStatusControl` sólo pide el número por `globalThis.prompt()`
+(mismo patrón que `lostReason` en `leads.talleres.tsx`) cuando
+`proposalsCount` todavía es `null`.
+
+#### Reabrir un pedido cerrado no choca ningún índice
+
+A diferencia de `leads` (`idx_leads_open_user_partner_vehicle_unique`),
+`quote_requests` no tiene un índice único parcial sobre `status` (relevado con
+`pg_indexes`). El SP deja moverse de cualquier estado a cualquier estado; las
+tres columnas del cierre (`closed_at`, `close_reason_code`, `closed_reason`)
+son IFF con `status = 'closed'` en la base (dos `CHECK` reales, relevados con
+`pg_get_constraintdef`), así que reabrir las vuelve a `NULL` — mismo criterio
+que `won_at`/`lost_reason` al salir de `won`/`lost` en `advance_lead`.
+`contacted_at`/`answered_at` NO se limpian al reabrir: son hechos sellados,
+no un estado que se pueda deshacer.
+
+Si aparece un `UPDATE quote_requests` suelto en `quote-requests.repo.ts` (en
+vez de pasar por `ops.advance_quote_request`), está mal — rompería la
+auditoría atómica en `ops.action_log` que el SP existe para garantizar.
 
 ## Cómo verificar un cambio acá
 
