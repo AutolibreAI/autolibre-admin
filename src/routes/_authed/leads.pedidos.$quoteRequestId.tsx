@@ -105,7 +105,7 @@ function QuoteRequestScreen() {
 
       <PageHeader
         title={`${quotePublicCode(d.publicNumber)} · Pedido de presupuesto`}
-        subtitle={`Por ${quoteChannelLabel(d.channel)} · recibido ${formatDateTime(d.createdAt)} UTC · actualizado ${formatDateTime(d.updatedAt)} UTC`}
+        subtitle={`Por ${quoteChannelLabel(d.channel)}${d.enteredManually ? ' · cargado a mano' : ''} · recibido ${formatDateTime(d.createdAt)} UTC · actualizado ${formatDateTime(d.updatedAt)} UTC`}
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 

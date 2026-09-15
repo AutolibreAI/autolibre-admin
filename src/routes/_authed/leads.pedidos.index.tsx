@@ -24,6 +24,7 @@ import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
+import { QuoteRequestComposer } from '~/components/QuoteRequestComposer'
 import { Input } from '~/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
@@ -44,11 +45,12 @@ import { cn } from '~/lib/utils'
  * `QuoteRequest` es un aggregate de `quotes/`, NO un `Lead`. Vive bajo `/leads`
  * como línea de captación, igual que Seguros y Multas. → `.claude/rules/leads.md`
  *
- * ── La lista no escribe ─────────────────────────────────────────────────────
+ * ── La lista no mueve estados ───────────────────────────────────────────────
  *
  * Marcar contactado / respondido, cerrar y la nota interna viven en la ficha
  * (`QuoteRequestActions`, SPs de `ops` de la 011): respondido y cerrar piden
- * datos que no entran en una celda. → `.claude/rules/leads.md`
+ * datos que no entran en una celda. Lo único que se escribe desde acá es un
+ * pedido NUEVO cargado a mano (`QuoteRequestComposer`, 012). → `.claude/rules/leads.md`
  *
  * ── Es `leads.pedidos.index.tsx` y no `leads.pedidos.tsx` ──────────────────
  *
@@ -116,16 +118,24 @@ function Pedidos() {
       <PageHeader
         title="Pedidos de presupuesto"
         subtitle={`${formatInt(rows.length)} ${filtered ? 'con este filtro' : 'pedidos'} · de ${formatInt(summary.total)} en total`}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <>
+            {/* El que llega de forma informal (llamada, en persona, referido) y
+                nunca pasó por app/web/whatsapp. → `QuoteRequestComposer`,
+                `ops.create_quote_request` (migración 012). */}
+            <QuoteRequestComposer />
+            <SsrTag>ssr: full</SsrTag>
+          </>
+        }
       />
 
       {/*
-        La lista no escribe, y se dice en pantalla: si el operador no lo lee
+        La fila no mueve estados, y se dice en pantalla: si el operador no lo lee
         acá, busca en la fila el botón de "marcar contactado" que vive en la ficha.
       */}
       <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        La lista es de solo lectura. Marcar contactado / respondido, cerrar y agregar notas internas se hace desde
-        la ficha de cada pedido.
+        Marcar contactado / respondido, cerrar y agregar notas internas se hace desde la ficha de cada pedido.
+        Acá sólo se cargan pedidos nuevos a mano.
       </p>
 
       <SummaryTiles summary={summary} />
@@ -225,7 +235,7 @@ function Pedidos() {
           <Table>
             <TableHeader>
               <TableRow>
-                <Sort label="Pedido" sortKey="createdAt" search={search} firstClick="asc" />
+                <Sort label="Pedido" sortKey="createdAt" search={search} firstClick="desc" />
                 <Sort label="Estado" sortKey="status" search={search} />
                 <Sort label="Canal" sortKey="channel" search={search} />
                 <Sort label="Contacto" sortKey="contact" search={search} />
@@ -348,6 +358,11 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
         >
           {quotePublicCode(row.publicNumber)}
         </Link>
+        {row.enteredManually ? (
+          <div className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Cargado a mano
+          </div>
+        ) : null}
         <div className="text-xs tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)} UTC</div>
         <div className="text-xs text-muted-foreground">{ageLabel(row.ageHours)}</div>
       </TableCell>

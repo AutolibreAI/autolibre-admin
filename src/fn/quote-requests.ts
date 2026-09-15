@@ -3,6 +3,7 @@ import {
   QUOTE_REQUESTS_UNAVAILABLE,
   addQuoteRequestInternalNoteSchema,
   closeQuoteRequestSchema,
+  createQuoteRequestSchema,
   markQuoteRequestAnsweredSchema,
   markQuoteRequestContactedSchema,
   quoteRequestIdSchema,
@@ -11,6 +12,7 @@ import {
 import {
   addQuoteRequestInternalNote,
   closeQuoteRequest,
+  createQuoteRequest,
   findQuoteRequestDetail,
   listQuoteRequests,
   markQuoteRequestAnswered,
@@ -123,4 +125,18 @@ export const addQuoteRequestInternalNoteFn = createServerFn({ method: 'POST' })
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
     return addQuoteRequestInternalNote(data, context.user.id, { signal })
+  })
+
+/**
+ * Cargar un pedido a mano (migración 012) — llegó por teléfono, en persona, o
+ * referido, así que nunca pasó por el POST público de app/web/whatsapp. El
+ * actor sale de la sesión, NUNCA del payload, igual que las transiciones.
+ */
+export const createQuoteRequestFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(createQuoteRequestSchema)
+  .handler(async ({ data, context }): Promise<{ id: string; publicNumber: number }> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return createQuoteRequest(data, context.user.id, { signal })
   })
