@@ -55,7 +55,9 @@ const toIso = (v: unknown): string | null =>
  * migración 0093 del backend son las que en la práctica pueden faltar
  * (`public_number`, `close_reason_code`, `cancellation_*`, `proposals_count`,
  * `user_outcome*`); el resto se lista igual porque el chequeo es "¿corre el
- * SELECT?", no "¿qué migración hay?".
+ * SELECT?", no "¿qué migración hay?". `location_address` es de una migración
+ * de `location_*` posterior a la 0093 (no versionada en este repo — vive en
+ * `autolibre-backend-hex`) y se lista por el mismo motivo.
  */
 const READ_COLUMNS = [
   'id',
@@ -86,6 +88,7 @@ const READ_COLUMNS = [
   'raw_submission',
   'created_at',
   'updated_at',
+  'location_address',
 ] as const
 
 /**
@@ -460,6 +463,12 @@ interface DetailRow extends ListRow {
   closed_reason: string | null
   internal_notes: string | null
   raw_submission: unknown
+  /**
+   * String armado por el backend a partir de `location_source` (device vs
+   * typed) — ver `.claude/rules/leads.md`. `null` cuando el pedido no trae
+   * ubicación (WhatsApp, o un `typed` sin dirección).
+   */
+  location_address: string | null
 }
 
 /**
@@ -484,7 +493,8 @@ export async function findQuoteRequestDetail(
             qr.outcome_note,
             qr.closed_reason,
             qr.internal_notes,
-            qr.raw_submission
+            qr.raw_submission,
+            qr.location_address
      ${FROM_JOINS}
      left join users vu on vu.id = v.user_id
      where qr.id = $2`,
@@ -502,6 +512,7 @@ export async function findQuoteRequestDetail(
     outcomeNote: r.outcome_note,
     closedReason: r.closed_reason,
     internalNotes: r.internal_notes,
+    locationAddress: r.location_address,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.

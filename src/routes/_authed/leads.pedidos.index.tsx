@@ -44,6 +44,12 @@ import { cn } from '~/lib/utils'
  * `QuoteRequest` es un aggregate de `quotes/`, NO un `Lead`. Vive bajo `/leads`
  * como línea de captación, igual que Seguros y Multas. → `.claude/rules/leads.md`
  *
+ * ── La lista no escribe ─────────────────────────────────────────────────────
+ *
+ * Marcar contactado / respondido, cerrar y la nota interna viven en la ficha
+ * (`QuoteRequestActions`, SPs de `ops` de la 011): respondido y cerrar piden
+ * datos que no entran en una celda. → `.claude/rules/leads.md`
+ *
  * ── Es `leads.pedidos.index.tsx` y no `leads.pedidos.tsx` ──────────────────
  *
  * Con un `leads.pedidos.tsx` con componente, el detalle

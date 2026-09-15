@@ -509,6 +509,10 @@ del `DECLARE` al crear la función, pero las sentencias SQL recién al ejecutarl
 que se despliegue el backend. El cast al enum va en el cuerpo, capturado a sentinela, igual que en
 `set_partner_status`.
 
+> Al 2026-09-15 la tabla ya existe en producción (relevado en `origin/config-pedidos`). Los `text` se
+> quedan igual: la 011 se aplica en toda base que el panel migre, y no todas tienen el flujo del
+> backend.
+
 **Corolario**: ningún SP sobre `quote_requests` puede ser `LANGUAGE sql` (esos sí se validan contra
 las tablas al crearse) ni declarar variables `quote_requests%ROWTYPE`. La suite sí usa `%ROWTYPE`,
 porque corre en DEV, donde la tabla existe.
@@ -548,9 +552,10 @@ Confundirlas deja el hilo sin la llamada, y el log con texto que no es auditorí
 ## Cómo se probó
 
 `migrations/011_ops_pedidos_de_presupuesto.test.sql`: 46 casos, `BEGIN … ROLLBACK`, con su propio
-actor y seis pedidos (más cuatro para la integración) (uno por estado, más uno con ubicación y otro con notas). Corrió primero en rojo,
-sin la migración, y después con la migración adentro de la misma transacción, contra el Postgres de
-Docker de desarrollo (`localhost:5435`). **Por eso la 011 no quedó aplicada en ninguna base.**
+actor, seis pedidos de fixture (uno por estado —cancelado por el usuario incluido—, uno con notas; el
+recibido trae ubicación) y cuatro más para la integración. Corrió primero en rojo, sin la migración, y
+después con la migración adentro de la misma transacción, contra el Postgres de Docker de desarrollo
+(`localhost:5435`).
 
 Cubre los guardrails de forma, las cuatro transiciones felices, cada sentinela, que un respondido no
 retroceda y un cancelado por el usuario no se toque, la normalización de `''` a NULL, el hilo de notas,
@@ -564,4 +569,28 @@ acepta subconsultas como argumento (de ahí `pg_temp.fix_id`), y un prepared sta
 SESIÓN, así que el `ROLLBACK` no se lo lleva y la suite hace `DEALLOCATE`.
 
 Al 2026-09-15 dio 46/46 en DEV (`autolibre_ai_hex`), con la 011 inyectada después del `BEGIN` porque
-esa base tenía aplicadas sólo 001–007.
+esa base tenía aplicadas sólo 001–007. Después se aplicaron 008–011 en DEV con `pnpm db:migrate`.
+
+## La 011 que se descartó: `ops.advance_quote_request`
+
+La rama `origin/config-pedidos` escribió en paralelo OTRA migración 011 (`011_ops_avanzar_pedido.sql`):
+un solo SP que movía `status` de cualquier estado a cualquier estado, con un `QuoteStatusControl` en
+cada fila del listado. En el merge del 2026-09-15 se descartó entera —migración, test, componente, fn,
+repo y schema— y quedó esta 011 como único camino de escritura. Los motivos, verificados:
+
+1. **Dos archivos `011` no conviven**: el runner los lee como la misma versión. Ésta ya estaba en
+   `origin/main` y aplicada en DEV, así que la que cedía era la otra.
+2. **Reabrir un pedido cancelado por el usuario reventaba con un 23514 crudo.** El SP limpiaba
+   `close_reason_code` y dejaba `cancellation_reason`, que viola
+   `chk_quote_requests_cancellation_iff_cancelled` (relevado con `pg_get_constraintdef`).
+3. **Copiaba la fila entera a `ops.action_log`**, coordenadas GPS y `raw_submission` incluidos: justo
+   lo que `_redact_quote_request` existe para no hacer.
+4. **Dejaba retroceder** (`answered` → `received`), que los CHECK no frenan y esta 011 prohíbe a
+   propósito.
+5. **Su `grep` al backend no se había corrido** (lo decía su propia cabecera).
+
+De esa rama SÍ se conservaron las plantillas de mensajes de la ficha, la lectura de `location_address`
+y Pedidos como pestaña default de `/leads` (→ `leads.md`).
+
+**Si vuelve la idea de mover el estado desde la fila**, se implementa llamando a estos mismos SP. Un
+segundo SP para la misma transición, con reglas distintas, es exactamente lo que se sacó.

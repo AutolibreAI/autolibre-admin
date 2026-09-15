@@ -17,6 +17,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
+import { QuoteTemplates } from '~/components/QuoteTemplates'
 import { Card, CardContent } from '~/components/ui/card'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
@@ -33,6 +34,10 @@ import type { ReactNode } from 'react'
  * Y escribe: las transiciones del operador y la nota interna, vía los SPs de
  * `ops` de la 011 (`QuoteRequestActions`). Sólo en la rama con la tabla
  * disponible — sin ella la pantalla corta antes y no hay botones.
+ *
+ * `<QuoteTemplates detail={d}/>` es texto para copiar y pegar al contactar,
+ * completado con los datos DE ESTE pedido — no vive en el listado porque no
+ * tiene sentido sin un pedido puntual al que referirse. → `~/lib/quote-templates`.
  */
 export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
   /**
@@ -103,6 +108,8 @@ function QuoteRequestScreen() {
         subtitle={`Por ${quoteChannelLabel(d.channel)} · recibido ${formatDateTime(d.createdAt)} UTC · actualizado ${formatDateTime(d.updatedAt)} UTC`}
         actions={<SsrTag>ssr: full</SsrTag>}
       />
+
+      <QuoteTemplates detail={d} />
 
       <Card className="mb-4">
         <CardContent className="pt-6">

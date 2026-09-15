@@ -9,21 +9,26 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `leads.pedidos.$quoteRequestId.tsx`, `src/lib/quote-requests.ts`,
 `src/server/quote-requests.repo.ts`, `src/fn/quote-requests.ts`,
 `src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
-`src/components/QuoteRequestActions.tsx`.
+`src/components/QuoteRequestActions.tsx`, `src/lib/quote-templates.ts`,
+`src/components/QuoteTemplates.tsx`.
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
-regla es `.claude/rules/ops-write-actions.md`. Seguros, Multas, la LISTA de
-Pedidos y las dos pestañas "todavía no" no escriben nada. La ficha de un pedido
-sí (ver Pedidos, abajo).
+regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
+la migración 011. Seguros, Multas, la LISTA de Pedidos y las dos pestañas
+"todavía no" no escriben nada. La ficha de un pedido sí (ver Pedidos, abajo).
 
 ## `/leads` es un layout, no una pantalla
 
 `leads.tsx` sólo renderiza la barra de pestañas y un `<Outlet/>`. `leads.index.tsx`
-redirige a `/leads/talleres`. Cada pestaña es un archivo con su propio `Route`,
-su `validateSearch` y su modo de SSR.
+redirige a `/leads/pedidos` (default a pedido del 2026-09-15; antes era
+`/leads/talleres`, que ahora es la ÚLTIMA pestaña de `TABS`, no la primera —
+el embudo del marketplace tiene 0 filas en producción). Cada pestaña es un
+archivo con su propio `Route`, su `validateSearch` y su modo de SSR.
 
 Consecuencia práctica: un `Link to="/leads"` cae en el redirect (un salto de
-más). Apuntá a `/leads/talleres` directo, como hace la tarjeta de Inicio.
+más). Apuntá a la pestaña que de verdad necesitás directo — la tarjeta de
+Leads de Inicio sigue apuntando a `/leads/talleres` porque ES la que muestra
+`leads.won`, no porque sea la default.
 
 ## "Sección de leads" acá NO es el `Lead` del backend
 
@@ -266,10 +271,16 @@ alguien arma "ofertas" parseando las notas, está inventando dominio.
 
 ### El guard de disponibilidad, y por qué no es opcional
 
-Al 2026-09-14 **`to_regclass('public.quote_requests')` es `NULL` en producción**
-(`autolibre` / `doadmin`) y la tabla existe en DEV con la migración 0093
-aplicada. La pantalla se escribió contra la tabla real igual (build-now,
-deploy-later), protegida por `quoteRequestsAvailability()`:
+**Al 2026-09-14 `to_regclass('public.quote_requests')` era `NULL` en
+producción** (`autolibre` / `doadmin`) y la tabla sólo existía en DEV con la
+migración 0093 aplicada. **Al 2026-09-15 ya no**: relevado contra la misma
+base (`current_user = doadmin`, puerto `25060`), `quote_requests` existe en
+producción con 3 filas, `location_address` incluido. El backend mergeó la
+rama entre esas dos fechas. La pantalla se escribió contra la tabla real desde
+el principio igual (build-now, deploy-later), protegida por
+`quoteRequestsAvailability()` — el guard sigue estando ahí por las bases que
+todavía no migraron (una preview vieja, un fork), no porque producción lo siga
+necesitando:
 
 - `no_table` → la tabla no existe.
 - `missing_0093` → existe pero le falta alguna de las columnas que el repo LEE
@@ -432,6 +443,73 @@ transiciones (sólo las del usuario: crear, cancelar, declarar resultado),
 re-verificado con `grep` el 2026-09-15. Si algún día aparece, va por HTTP y
 los SP se retiran. Si aparece un `UPDATE quote_requests` en
 `quote-requests.repo.ts`, está mal.
+
+### Plantillas de mensajes (`<QuoteTemplates/>`) — viven en la FICHA, no en el listado
+
+`src/lib/quote-templates.ts` (la lista `QUOTE_TEMPLATES` + `renderQuoteTemplate()`)
++ `src/components/QuoteTemplates.tsx` (la UI, con pestañas cuando hay más de una
+plantilla). Texto para copiar y pegar al contactar a la persona o al taller —
+no toca `quote_requests` ni ninguna otra tabla (a diferencia de
+`QuoteRequestActions`, que escribe por los SPs de la 011).
+
+**Cuelga de `leads.pedidos.$quoteRequestId.tsx`, no de `leads.pedidos.index.tsx`.**
+Primera versión la puso en el listado con placeholders `[corchetes]` a
+completar a mano — estaba mal: una plantilla sin un pedido puntual al que
+referirse no tiene con qué rellenarse sola, y esa es justo la utilidad. Vive en
+la ficha, donde ya está cargado el `QuoteRequestDetail` de UN pedido.
+
+`renderQuoteTemplate(template, detail)` reemplaza los `{{placeholders}}` de la
+plantilla cruda con los datos de ESE `detail` — código público
+(`quotePublicCode`), patente, vehículo (`catalogLabel` si el operador vinculó
+uno con catálogo), descripción y zona. Un dato que el pedido no tiene sale como
+aviso `[entre corchetes]` en el texto renderizado, no como un vacío silencioso
+— eso es lo único que le queda al operador para completar a mano, y sólo
+cuando de verdad falta.
+
+**"Zona" SÍ tiene columna** — corregido el 2026-09-15 contra la base real. Esta
+regla decía "`QuoteRequest` no tiene columna de zona/dirección" y era un
+supuesto no verificado: `quote_requests` tiene `location_source` (`device` /
+`typed`), `location_address`, `location_locality`, `location_province`,
+`location_latitude/longitude/accuracy_meters` — probablemente de una migración
+posterior a la 0093, no documentada acá porque no se había leído todavía. El
+repo sólo lee `location_address` (ya viene armado como string legible por el
+backend, ej. `"Av. Italia, Dique Luján, Provincia de Buenos Aires"`), agregada
+a `READ_COLUMNS` y al SELECT de `findQuoteRequestDetail` en
+`quote-requests.repo.ts`, y expuesta como `QuoteRequestDetail.locationAddress`.
+**No se agregó al listado** (`QuoteRequestListItem`): sólo la usa la plantilla
+de la ficha, y sumarla ahí sería leer una columna que ninguna pantalla
+muestra — regla general del repo, no `select *`.
+
+**Dos plantillas, y dos estilos de placeholder a propósito.** "Apertura" usa
+`{{con_llaves}}` (auto-rellena contra `detail`). "Presupuesto" —agregada el
+2026-09-15— usa `[con_corchetes]` para proveedor, precio, dirección, horarios,
+whatsapp y "otros detalles": son datos de UN presupuesto de UN taller, y
+`autolibre-backend-hex` sacó `quotes`/`quote_messages` del MVP (`.claude/rules/leads.md`,
+sección "Una sola tabla, sin presupuestos por taller" más abajo) — no hay
+columna de la que leerlos, ni la va a haber sin ese aggregate de vuelta. El
+regex de `renderQuoteTemplate` sólo matchea `{{llaves}}`, así que un
+`[corchete]` en el texto fuente pasa intacto — es la señal visual de "esto lo
+completa el operador", y agregar un placeholder nuevo a una plantilla existente
+es tan simple como elegir el estilo correcto: `{{llave}}` si hay una columna en
+`QuoteRequestDetail`, `[corchete]` si no la hay y no la va a haber.
+
+Editar el texto ya renderizado en el textarea antes de copiar es un borrador de
+un solo uso —vive en el estado del componente (`edits`, por `id` de
+plantilla)— y nunca escribe `QUOTE_TEMPLATES`. Cambiar de pedido (el componente
+se remonta con la ficha) o recargar la página lo pierde a propósito: la
+plantilla es la fuente de verdad, esto es un borrador de un solo uso.
+
+### Por qué no hay control de estado en el listado
+
+`origin/config-pedidos` traía otra 011 (`ops.advance_quote_request`: un SP que
+movía de cualquier estado a cualquier estado) y un `QuoteStatusControl` en cada
+fila del listado. Se descartó en el merge del 2026-09-15, con motivos técnicos
+—ver `ops-write-actions.md`, "La 011 que se descartó"—; de esa rama quedaron
+las plantillas, la lectura de `location_address` y Pedidos como pestaña default.
+
+Si vuelve la idea de acciones rápidas en la fila, llaman a los MISMOS SPs que la
+ficha. Un segundo camino de escritura para la misma transición es justo lo que
+se sacó.
 
 ## Cómo verificar un cambio acá
 

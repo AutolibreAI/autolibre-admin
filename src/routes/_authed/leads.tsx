@@ -36,13 +36,17 @@ interface Tab {
   soon?: boolean
 }
 
+// `Pedidos` va primero porque `leads.index.tsx` redirige ahí: es la pestaña
+// default al entrar a `/leads`. `Talleres` va último a pedido — el embudo del
+// marketplace (0 filas en producción al 2026-09-14) es hoy la línea con menos
+// actividad de las seis.
 const TABS: ReadonlyArray<Tab> = [
-  { to: '/leads/talleres', label: 'Talleres' },
+  { to: '/leads/pedidos', label: 'Pedidos' },
   { to: '/leads/seguros', label: 'Seguros' },
   { to: '/leads/multas', label: 'Multas' },
   { to: '/leads/contactos', label: 'Contactos', soon: true },
   { to: '/leads/financiacion', label: 'Financiación', soon: true },
-  { to: '/leads/pedidos', label: 'Pedidos' },
+  { to: '/leads/talleres', label: 'Talleres' },
 ]
 
 function LeadsLayout() {
