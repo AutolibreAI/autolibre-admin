@@ -118,8 +118,8 @@ function Pedidos() {
         el botón de "marcar contactado" que no existe.
       */}
       <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Pantalla de solo lectura. Marcar contactado / respondido, cerrar y agregar notas se sigue haciendo
-        con los scripts SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
+        Pantalla de solo lectura. Marcar contactado / respondido, cerrar y agregar notas se hace desde DBeaver
+        con las funciones de <code className="font-mono">ops</code> (<code className="font-mono">ops.close_quote_request</code> y afines).
       </p>
 
       <SummaryTiles summary={summary} />

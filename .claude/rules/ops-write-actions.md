@@ -6,7 +6,8 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/routes/_authed/leads.tsx`. La 010 suma
 `migrations/010_ops_editar_solicitud.sql`, `updatePartnerApplication` de
 `src/server/partners.repo.ts`, `updatePartnerApplicationFn` de
-`src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`.
+`src/fn/partners.ts` y `src/components/ApplicationEditor.tsx`. La 011 suma
+`migrations/011_ops_pedidos_de_presupuesto.sql` y su `.test.sql`, sin pantalla todavía.
 
 ## La regla que esto reemplaza, y por qué
 
@@ -449,3 +450,106 @@ feliz de los ~19 campos, los 4 `*_REQUIRED`, `INVALID_FOLLOW_UP_DATE`, la
 normalización de arrays (ausente ≠ `[]` ≠ con vacíos), `APPLICATION_NOT_FOUND` /
 `ACTOR_NOT_FOUND` / `ACTOR_REQUIRED`, el log con `before`/`after`, y que el SP no
 escriba `updated_at`. **Repetir ese patrón para cualquier SP nuevo.**
+
+---
+
+# Migración 011 — pedidos de presupuesto (`quote_requests`)
+
+Alcance añadido: `migrations/011_ops_pedidos_de_presupuesto.sql` y su `.test.sql`. **Sin pantalla
+todavía**: `/leads/pedidos` sigue read-only, y los SP se llaman desde DBeaver con el `users.id` propio
+como `p_actor_id`.
+
+## Qué reemplaza
+
+Los cuatro scripts de transición que `autolibre-backend-hex` tenía en `scripts/sql/`, que el operador
+copiaba, editaba y corría a mano. El backend los borró el 2026-09-15: ese repo no tiene código de
+administración, y todo lo que es del admin vive en `ops`. El quinto script
+(`listar-pedidos-de-presupuesto-abiertos.sql`) no tiene SP porque ya lo reemplazó `/leads/pedidos`.
+
+| Script borrado | SP |
+|---|---|
+| `marcar-pedido-de-presupuesto-contactado.sql` | `ops.mark_quote_request_contacted(id, actor, note?)` |
+| `marcar-pedido-de-presupuesto-respondido.sql` | `ops.mark_quote_request_answered(id, proposals_count, actor, note?)` |
+| `cerrar-pedido-de-presupuesto.sql` | `ops.close_quote_request(id, close_reason_code, actor, closed_reason?, outcome?, outcome_note?, note?)` |
+| `agregar-nota-interna-a-pedido-de-presupuesto.sql` | `ops.add_quote_request_internal_note(id, text, actor)` |
+
+El `grep` que habilita la excepción sí se corrió, el 2026-09-15: `src/quotes` del backend no tiene
+ningún `AdminGuard`, y sus dos `.update(quoteRequests)` son las transiciones del USUARIO (cancelar y
+declarar resultado).
+
+Una plantilla es peor que un SP por un motivo concreto: se edita antes de correrla, y cada edición
+puede borrar la guarda de estado del `WHERE`. Los scripts también se guardaban, y la 0093 del backend
+cambió el contrato: un script viejo guardado fallaba con un 23514 que parecía un bug.
+
+## La desviación del guardrail 5: el log no lleva la ubicación exacta
+
+`quote_requests` guarda la posición GPS de la persona, y eso es deuda **BLOQUEANTE** de Ley 25.326
+en el backend. Un pedido de supresión ya obliga a limpiarla en dos lugares: las columnas y
+`raw_submission->'location'`. Copiarla a `ops.action_log` en cada transición sumaría un tercero, y
+uno que crece solo.
+
+`ops._redact_quote_request` saca `location_latitude`, `location_longitude`,
+`location_accuracy_meters` y `raw_submission` del `before`, del `after` y de lo que devuelve la
+función. Ninguno de los cuatro SP escribe esas columnas, así que el log no pierde nada de lo que
+cambió. La localidad y la provincia sí quedan.
+
+> Si un SP futuro de `quote_requests` llega a escribir la ubicación, esta regla deja de alcanzar y
+> hay que decidir de nuevo. No lo "arregles" sacando el redact.
+
+## Los parámetros son `text`, no el enum
+
+Al 2026-09-14 `quote_requests` **no existe en producción**. plpgsql resuelve los tipos de la firma y
+del `DECLARE` al crear la función, pero las sentencias SQL recién al ejecutarlas. Con un parámetro
+`quote_request_close_reason`, aplicar la 011 en producción rompería el `vercel-build` del panel hasta
+que se despliegue el backend. El cast al enum va en el cuerpo, capturado a sentinela, igual que en
+`set_partner_status`.
+
+**Corolario**: ningún SP sobre `quote_requests` puede ser `LANGUAGE sql` (esos sí se validan contra
+las tablas al crearse) ni declarar variables `quote_requests%ROWTYPE`. La suite sí usa `%ROWTYPE`,
+porque corre en DEV, donde la tabla existe.
+
+## La guarda de estado es de la función, no de los CHECK
+
+Los CHECK de `quote_requests` exigen que cada estado tenga sus fechas, pero **no impiden
+retroceder**: un `UPDATE` que devuelva un `answered` a `contacted` entra. Por eso cada SP bloquea la
+fila con `FOR UPDATE` (`ops._lock_quote_request`) y valida el estado sobre ese `before`.
+
+El `FOR UPDATE` acá además serializa contra la APP, que escribe la misma fila cuando el usuario
+cancela, con su propio `UPDATE` guardado por estado. Sin el lock, "el usuario canceló mientras el
+operador lo marcaba respondido" deja el `before` del log describiendo un estado que ya no existía.
+
+| Sentinela | Cuándo |
+|---|---|
+| `QUOTE_REQUEST_NOT_FOUND` | el id no existe. Se busca por UUID, nunca por `AL-n` |
+| `INVALID_QUOTE_REQUEST_TRANSITION` | el estado no admite la operación. Incluye tocar un pedido que canceló el usuario |
+| `PROPOSALS_COUNT_REQUIRED` / `INVALID_PROPOSALS_COUNT` | respondido sin cantidad, o con una negativa. Cero es válido |
+| `CLOSE_REASON_CODE_REQUIRED` / `INVALID_CLOSE_REASON_CODE` | cierre sin código, o con uno fuera del enum |
+| `CLOSE_REASON_RESERVED_FOR_APP` | `cancelled_by_user`: lo pone sólo la app, junto con el motivo de la persona |
+| `INVALID_OUTCOME` | outcome fuera de `hired`, `not_hired` o `no_response` |
+| `INTERNAL_NOTE_REQUIRED` | nota interna en blanco |
+
+Varias duplican lo que un CHECK rechazaría igual, por el mismo motivo que las coordenadas de la 007:
+un 23514 con el nombre del constraint no le dice nada a quien opera.
+
+## `p_note` no es la nota interna
+
+En los tres SP de transición, `p_note` es la nota de **auditoría** y va a `ops.action_log`. La nota
+interna del pedido —lo que se consiguió llamando a talleres— es `add_quote_request_internal_note`:
+agrega una línea fechada en hora de Buenos Aires y nunca pisa las anteriores. Es el formato que
+`/leads/pedidos/:id` parsea como hilo.
+
+Confundirlas deja el hilo sin la llamada, y el log con texto que no es auditoría.
+
+## Cómo se probó
+
+`migrations/011_ops_pedidos_de_presupuesto.test.sql`: 41 casos, `BEGIN … ROLLBACK`, con su propio
+actor y seis pedidos (uno por estado, más uno con ubicación y otro con notas). Corrió primero en rojo,
+sin la migración, y después con la migración adentro de la misma transacción, contra el Postgres de
+Docker de desarrollo (`localhost:5435`). **Por eso la 011 no quedó aplicada en ninguna base.**
+
+Cubre los guardrails de forma, las cuatro transiciones felices, cada sentinela, que un respondido no
+retroceda y un cancelado por el usuario no se toque, la normalización de `''` a NULL, el hilo de notas,
+el log con `before`/`after`, y que ni el log ni lo devuelto traigan coordenadas.
+
+No tiene casos de integración con el SQL del repo porque todavía no hay repo que llame a estos SP. Se
+suman con los botones.

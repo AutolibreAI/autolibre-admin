@@ -10,15 +10,19 @@ paths:
 
 # Aprobación de partners — la primera pantalla real
 
-## La spec ya está escrita
+## La spec era un runbook del backend, y ya no está ahí
 
-`../autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql`
+`../autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql` era un runbook de DBeaver de
+8 consultas, con sus trampas documentadas, y fue la especificación de esta pantalla. **El backend lo
+borró el 2026-09-15**: ese repo no tiene código de administración, y el panel ya reemplaza las 8
+consultas. Para leerlo entero:
 
-Ese archivo es un runbook de DBeaver de 8 consultas, con sus trampas documentadas. **Es la
-especificación de esta pantalla.** Leelo entero antes de escribir una línea — no lo resumas de acá,
-que este archivo se puede quedar viejo y aquél es el que corre.
+```bash
+git -C ../autolibre-backend-hex show ccb1cb50:scripts/sql/aprobar-partner-application.sql
+```
 
-Lo que sigue es lo que el panel tiene que preservar, no un reemplazo del original.
+Desde entonces la spec viva es esta rule más `partners.repo.ts`, que dice qué consulta reemplaza
+cada función. Lo que sigue es lo que el panel tiene que preservar.
 
 ## Son DOS pasos, y el segundo es el que se olvida
 

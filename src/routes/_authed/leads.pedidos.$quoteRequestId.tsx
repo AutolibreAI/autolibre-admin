@@ -100,8 +100,8 @@ function QuoteRequestScreen() {
       />
 
       <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Solo lectura. Las transiciones (contactado, respondido, cerrar) y las notas se siguen cargando con
-        los scripts SQL de <code className="font-mono">autolibre-backend-hex/scripts/sql/</code>.
+        Solo lectura. Las transiciones (contactado, respondido, cerrar) y las notas se cargan desde DBeaver con
+        las funciones de <code className="font-mono">ops</code> (<code className="font-mono">ops.close_quote_request</code> y afines).
       </p>
 
       <Card className="mb-4">

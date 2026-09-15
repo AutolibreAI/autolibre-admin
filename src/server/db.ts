@@ -19,7 +19,9 @@ import { Pool, type PoolClient, type PoolConfig, type QueryResultRow } from 'pg'
  * deliberately departs from autolibre-mobile's "new adapters target the hex
  * backend by default" rule, because the admin's work IS the SQL that already
  * exists — `approve_partner_application()`, the `v_partner_application_queue`
- * view, and the runbook in the backend's `scripts/sql/`. Re-expressing those as
+ * view, and the operator runbooks that used to live in the backend's
+ * `scripts/sql/` (deleted 2026-09-15, now `ops` stored procedures and panel
+ * screens). Re-expressing those as
  * REST endpoints would add a hop without adding a rule.
  *
  * What this does NOT license: putting domain decisions in SQL. The backend's

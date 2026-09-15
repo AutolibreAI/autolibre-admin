@@ -30,7 +30,9 @@ import type {
  * Marketplace — el reemplazo del runbook de DBeaver
  * (`autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql`).
  *
- * Ese archivo es la spec. Cada función de acá dice qué consulta reemplaza, para
+ * Ese archivo fue la spec; el backend lo borró el 2026-09-15 y se recupera con
+ * `git -C ../autolibre-backend-hex show ccb1cb50:scripts/sql/aprobar-partner-application.sql`.
+ * Cada función de acá dice qué consulta reemplaza, para
  * que se puedan comparar fila por fila la primera vez.
  */
 

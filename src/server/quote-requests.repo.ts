@@ -16,12 +16,12 @@ import {
  *
  * ── Ni una escritura (todavía) ─────────────────────────────────────────────
  *
- * Las transiciones (contactado / respondido / cerrar / agregar nota) hoy son
- * cuatro scripts de `autolibre-backend-hex/scripts/sql/` que el operador corre
- * en DBeaver. El backend no expone un endpoint con `AdminGuard` en `quotes/`
- * para moverlas, así que el día que el panel las haga serán stored procedures
- * de `ops` con sus 8 guardrails (`.claude/rules/ops-write-actions.md`) — nunca
- * un `UPDATE` suelto desde este archivo. Si aparece uno acá, está mal.
+ * Las transiciones (contactado / respondido / cerrar / agregar nota) son
+ * stored procedures de `ops` (migración 011) que el operador hoy llama desde
+ * DBeaver: el backend no expone un endpoint con `AdminGuard` en `quotes/`. El
+ * día que el panel tenga los botones, este archivo llama a esos SP con el actor
+ * de la sesión (`.claude/rules/ops-write-actions.md`) — nunca un `UPDATE`
+ * suelto. Si aparece uno acá, está mal.
  *
  * ── Columnas explícitas, nunca `select qr.*` ───────────────────────────────
  *

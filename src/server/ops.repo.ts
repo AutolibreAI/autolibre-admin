@@ -764,7 +764,8 @@ interface MarketplaceRow {
 
 /**
  * Reemplaza: la consulta 6 del runbook de aprobación
- * (`autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql`), que
+ * (`autolibre-backend-hex/scripts/sql/aprobar-partner-application.sql`, borrado
+ * del backend el 2026-09-15 y recuperable de su historial de git), que
  * busca partners publicados con cero rubros DESPUÉS del hecho.
  *
  * `withTransaction` en `db.ts` ya hace ese caso irrepresentable para las

@@ -241,7 +241,7 @@ está mal.
 ### Qué reemplaza
 
 `scripts/sql/listar-pedidos-de-presupuesto-abiertos.sql` de
-`autolibre-backend-hex`, que el operador corre en DBeaver (`… where status <>
+`autolibre-backend-hex` (borrado el 2026-09-15), que el operador corría en DBeaver (`… where status <>
 'closed' order by created_at`). El default de la pestaña es ese corte y ese
 orden (`quoteStatus=open`, `createdAt asc`); los cerrados —que el script no
 muestra y nadie mira— están a un chip. La ficha reemplaza el `select * … where
@@ -381,22 +381,23 @@ queda anidado adentro y renderiza en un `<Outlet/>` que la tabla no tiene: cambi
 la URL y no la pantalla. Mismo patrón que `chats.index.tsx` +
 `chats.$conversationId.tsx`.
 
-### Ni una escritura — y cuál es el próximo paso
+### Las escrituras ya son SPs de `ops`, y todavía no tienen botón
 
-La pantalla es read-only. El operador sigue moviendo los pedidos con cuatro
-scripts de `autolibre-backend-hex/scripts/sql/`:
-`marcar-pedido-de-presupuesto-contactado.sql`,
-`marcar-pedido-de-presupuesto-respondido.sql`,
-`cerrar-pedido-de-presupuesto.sql` y
-`agregar-nota-interna-a-pedido-de-presupuesto.sql`.
+La pantalla sigue read-only. Desde la migración 011, las transiciones del
+operador son **stored procedures de `ops`** con los 8 guardrails y su suite en
+`ROLLBACK` (`ops-write-actions.md`, sección 011):
+`ops.mark_quote_request_contacted`, `ops.mark_quote_request_answered`,
+`ops.close_quote_request` y `ops.add_quote_request_internal_note`. Reemplazan
+a los cuatro scripts que el backend tenía en `scripts/sql/` y borró el
+2026-09-15. Hoy se llaman desde DBeaver, con el `users.id` propio como
+`p_actor_id`.
 
 El backend **no tiene** un endpoint con `AdminGuard` en `src/quotes` para esas
-transiciones (sólo las del usuario: crear, cancelar, declarar resultado), así
-que cuando el panel las haga serán **stored procedures de `ops`** con los 8
-guardrails y su suite en `ROLLBACK` (`ops-write-actions.md`). Antes de
-escribirlos, re-correr el `grep` al backend: si aparece el endpoint, va por
-HTTP. Si aparece un `UPDATE quote_requests` en `quote-requests.repo.ts`, está
-mal.
+transiciones (sólo las del usuario: crear, cancelar, declarar resultado),
+re-verificado con `grep` el 2026-09-15. Si algún día aparece, va por HTTP y
+los SP se retiran. Cuando se sumen los botones, `quote-requests.repo.ts` llama
+a los SP con el actor de la sesión: si aparece un `UPDATE quote_requests` en
+ese archivo, está mal.
 
 ## Cómo verificar un cambio acá
 

@@ -19,9 +19,10 @@ import { z } from 'zod'
  *
  * ── Qué consulta reemplaza ──────────────────────────────────────────────────
  *
- * `scripts/sql/listar-pedidos-de-presupuesto-abiertos.sql` del backend, que el
- * operador corre en DBeaver (`… where status <> 'closed' order by created_at`),
- * más los cerrados — que ese script no muestra y por eso nadie mira.
+ * `scripts/sql/listar-pedidos-de-presupuesto-abiertos.sql` del backend —borrado
+ * el 2026-09-15—, que el operador corría en DBeaver (`… where status <> 'closed'
+ * order by created_at`), más los cerrados, que ese script no mostraba y por eso
+ * nadie miraba.
  *
  * ── Build-now, deploy-later ────────────────────────────────────────────────
  *
