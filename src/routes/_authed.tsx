@@ -14,6 +14,7 @@ import {
   Coins,
   FileText,
   Handshake,
+  History,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -103,6 +104,21 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * espeja ningún bounded context del backend porque el backend no tiene uno).
    */
   { to: "/metricas", label: "Métricas", icon: BarChart3 },
+  /**
+   * `Actividad` cierra el bloque transversal, y va acá por el mismo motivo que
+   * `Métricas`: no espeja ningún bounded context — los cruza a TODOS. Es el
+   * `UNION ALL` de las dieciséis tablas que sólo se escriben cuando una persona
+   * toca la app, ordenado por cuándo pasó.
+   *
+   * Los tres primeros ítems son las tres preguntas transversales y en este
+   * orden: Inicio "¿qué hay que arreglar?", Métricas "¿cómo venimos?",
+   * Actividad "¿qué está pasando ahora?". Todo lo que sigue es dominio.
+   *
+   * Cada fila lleva a la pantalla dueña de esa entidad (un chat abre `/chats`,
+   * un escaneo abre la sesión); sólo lo que todavía no tiene dueño cae en una
+   * ficha propia. → `.claude/rules/activity-feed.md`
+   */
+  { to: "/actividad", label: "Actividad", icon: History },
   { to: "/solicitudes", label: "Solicitudes", icon: Inbox },
   { to: "/partners", label: "Partners", icon: Store },
   /**
