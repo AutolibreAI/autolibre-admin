@@ -1,10 +1,17 @@
-# Notificaciones (`/notificaciones`)
+# Notificaciones (`/notificaciones`, `/notificaciones/envios`)
 
 Alcance: `src/lib/notifications.ts`, `src/server/notifications.repo.ts`,
 `src/fn/notifications.ts`, `src/routes/_authed/notificaciones.index.tsx`,
 `src/components/BroadcastComposer.tsx`, `broadcastNotification` en
 `src/server/backend.ts`, y el link en el bloque `Notifications` de
 `src/routes/_authed/usuarios.$userId.tsx`.
+
+Desde el 2026-09-16 suma dos capacidades, cada una con su sección al final de
+este archivo: **armar la audiencia por condición** (`src/lib/audience.ts`,
+`src/server/audience.repo.ts`, `src/components/AudienceBuilder.tsx`) y **ver los
+envíos ya hechos con lo que pasó después** (`src/lib/campaigns.ts`,
+`src/server/campaigns.repo.ts`, el layout `notificaciones.tsx` y las dos rutas de
+`notificaciones.envios.*`).
 
 ## Qué consulta reemplaza
 
@@ -218,6 +225,184 @@ que van a tentar ya se descartaron en
 
 Si aparece un `UPDATE` / `INSERT` en `notifications.repo.ts`, está mal — también
 para crear: eso va por `backend.ts`.
+
+## Audiencias por condición (`AudienceBuilder`) — desde el 2026-09-16
+
+Alcance: `src/lib/audience.ts`, `src/server/audience.repo.ts`,
+`previewNotificationAudience` en `src/fn/notifications.ts`,
+`src/components/AudienceBuilder.tsx`.
+
+Reemplaza el `select u.id, u.email from users u where <condición>` de DBeaver
+seguido de pegar los uuid de a uno en el buscador del compositor. Con 48
+usuarios sin vehículo cargado eso no se hacía: se mandaba de a uno, o no se
+mandaba.
+
+### Lo que viaja NO es SQL, y esa es toda la defensa
+
+Una condición es `{field, op, value}` con `field` y `op` de **enums cerrados** y
+`value` un entero validado por zod. La expresión SQL vive en `AUDIENCE_SQL`
+(`audience.repo.ts`), un `Record` que los tipos obligan a cubrir — mismo patrón
+que `SORT_COLUMNS` en `users.repo.ts`. El único dato del llamador que llega a la
+consulta es `value`, y va por parámetro.
+
+Acá pesa más que en un `ORDER BY`: un server function es un endpoint HTTP
+público, y el resultado de esta consulta decide **a quiénes les suena el
+teléfono**. Un campo de texto libre que llegue al `where` no es una mejora de
+producto, es una inyección.
+
+Corolario: **una condición que no está en `~/lib/audience` no se puede pedir.**
+Agregarla son dos líneas (el catálogo y la expresión), nunca un input libre.
+
+### Se combinan con Y, nunca con O
+
+Un armador con `OR` necesita paréntesis, y un paréntesis mal puesto le manda un
+push a gente que no corresponde sin que nada lo delate. Para una unión, son dos
+envíos. No es una limitación a "mejorar después": es la decisión.
+
+### `null` no matchea, y es lo que nadie espera
+
+«Último escaneo · fue hace más de · 30 días» NO incluye a quien nunca escaneó: en
+SQL eso da `null` y el `where` lo descarta. Para esa gente está el operador
+«nunca pasó», que es otra condición y se elige a propósito. El corte de cada
+campo está en su `hint`, que la UI muestra: el corte no se adivina.
+
+### Los cortes no se inventan: se repiten
+
+`scansOk` es el `completed` + `total_readings > 0` de `scanners.repo.ts`.
+`chats` exige al menos un mensaje, como `usageAdoption`. `pendingFines` es el
+`status = 'pending'` de `fines.repo.ts`. `isInternal` es `INTERNAL_PREDICATE`.
+`lastActivity` es `lastSignalSql('u.id')` **sin piso**, para que `null` siga
+significando "se registró y no hizo nada" igual que en `/usuarios`. Si alguno
+diverge, dos pantallas del panel dicen dos verdades sobre el mismo usuario.
+
+### La condición resuelve a destinatarios EXPLÍCITOS antes de enviar
+
+"Usar estos N" trae la lista de usuarios y la vuelca en los mismos chips que el
+buscador a mano; después de eso el envío es el de siempre, un `POST` con
+`userIds`. **La audiencia NO se manda como condición.** Dos motivos, y cualquiera
+alcanza:
+
+- el backend recibe ids, y **un solo id inválido le tira el lote entero**;
+- **quien manda ve a quién le manda antes de apretar Enviar.** Una audiencia que
+  se resuelve del lado del servidor en el momento del envío le manda un push a un
+  grupo que nadie miró.
+
+Por lo mismo, cargar una condición **reemplaza** la lista en vez de sumarse:
+sumar dos condiciones sería un `OR` encubierto, que es justo lo que el armador no
+ofrece.
+
+### El corte de 500 tiene que ser ESTABLE
+
+`matched` (el total real) y `recipients` (los que entran en un envío) son dos
+números distintos y los dos se muestran: mandarle a 500 de 1300 sin decirlo es la
+peor versión de esta pantalla. El orden es `created_at, id` —los más viejos
+primero— y eso es parte del contrato: si el corte no fuera determinista,
+previsualizar dos veces armaría dos grupos distintos y el segundo envío le
+repetiría el push a la mitad.
+
+Los tres conteos salen de `count(*) over ()`, que Postgres calcula ANTES del
+`limit`, en la MISMA consulta que trae las filas. Con una segunda consulta serían
+dos snapshots, y el total de arriba podría no corresponderse con la lista de
+abajo — que es justo el número que se lee antes de apretar Enviar.
+
+### La vista previa es POST
+
+Es la única lectura del módulo que no es GET: el payload es un array de
+condiciones y una query string tiene tope de largo. El método sigue a la FORMA
+del pedido, no a si escribe.
+
+## Envíos (`/notificaciones/envios`, `/notificaciones/envios/:id`) — desde el 2026-09-16
+
+Alcance: `src/lib/campaigns.ts`, `src/server/campaigns.repo.ts`,
+`listNotificationCampaigns` / `getNotificationCampaign` en `src/fn/notifications.ts`,
+`src/routes/_authed/notificaciones.tsx` (layout), `notificaciones.envios.index.tsx`,
+`notificaciones.envios.$broadcastId.tsx`.
+
+### Un envío no es una entidad: es un `group by source_id`
+
+No hay tabla de campañas. Un envío es el conjunto de filas de `notifications` con
+`source_type = 'broadcast'` y el mismo `source_id` — el `broadcastId` que el
+compositor genera como clave de idempotencia. Todo lo que muestran las dos
+pantallas se deriva de esas filas.
+
+Lo que se gana: **un envío aparece aunque el panel se haya caído justo después de
+mandarlo.** La verdad la tiene Postgres, no un registro nuestro.
+
+Lo que se paga, y está dicho en pantalla: **no se puede saber con qué condición se
+eligió la audiencia.** Eso vive en el compositor mientras está abierto. Guardarlo
+sería una tabla en `ops` (el panel es dueño de ese schema) con su migración, y se
+decidió explícitamente NO hacerlo el 2026-09-16. Si algún día se hace, la lista se
+sigue armando desde `notifications` y la metadata entra por `LEFT JOIN`: un envío
+sin fila en `ops` tiene que seguir apareciendo.
+
+### Lo otro que no se puede medir: cuánto tardaron en leerla
+
+`notifications` tiene `status = 'read'` pero **no una columna `read_at`** (ni
+`updated_at`). Se sabe que la abrió, nunca cuándo. No se estima con
+`receipts_checked_at` —que es del proveedor push, no de la persona— ni con nada
+más: es un agujero del schema del backend. Mismo criterio que `CANT_MEASURE_YET`
+en `metricas.md`: una fila que no se puede medir se declara, no se rellena con un
+número plausible.
+
+### `DERIVED_STATE` se EXPORTA, no se recopia
+
+`campaigns.repo.ts` lo importa de `notifications.repo.ts`. Una segunda copia del
+`CASE` haría que el mismo envío se lea distinto en la lista y en el historial, sin
+ningún error que lo delate — mismo motivo por el que `scanners.repo.ts` exporta
+`OK`/`NO_DATA` para `scan-sessions.repo.ts`. Consecuencia mecánica: **`$1` es
+siempre el umbral de `atrasada`** en toda consulta de `campaigns.repo.ts`.
+
+### "Qué pasó después" — las seis acciones, y por qué son las mismas siempre
+
+`CAMPAIGN_OUTCOMES` (`~/lib/campaigns`) es una lista cerrada, con la misma forma
+declarativa que `USER_ACTIVITY_SIGNALS` de `~/lib/activity`. Sin una tabla en
+`ops` no hay dónde guardar "el objetivo de ESTA campaña", así que se miran las
+seis siempre — y sale más honesto de lo que parece: si una campaña que pedía
+cargar la VTV termina con tres personas escaneando el auto y ninguna cargando el
+documento, eso también es un resultado, y un objetivo único lo habría escondido.
+
+Cuatro cosas que el código hace y no hay que romper:
+
+1. **El denominador es "no lo había hecho antes".** Por cada persona se traen las
+   DOS preguntas (¿antes?, ¿después?) y el resumen se arma sobre quienes NO lo
+   habían hecho. "12 de 48 cargaron un auto" no significa nada si 30 de esos 48 ya
+   tenían uno. Sin nadie a quien le faltara, el % es `—`, no `0%`.
+2. **El momento de referencia es por PERSONA** (`coalesce(sent_at, scheduled_at)`
+   fila por fila), no el `min()` del lote. Casi siempre coinciden; si una fila
+   quedó pendiente tres días, medir contra el envío del resto le atribuiría todo
+   lo que esa persona hizo mientras tanto.
+3. **Es correlación, no causa**, y la UI lo dice: no hay grupo de control y las
+   seis acciones pasan solas todo el tiempo. El número igual sirve — sin él no hay
+   ninguno.
+4. **Las columnas se llaman `had_0` / `did_0`, por índice.** Los `key` del catálogo
+   son camelCase (`pushToken`) y Postgres pliega a minúscula todo identificador sin
+   comillas: `had_pushToken` volvería como `had_pushtoken` y el mapeo de vuelta
+   daría `undefined`, que en esta tabla se lee como "no lo hizo" — mismo criterio
+   que `mapCensus` en `users.repo.ts`.
+
+El resumen se agrega en **JS y no en SQL** a propósito: las dos vistas (el total
+de arriba y la fila por persona) tienen que salir del MISMO snapshot, o los
+totales no cuadran con las filas.
+
+`quote_requests` NO está en la lista, aunque "pidió un presupuesto" sería el
+resultado más valioso: esa tabla puede no existir en la base (`leads.md`, el guard
+de disponibilidad), y una consulta que explota con un 500 en una pantalla que hoy
+no necesita ningún guard cuesta más que el dato que agrega.
+
+### El índice de `/notificaciones` NO redirige
+
+`leads.tsx` y `vehiculos.tsx` mandan a su primera pestaña porque nadie linkeaba a
+la raíz. Acá sí: `usuarios.$userId.tsx` y `/operacion` apuntan a `/notificaciones`
+con search params, y un redirect los haría rebotar. El índice ES el historial; la
+pestaña «Historial» lleva `activeOptions={{ exact: true }}` porque
+`/notificaciones/envios` empieza con `/notificaciones`.
+
+### `campaignSort` / `campaignDir`, y el `searchKeys` de `SortHeader`
+
+Misma regla de siempre: `sort`/`dir` ya los usa `/notificaciones` con un enum
+disjunto. Para no copiar un tercer `SortHeader` local, el componente compartido
+tomó una prop opcional `searchKeys`. La alternativa era duplicar el control, que
+es justo lo que ese archivo existe para no tener.
 
 ## `notification_rules` NO tiene `user_id`
 
