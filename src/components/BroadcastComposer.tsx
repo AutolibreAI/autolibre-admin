@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
 import { BellPlus, Plus, Send, X } from 'lucide-react'
 import {
@@ -10,12 +11,14 @@ import {
   type BroadcastResult,
   type NotificationRecipient,
 } from '~/lib/notifications'
+import { describeAudience, type AudienceCondition, type AudiencePreview } from '~/lib/audience'
 import {
   getBroadcastResult,
   readableBroadcastError,
   searchNotificationRecipients,
   sendBroadcastNotification,
 } from '~/fn/notifications'
+import { AudienceBuilder } from '~/components/AudienceBuilder'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -28,6 +31,16 @@ import {
 } from '~/components/ui/sheet'
 import { formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
+
+/**
+ * Cuántos chips de destinatario se muestran antes de plegar la lista.
+ *
+ * Un envío por condición puede traer 500: pintarlos todos hace que el título y
+ * el mensaje —que es lo que hay que revisar antes de mandar— queden abajo de
+ * una pared de chips. Doce entran en dos renglones y alcanzan para reconocer
+ * que la lista es la que se pidió.
+ */
+const CHIP_PREVIEW_COUNT = 12
 
 /**
  * Mandar una notificación push a usuarios elegidos a mano.
@@ -67,6 +80,21 @@ export function BroadcastComposer() {
   const [broadcastId, setBroadcastId] = useState<string | null>(null)
 
   const [recipients, setRecipients] = useState<Array<NotificationRecipient>>([])
+  /**
+   * Cómo se eligen los destinatarios. Los dos caminos terminan en la MISMA lista
+   * de `recipients`: la condición resuelve a ids antes de enviar, así que el
+   * envío es siempre el mismo `POST` con una lista explícita. → `AudienceBuilder`
+   */
+  const [mode, setMode] = useState<'manual' | 'conditions'>('manual')
+  /**
+   * La condición con la que se cargó la lista, en castellano. Es SÓLO para que
+   * el operador vea qué cargó — no viaja al backend ni se guarda en ningún lado.
+   * Un envío ya hecho no recuerda su audiencia: eso necesitaría una tabla en
+   * `ops`, que es una decisión aparte. → `~/lib/campaigns`
+   */
+  const [audienceNote, setAudienceNote] = useState<string | null>(null)
+  /** Con 300 chips en pantalla no se lee nada; se muestran los primeros. */
+  const [showAllRecipients, setShowAllRecipients] = useState(false)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [scheduleLocal, setScheduleLocal] = useState('')
@@ -125,6 +153,33 @@ export function BroadcastComposer() {
     setRecipients((prev) => prev.filter((r) => r.id !== id))
   }
 
+  function clearRecipients() {
+    setRecipients([])
+    setAudienceNote(null)
+    setShowAllRecipients(false)
+  }
+
+  /**
+   * Carga el resultado de una condición como destinatarios.
+   *
+   * **Reemplaza la lista, no la suma**, y es a propósito: sumar dos condiciones
+   * sería un `OR` encubierto, que es justo lo que el armador no ofrece. Si hacen
+   * falta dos grupos, son dos envíos.
+   *
+   * El `slice` es una red: el repo ya corta en 500, pero el tope que manda es el
+   * del backend y tiene que aplicarse acá también — si los dos números alguna vez
+   * divergen, lo que no puede pasar es mandar un lote que el backend rechaza
+   * entero.
+   */
+  function useAudience(
+    resolved: AudiencePreview['recipients'],
+    conditions: Array<AudienceCondition>,
+  ) {
+    setRecipients(resolved.slice(0, BROADCAST_MAX_RECIPIENTS))
+    setAudienceNote(describeAudience(conditions))
+    setShowAllRecipients(false)
+  }
+
   async function submit() {
     if (!canSend || !broadcastId || inFlight.current) return
 
@@ -175,7 +230,7 @@ export function BroadcastComposer() {
       setResult({ broadcastId: id, selected, scheduledAt: scheduledAt ?? null, summary, readError })
 
       // Campaña nueva: borrador limpio e id nuevo.
-      setRecipients([])
+      clearRecipients()
       setTitle('')
       setBody('')
       setScheduleLocal('')
@@ -236,22 +291,65 @@ export function BroadcastComposer() {
                 </span>
               </div>
 
-              <RecipientSearch
-                selectedIds={recipients.map((r) => r.id)}
-                full={full}
-                disabled={busy}
-                onAdd={addRecipient}
-              />
+              <div className="flex gap-1.5">
+                <ModeTab active={mode === 'manual'} disabled={busy} onClick={() => setMode('manual')}>
+                  Buscar a mano
+                </ModeTab>
+                <ModeTab
+                  active={mode === 'conditions'}
+                  disabled={busy}
+                  onClick={() => setMode('conditions')}
+                >
+                  Por condición
+                </ModeTab>
+              </div>
+
+              {mode === 'manual' ? (
+                <RecipientSearch
+                  selectedIds={recipients.map((r) => r.id)}
+                  full={full}
+                  disabled={busy}
+                  onAdd={addRecipient}
+                />
+              ) : (
+                <AudienceBuilder disabled={busy} onUse={useAudience} />
+              )}
 
               {recipients.length > 0 ? (
                 <div className="space-y-2">
+                  {audienceNote ? (
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Cargados por condición: <span className="text-foreground">{audienceNote}</span>.
+                      Se pueden sacar de a uno con la ✕ del chip.
+                    </p>
+                  ) : null}
+
                   <ul className="flex flex-wrap gap-1.5">
-                    {recipients.map((r) => (
-                      <li key={r.id}>
-                        <RecipientChip recipient={r} disabled={busy} onRemove={() => removeRecipient(r.id)} />
-                      </li>
-                    ))}
+                    {(showAllRecipients ? recipients : recipients.slice(0, CHIP_PREVIEW_COUNT)).map(
+                      (r) => (
+                        <li key={r.id}>
+                          <RecipientChip
+                            recipient={r}
+                            disabled={busy}
+                            onRemove={() => removeRecipient(r.id)}
+                          />
+                        </li>
+                      ),
+                    )}
                   </ul>
+
+                  {recipients.length > CHIP_PREVIEW_COUNT ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllRecipients((v) => !v)}
+                      className="rounded text-xs text-muted-foreground underline decoration-dotted outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    >
+                      {showAllRecipients
+                        ? 'ver menos'
+                        : `ver los ${formatInt(recipients.length)}`}
+                    </button>
+                  ) : null}
+
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     {withoutDevice > 0 ? (
                       <p className="text-xs leading-relaxed text-status-yellow">
@@ -264,7 +362,7 @@ export function BroadcastComposer() {
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => setRecipients([])}
+                      onClick={clearRecipients}
                       className="rounded text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
                     >
                       quitar todos
@@ -393,6 +491,47 @@ export function BroadcastComposer() {
   )
 }
 
+/**
+ * El selector de cómo se eligen los destinatarios.
+ *
+ * Es un `<button>` local y no el `<Chip>` de `~/components/Filters`: ese chip
+ * modela un FILTRO de listado (con `aria-pressed`, tono `warn` para los filtros
+ * problemáticos y el verde de marca para "seleccionado"). Acá son dos modos
+ * excluyentes de un formulario, que es otra cosa — y estirarle una tercera
+ * semántica al chip compartido es cómo empiezan los componentes que no se pueden
+ * cambiar sin romper tres pantallas.
+ */
+function ModeTab({
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  active: boolean
+  disabled: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      className={cn(
+        'rounded-md border px-2.5 py-1 text-xs transition-colors',
+        'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        'disabled:opacity-50',
+        active
+          ? 'border-brand bg-brand-soft text-brand'
+          : 'border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 interface SentSummary {
   broadcastId: string
   selected: number
@@ -466,13 +605,16 @@ function SentResult({
           Quien no tenga dispositivo queda en «Sin token».
         </p>
 
+        {/* Al detalle del envío, no al listado filtrado: ahí está el estado de
+            cada fila Y lo que hizo cada persona después. El listado filtrado
+            sigue a un click, desde esa misma pantalla. */}
         <Link
-          to="/notificaciones"
-          search={{ notificationBroadcastId: result.broadcastId, sort: 'scheduledAt', dir: 'desc' }}
+          to="/notificaciones/envios/$broadcastId"
+          params={{ broadcastId: result.broadcastId }}
           onClick={onNavigate}
           className="inline-block rounded font-medium text-foreground underline decoration-dotted outline-none hover:text-brand focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
-          Ver las notificaciones de este envío
+          Ver el resultado de este envío
         </Link>
       </div>
     </div>

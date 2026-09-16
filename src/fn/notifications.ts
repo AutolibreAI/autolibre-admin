@@ -5,12 +5,16 @@ import {
   notificationSearchSchema,
   recipientSearchSchema,
 } from '~/lib/notifications'
+import { audienceSchema } from '~/lib/audience'
+import { campaignSearchSchema } from '~/lib/campaigns'
 import {
   broadcastResult,
   listNotificationFacets,
   listNotifications,
   searchRecipients,
 } from '~/server/notifications.repo'
+import { previewAudience } from '~/server/audience.repo'
+import { findCampaign, listCampaigns } from '~/server/campaigns.repo'
 import { broadcastNotification } from '~/server/backend'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -20,6 +24,8 @@ import type {
   NotificationListItem,
   NotificationRecipient,
 } from '~/lib/notifications'
+import type { AudiencePreview } from '~/lib/audience'
+import type { CampaignDetail, CampaignListItem } from '~/lib/campaigns'
 
 /**
  * El borde RPC de Notificaciones. Mismo guard que `users.ts` y `chats.ts`, y
@@ -83,6 +89,55 @@ export const getBroadcastResult = createServerFn({ method: 'GET' })
   .validator(z.object({ broadcastId: z.uuid() }))
   .handler(async ({ data }): Promise<BroadcastResult> =>
     broadcastResult(data.broadcastId, { signal: requestSignal() }),
+  )
+
+// ── Audiencias ───────────────────────────────────────────────────────────────
+
+/**
+ * Cuántos usuarios cumplen las condiciones, y quiénes son los primeros 500.
+ *
+ * **POST y no GET**, a diferencia del resto de las lecturas de este archivo: el
+ * payload es un array de condiciones, y serializarlo en una query string lo
+ * dejaría a merced del tope de largo de la URL. La regla de la casa es que el
+ * método siga a la FORMA del pedido, no a si escribe: `searchNotificationRecipients`
+ * es GET porque manda un string.
+ *
+ * `adminMiddleware` pesa lo mismo que en `/usuarios`: la respuesta trae email y
+ * nombre de personas reales, y la pregunta misma ("¿quiénes no cargaron el
+ * auto?") ya es dato del padrón.
+ */
+export const previewNotificationAudience = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(audienceSchema)
+  .handler(async ({ data }): Promise<AudiencePreview> =>
+    previewAudience(data, { signal: requestSignal() }),
+  )
+
+// ── Envíos ───────────────────────────────────────────────────────────────────
+
+/**
+ * Los envíos ad-hoc agrupados por `source_id`. No hay tabla de campañas: es un
+ * `group by` sobre `notifications`. → `~/lib/campaigns`
+ */
+export const listNotificationCampaigns = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(campaignSearchSchema)
+  .handler(async ({ data }): Promise<Array<CampaignListItem>> =>
+    listCampaigns(data, { signal: requestSignal() }),
+  )
+
+/**
+ * Un envío: quién lo recibió, en qué estado quedó, y qué hizo cada uno después.
+ *
+ * Devuelve `null` —y no una excepción— cuando el uuid no corresponde a ningún
+ * envío: un link viejo a una campaña que nunca existió es un 404 de pantalla,
+ * no un error de servidor.
+ */
+export const getNotificationCampaign = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(z.object({ broadcastId: z.uuid() }))
+  .handler(async ({ data }): Promise<CampaignDetail | null> =>
+    findCampaign(data.broadcastId, { signal: requestSignal() }),
   )
 
 /**

@@ -64,8 +64,14 @@ const toIsoRequired = (value: unknown): string => toIso(value) ?? ''
  * puerta por la que después entra el primero que sí venga de la URL (misma
  * razón que `ops.repo.ts`). El `now()` es estable dentro de la sentencia, así
  * que el SELECT y el WHERE ven el mismo corte.
+ *
+ * Se EXPORTA desde el 2026-09-16: `campaigns.repo.ts` lo necesita para que un
+ * envío y el listado digan el mismo estado de las mismas filas. Mismo criterio
+ * (y mismo motivo) que las cadenas `OK`/`NO_DATA` que `scanners.repo.ts`
+ * exporta para `scan-sessions.repo.ts` — la alternativa era una segunda copia
+ * del `CASE`, que es un bug esperando a divergir.
  */
-const DERIVED_STATE = `
+export const DERIVED_STATE = `
   case
     when n.status = 'read'                                          then 'leida'
     when n.delivery_status = 'sent'                                 then 'entregada'

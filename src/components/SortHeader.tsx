@@ -21,7 +21,17 @@ import { cn } from '~/lib/utils'
  * `firstClick` es la dirección del PRIMER click sobre una columna que todavía
  * no es la activa: `'desc'` para montos y fechas (lo que se quiere ver
  * primero), `'asc'` para texto. Clickear la columna ya activa siempre invierte.
+ *
+ * `searchKeys` existe para las rutas que NO pueden llamar `sort`/`dir` a sus
+ * search params. `/notificaciones/envios` usa `campaignSort`/`campaignDir`
+ * porque `/notificaciones` ya tiene un `sort` con otro enum, y dos enums
+ * disjuntos bajo la misma clave rompen el typecheck de la ruta ajena
+ * (→ `.claude/rules/notifications.md`). La alternativa era un tercer
+ * `SortHeader` local copiado, que es exactamente lo que este archivo existe
+ * para no tener.
  */
+const DEFAULT_SEARCH_KEYS = { sort: 'sort', dir: 'dir' }
+
 export function SortHeader({
   label,
   sortKey,
@@ -30,6 +40,7 @@ export function SortHeader({
   to,
   align,
   firstClick = 'asc',
+  searchKeys = DEFAULT_SEARCH_KEYS,
 }: {
   label: string
   sortKey: string
@@ -39,6 +50,8 @@ export function SortHeader({
   to: string
   align?: 'right'
   firstClick?: 'asc' | 'desc'
+  /** Cómo se llaman los search params de orden en ESTA ruta. */
+  searchKeys?: { sort: string; dir: string }
 }) {
   const nextDir: 'asc' | 'desc' = active ? (dir === 'asc' ? 'desc' : 'asc') : firstClick
 
@@ -51,8 +64,8 @@ export function SortHeader({
    */
   const updateSearch = (prev: Record<string, unknown>) => ({
     ...prev,
-    sort: sortKey,
-    dir: nextDir,
+    [searchKeys.sort]: sortKey,
+    [searchKeys.dir]: nextDir,
   })
 
   return (
