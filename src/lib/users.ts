@@ -360,6 +360,19 @@ export interface UserVehicleSummary {
   taxDebtQueryAt: string | null
 
   /**
+   * Monto adeudado de patente. Mismo criterio null-vs-0 que `fineDebtAmount`,
+   * pero el gate es `taxDebtQueryStatus === 'completed'` en vez de la
+   * existencia de una fila: `vehicle_tax_debts` sólo tiene fila cuando SÍ hay
+   * deuda (verificado el 2026-09-17 — ver `vehicleDebtAdoption` en
+   * `ops.repo.ts`), así que "completada y sin fila" también es "sin deuda".
+   *  - `null` ⇒ la consulta no terminó (nunca se hizo, o quedó en
+   *    `queued`/`processing`/`failed`): no hay forma de confirmar o descartar.
+   *  - `0` ⇒ consulta completada, sin deuda.
+   *  - `> 0` ⇒ consulta completada, con deuda.
+   */
+  taxDebtAmount: number | null
+
+  /**
    * Multas — la última CONSULTA (`vehicle_fine_syncs.last_synced_at`, 1:1 por
    * vehículo), y el monto adeudado que esa consulta dejó en `fines`.
    *

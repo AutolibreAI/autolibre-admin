@@ -154,16 +154,18 @@ distinto de que le haya fallado.
 
 ## Las columnas de multas del desplegable, y el `null` vs `$0`
 
-En el toggle de vehículos de `/usuarios` (`listUserVehicleSummaries`), dos columnas contestan sobre
-la última consulta de multas:
+En el toggle de vehículos de `/usuarios` (`listUserVehicleSummaries`), una columna («Multas») contesta
+sobre la última consulta de multas — fecha y monto juntos, unidos en una sola celda el 2026-09-17
+(antes eran dos columnas separadas: «Multas consultadas» y «Monto adeudado»). `fineQueryAt` y
+`fineDebtAmount` siguen siendo dos campos separados del tipo; sólo se renderizan uno debajo del otro:
 
-- **«Multas consultadas»** — la fecha, de `vehicle_fine_syncs.last_synced_at`. Es 1:1 por vehículo
-  (PK `vehicle_id`), así que entra por `LEFT JOIN` y no por subconsulta escalar — misma excepción que
-  `lds` y `dta`, y por la misma razón: no puede fan-outear.
-- **«Monto adeudado»** — `sum(fines.amount)` con `status = 'pending'`. `paid` está saldada,
-  `appealed` en disputa: ninguna es deuda a cobrar. Al 2026-09-06 las 240 multas de producción están
-  todas en `pending`, así que el filtro hoy no descuenta nada — pero el día que alguien marque una
-  pagada, la columna tiene que bajar.
+- **Fecha** — de `vehicle_fine_syncs.last_synced_at`. Es 1:1 por vehículo (PK `vehicle_id`), así que
+  entra por `LEFT JOIN` y no por subconsulta escalar — misma excepción que `lds` y `dta`, y por la
+  misma razón: no puede fan-outear.
+- **Monto** — `sum(fines.amount)` con `status = 'pending'`. `paid` está saldada, `appealed` en
+  disputa: ninguna es deuda a cobrar. Al 2026-09-06 las 240 multas de producción están todas en
+  `pending`, así que el filtro hoy no descuenta nada — pero el día que alguien marque una pagada, la
+  columna tiene que bajar.
 
 **El gate por `vfs.vehicle_id IS NULL` no es opcional.** Distingue tres estados que NO son lo mismo,
 igual que `activeDtcCount`:
@@ -185,6 +187,32 @@ consulta.
 
 `formatArs` (`~/lib/format`) es el formateador de pesos, transversal — no confundir con `formatUsd`
 de `~/lib/ai-usage`, que es dato del contexto de Costos de IA (al proveedor se le paga en dólares).
+
+## La columna «Deuda de patente», y por qué su gate NO es el de multas
+
+Agregado el 2026-09-17: la celda de «Deuda de patente» (`TaxDebtCell`) ya mostraba el estado y la
+fecha de la última consulta (`vehicle_data_queries`, módulo `tax_debt`); ahora suma el monto
+(`taxDebtAmount`), debajo.
+
+El mismo criterio null-vs-0 que multas, pero con un gate DISTINTO — y a propósito, no por
+inconsistencia:
+
+| Columna | Universo consultado (`queried`) | Por qué |
+|---|---|---|
+| Multas | `vfs.vehicle_id IS NOT NULL` (fila en `vehicle_fine_syncs`) | Esa tabla es 1:1 por vehículo y se escribe en CADA sync, haya o no deuda |
+| Patente | `taxDebtQueryStatus === 'completed'` | `vehicle_tax_debts` sólo tiene fila cuando SÍ hay deuda — no hay una tabla de sync equivalente para patente |
+
+Si el gate de patente copiara el de multas (`EXISTS fila en vehicle_tax_debts`), "nunca se consultó" y
+"se consultó, sin deuda" saldrían las dos como `null` — la distinción que esta columna existe para
+mostrar desaparecería. `queued`/`processing`/`failed` tampoco cuentan como respuesta: sólo una
+consulta terminada confirma o descarta la deuda. Verificado el 2026-09-17 contra producción (misma
+verificación que sostiene `vehicleDebtAdoption` en `ops.repo.ts`, `.claude/rules/metricas.md`): toda
+fila de `vehicle_tax_debts` con `cleared_at IS NULL` pertenece a un vehículo con una consulta
+`completed` — cero excepciones.
+
+El SQL repite la subconsulta de `tax_debt_query_status` una tercera vez (ya se repetía dos veces, para
+`status` y para `at`) en vez de referenciar el alias del SELECT: Postgres no deja usar el alias de una
+columna del mismo nivel de SELECT en la expresión de otra columna hermana.
 
 ### ⚠ El predicado está en DOS lugares y se tocan juntos
 

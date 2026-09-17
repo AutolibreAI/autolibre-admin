@@ -30,7 +30,7 @@ import {
   TableRow,
 } from '~/components/ui/table'
 import { CountOrNeverCell, ExpiryCell, FineDebtCell } from '~/components/VehicleCells'
-import { formatDate, formatInt } from '~/lib/format'
+import { formatArs, formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
 export const Route = createFileRoute('/_authed/usuarios/')({
@@ -613,15 +613,14 @@ function VehicleSummaryPanel({ state }: { state: VehicleSummaryState | undefined
 
   return (
     <div className="overflow-x-auto p-3">
-      <table className="w-full min-w-[1400px] text-xs">
+      <table className="w-full min-w-[1300px] text-xs">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
             <th className="px-2 py-1.5 text-left font-medium">Vehículo</th>
             <th className="px-2 py-1.5 text-left font-medium">VTV</th>
             <th className="px-2 py-1.5 text-right font-medium">Chats IA diagnóstico</th>
             <th className="px-2 py-1.5 text-left font-medium">Deuda de patente</th>
-            <th className="px-2 py-1.5 text-left font-medium">Multas consultadas</th>
-            <th className="px-2 py-1.5 text-right font-medium">Monto adeudado</th>
+            <th className="px-2 py-1.5 text-left font-medium">Multas</th>
             <th className="px-2 py-1.5 text-left font-medium">Seguro</th>
             <th className="px-2 py-1.5 text-right font-medium">Escaneos</th>
             <th className="px-2 py-1.5 text-right font-medium">DTCs activos</th>
@@ -663,18 +662,19 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
       </td>
 
       <td className="px-2 py-1.5">
-        <LastQueryCell status={v.taxDebtQueryStatus} at={v.taxDebtQueryAt} />
+        <TaxDebtCell
+          status={v.taxDebtQueryStatus}
+          at={v.taxDebtQueryAt}
+          amount={v.taxDebtAmount}
+        />
       </td>
 
       <td className="px-2 py-1.5">
         {v.fineQueryAt ? (
-          formatDate(v.fineQueryAt)
+          <div className="text-muted-foreground">{formatDate(v.fineQueryAt)}</div>
         ) : (
           <span className="text-muted-foreground/50">nunca</span>
         )}
-      </td>
-
-      <td className="px-2 py-1.5 text-right tabular-nums">
         <FineDebtCell amount={v.fineDebtAmount} />
       </td>
 
@@ -722,16 +722,40 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
   )
 }
 
-function LastQueryCell({ status, at }: { status: string | null; at: string | null }) {
+/**
+ * Estado + fecha de la consulta de deuda de patente, más el monto. El monto
+ * sólo se pinta cuando `amount` no es `null` — con la consulta todavía en
+ * `queued`/`processing`/`failed`, o si nunca se consultó, no hay nada que
+ * mostrar (ver el gate en `users.repo.ts`).
+ */
+function TaxDebtCell({
+  status,
+  at,
+  amount,
+}: {
+  status: string | null
+  at: string | null
+  amount: number | null
+}) {
   if (!status) return <span className="text-muted-foreground/50">nunca</span>
 
   const label = VEHICLE_DATA_QUERY_STATUS_LABELS[status] ?? status
 
   return (
-    <span className={cn(status === 'failed' && 'text-status-yellow')}>
-      {label}
-      {at ? <span className="text-muted-foreground"> · {formatDate(at)}</span> : null}
-    </span>
+    <div>
+      <span className={cn(status === 'failed' && 'text-status-yellow')}>
+        {label}
+        {at ? <span className="text-muted-foreground"> · {formatDate(at)}</span> : null}
+      </span>
+      {amount !== null ? (
+        <div
+          className={cn('tabular-nums', amount > 0 ? 'font-medium text-status-yellow' : 'text-muted-foreground')}
+          title={amount > 0 ? 'Suma de deuda de patente sin saldar' : 'Consultada — sin deuda de patente'}
+        >
+          {formatArs(amount)}
+        </div>
+      ) : null}
+    </div>
   )
 }
 

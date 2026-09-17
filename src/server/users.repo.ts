@@ -724,6 +724,7 @@ interface VehicleSummaryRow {
   diagnostic_chat_count: number | string
   tax_debt_query_status: string | null
   tax_debt_query_at: Date | string | null
+  tax_debt_amount: number | string | null
   fine_query_at: Date | string | null
   fine_debt_amount: number | string | null
   insurance_expires_at: Date | string | null
@@ -781,6 +782,22 @@ export async function listUserVehicleSummaries(
        (select coalesce(q.completed_at, q.created_at) from vehicle_data_queries q
           where q.vehicle_id = v.id and 'tax_debt' = any(q.requested_modules)
           order by q.created_at desc limit 1) as tax_debt_query_at,
+       -- Monto adeudado. Sólo una consulta COMPLETADA confirma o descarta la
+       -- deuda (queued/processing/failed no dicen nada todavía), así que
+       -- el gate es por la MISMA consulta de arriba, no por la existencia de
+       -- fila en vehicle_tax_debts. Esa tabla sólo tiene fila cuando SÍ hay
+       -- deuda (verificado el 2026-09-17 contra producción — ver
+       -- vehicleDebtAdoption en ops.repo.ts), así que "completada y sin
+       -- fila" es "consultada, sin deuda" (0) — mismo criterio null-vs-0 que
+       -- fine_debt_amount, abajo.
+       case when (select q.status::text from vehicle_data_queries q
+                    where q.vehicle_id = v.id and 'tax_debt' = any(q.requested_modules)
+                    order by q.created_at desc limit 1) = 'completed'
+            then coalesce((select round(sum(coalesce(td.updated_amount, td.amount)))::bigint
+                             from vehicle_tax_debts td
+                            where td.vehicle_id = v.id and td.cleared_at is null), 0)
+            else null
+       end as tax_debt_amount,
 
        -- Multas: la ULTIMA consulta (vehicle_fine_syncs, 1:1 por PK) y el monto
        -- adeudado que dejo en la tabla fines. El gate por vfs.vehicle_id
@@ -854,6 +871,7 @@ export async function listUserVehicleSummaries(
       diagnosticChatCount: toInt(r.diagnostic_chat_count),
       taxDebtQueryStatus: r.tax_debt_query_status,
       taxDebtQueryAt: toIso(r.tax_debt_query_at),
+      taxDebtAmount: toIntOrNull(r.tax_debt_amount),
       fineQueryAt: toIso(r.fine_query_at),
       fineDebtAmount: toIntOrNull(r.fine_debt_amount),
       insuranceExpiresAt: toIso(r.insurance_expires_at),
