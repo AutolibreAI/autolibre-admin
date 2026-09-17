@@ -24,6 +24,7 @@ import {
   vehicleDebtAdoption,
   vehicleDistribution,
 } from '~/server/ops.repo'
+import { quoteRequestPulse } from '~/server/quote-requests.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type {
@@ -60,25 +61,29 @@ import type {
  */
 
 /**
- * Las tres tarjetas del pulso en UNA llamada.
+ * Las cards del pulso en UNA llamada.
  *
- * Van juntas porque la pantalla no puede renderizar ninguna sin las otras dos —
- * son una sola fila visual. Separarlas en tres server functions serían tres
- * round trips para pintar una fila, y tres momentos distintos de `now()`.
+ * Van juntas porque la pantalla no puede renderizar ninguna sin las otras —
+ * son una sola fila visual. Separarlas en server functions sueltas serían
+ * varios round trips para pintar una fila, y varios momentos distintos de
+ * `now()`.
  *
- * Las tres consultas sí salen en paralelo contra el pool: `Promise.all` sobre
- * un pool de 5 conexiones, no en serie.
+ * Las cuatro consultas sí salen en paralelo contra el pool: `Promise.all`
+ * sobre un pool de 5 conexiones, no en serie. `quotes` es la única que puede
+ * no estar disponible (`quote_requests` no desplegada en esta base) —
+ * `quoteRequestPulse` lo resuelve con su propio guard y nunca tira.
  */
 export const getOpsPulse = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
   .handler(async (): Promise<OpsPulse> => {
     const signal = requestSignal()
-    const [adoption, marketplace, leads] = await Promise.all([
+    const [adoption, marketplace, leads, quotes] = await Promise.all([
       adoptionPulse({ signal }),
       marketplaceHealth({ signal }),
       leadFunnel({ signal }),
+      quoteRequestPulse({ signal }),
     ])
-    return { adoption, marketplace, leads }
+    return { adoption, marketplace, leads, quotes }
   })
 
 /**

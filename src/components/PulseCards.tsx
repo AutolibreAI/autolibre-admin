@@ -1,18 +1,24 @@
 import { Link } from '@tanstack/react-router'
-import { Car, Handshake, Store, Users, type LucideIcon } from 'lucide-react'
+import { Car, ClipboardList, Store, Users, type LucideIcon } from 'lucide-react'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { OpsPulse } from '~/lib/ops'
 
 /**
  * Las cuatro tarjetas del pulso del negocio: usuarios reales, vehículos activos,
- * partners publicados, leads ganados.
+ * partners publicados, pedidos totales.
  *
  * Vivían inline en `dashboard.tsx`. Cuando `/metricas` necesitó las mismas
  * cuatro, la tentación fue copiarlas — y una tarjeta copiada no se ve mal el día
  * uno, se ve mal el día que una de las dos cambia y nadie nota que la otra quedó
  * atrás. Mismo criterio que `Filters.tsx` y `VehicleCells.tsx`: una sola
  * definición, acá.
+ *
+ * La cuarta card era "Leads ganados" (el embudo de talleres, `pulse.leads`) y
+ * pasó a ser "Pedidos totales" (`pulse.quotes`) el 2026-09-17: `leads` tiene 0
+ * filas en producción, y `quote_requests` es la línea de captación que de
+ * verdad se usa. `pulse.leads` no se sacó del contrato — `MarketplaceBreakdown`
+ * de `/dashboard` lo sigue usando aparte de esta fila.
  */
 
 interface PulseTile {
@@ -29,7 +35,7 @@ interface PulseTile {
 }
 
 export function PulseRow({ pulse }: { pulse: OpsPulse }) {
-  const { adoption, marketplace, leads } = pulse
+  const { adoption, marketplace, quotes } = pulse
 
   /**
    * `to` sigue siendo opcional en `PulseTile` —una tarjeta sin pantalla detrás
@@ -79,18 +85,22 @@ export function PulseRow({ pulse }: { pulse: OpsPulse }) {
       alert: false,
     },
     {
-      key: 'leads',
-      icon: Handshake,
-      // Directo a la pestaña con datos: `/leads` es sólo el layout y redirige acá.
-      to: '/leads/talleres',
-      value: formatInt(leads.won),
-      label: 'Leads ganados',
-      hint:
-        leads.total === 0
-          ? 'Todavía no hay leads'
-          : `${formatInt(leads.total)} en total · ${formatInt(leads.fresh)} sin contactar`,
-      // Un lead sin contactar más de 48 h es plata que se está yendo.
-      alert: leads.staleUncontacted > 0,
+      key: 'quotes',
+      icon: ClipboardList,
+      // Pedidos abre directo en la pestaña; `/leads` es sólo el layout.
+      to: '/leads/pedidos',
+      value: quotes.available ? formatInt(quotes.total - quotes.duplicates) : '—',
+      label: 'Pedidos totales',
+      // El crudo (`quotes.total`) cuenta duplicados: la persona que reenvía el
+      // mismo pedido, o un doble submit. El número grande ya los resta — el
+      // hint dice cuántos se sacaron, para que "totales" no se lea como
+      // "todas las filas de la tabla".
+      hint: !quotes.available
+        ? 'quote_requests no desplegada en esta base'
+        : quotes.duplicates === 0
+          ? 'Sin duplicados'
+          : `${formatInt(quotes.duplicates)} duplicados excluidos de ${formatInt(quotes.total)}`,
+      alert: false,
     },
   ]
 

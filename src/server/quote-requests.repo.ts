@@ -11,6 +11,7 @@ import {
   type QuoteRequestWriteResult,
   type QuoteRequestDetail,
   type QuoteRequestListItem,
+  type QuoteRequestPulse,
   type QuoteRequestSearch,
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
@@ -458,6 +459,36 @@ export async function quoteRequestStatusSummary(
     },
     cancelledByUser: toInt(row?.cancelled_by_user),
     uncontacted: toInt(row?.uncontacted),
+  }
+}
+
+/**
+ * La card "Pedidos totales" del pulso (Inicio y `/metricas`).
+ *
+ * Chequea disponibilidad ANTES de contar — igual que `listQuoteRequestsFn`, y
+ * por el mismo motivo: `quote_requests` puede no existir en esta base, y un
+ * `SELECT` contra una tabla inexistente explota al analizarse, no en runtime
+ * dentro de un `CASE`. Un `to_regclass` en la MISMA sentencia que
+ * `count(*) from quote_requests` no salva nada — Postgres igual necesita
+ * resolver esa tabla para planificar la consulta.
+ */
+export async function quoteRequestPulse(
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestPulse> {
+  const availability = await quoteRequestsAvailability(opts)
+  if (!availability.available) return { available: false, total: 0, duplicates: 0 }
+
+  const row = await sqlOne<{ total: number | string; duplicates: number | string }>(`
+    select
+      count(*)::int as total,
+      count(*) filter (where close_reason_code = 'duplicate')::int as duplicates
+    from quote_requests
+  `)
+
+  return {
+    available: true,
+    total: toInt(row?.total),
+    duplicates: toInt(row?.duplicates),
   }
 }
 

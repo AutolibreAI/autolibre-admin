@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { QuoteRequestPulse } from './quote-requests'
 
 /**
  * Operación — el contrato compartido de las pantallas de salud del sistema.
@@ -601,9 +602,18 @@ export const CANT_MEASURE_YET: ReadonlyArray<CantMeasureItem> = [
 
 // ── Agregado de pantalla ─────────────────────────────────────────────────────
 
-/** Lo que la pantalla de inicio necesita en el primer flush. */
+/**
+ * Lo que la pantalla de inicio necesita en el primer flush.
+ *
+ * `leads` (el embudo de talleres) sigue acá porque `MarketplaceBreakdown` de
+ * `/dashboard` lo usa aparte de la fila de cards — no se sacó, se dejó de
+ * mostrar en `PulseRow`. La card de "Pedidos totales" de `PulseRow` sale de
+ * `quotes`, no de `leads`: son dos líneas de captación distintas
+ * (`.claude/rules/leads.md`).
+ */
 export interface OpsPulse {
   adoption: AdoptionPulse
   marketplace: MarketplaceHealth
   leads: LeadFunnel
+  quotes: QuoteRequestPulse
 }

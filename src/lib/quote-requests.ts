@@ -511,6 +511,29 @@ export interface QuoteRequestStatusSummary {
   uncontacted: number
 }
 
+/**
+ * La card de "Pedidos totales" del pulso (Inicio y `/metricas`), que
+ * reemplazó a "Leads ganados" el 2026-09-17: `leads` (el embudo de talleres)
+ * tiene 0 filas en producción, y `quote_requests` es la línea de captación que
+ * de verdad se usa.
+ *
+ * `total` incluye TODO, duplicados incluidos. `duplicates` es el subconjunto
+ * cerrado con `close_reason_code = 'duplicate'` — el operador lo marca cuando
+ * la misma persona (o el mismo submit) generó más de una fila. Verificado el
+ * 2026-09-17 contra producción: **15 de 17 pedidos son duplicados**, así que
+ * el total crudo miente por un factor de casi 10x. La card muestra
+ * `total - duplicates`, no `total`.
+ *
+ * `available = false` cuando `quote_requests` no está desplegada en esta base
+ * (mismo chequeo que `quoteRequestsAvailability()`) — no es un error, Inicio y
+ * `/metricas` no pueden fallar por una tabla que otra base todavía no migró.
+ */
+export interface QuoteRequestPulse {
+  available: boolean
+  total: number
+  duplicates: number
+}
+
 export interface QuoteRequestDetail extends QuoteRequestListItem {
   updatedAt: string
   vehicleOwnerId: string | null

@@ -13,7 +13,9 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `src/components/QuoteTemplates.tsx`, `src/components/QuoteRequestComposer.tsx`,
 `migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`),
 `src/components/PartnerCandidates.tsx`, `migrations/013_ops_rubro_de_pedido.sql`
-(+ su `.test.sql`), `scripts/geocode-partners.mjs`.
+(+ su `.test.sql`), `scripts/geocode-partners.mjs`. La card de Inicio/Métricas:
+`src/components/PulseCards.tsx`, `OpsPulse` en `src/lib/ops.ts`, `getOpsPulse`
+en `src/fn/ops.ts`.
 
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
 regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
@@ -257,6 +259,31 @@ está mal.
 orden (`quoteStatus=open`, `createdAt asc`); los cerrados —que el script no
 muestra y nadie mira— están a un chip. La ficha reemplaza el `select * … where
 id = '…'` de antes de llamar.
+
+### La card "Pedidos totales" de Inicio y `/metricas` — desde el 2026-09-17
+
+`PulseRow` (`.claude/rules/metricas.md`, compartida entre `/dashboard` y
+`/metricas`) mostraba "Leads ganados" (`pulse.leads.won`, el embudo de
+talleres) como cuarta card. Se reemplazó por "Pedidos totales"
+(`pulse.quotes`, `QuoteRequestPulse` en `~/lib/quote-requests`): `leads` tiene
+0 filas en producción y `quote_requests` es la línea de captación real.
+`pulse.leads` NO se sacó del contrato de `OpsPulse` — `MarketplaceBreakdown` de
+`/dashboard` lo sigue usando aparte de esta fila, para el desglose del
+marketplace.
+
+**El número mostrado es `total − duplicates`, no `total`.** Verificado el
+2026-09-17 contra producción: de 17 pedidos, **15 están cerrados con
+`close_reason_code = 'duplicate'`** — el operador los usa para marcar cuando
+la misma persona (o un doble submit) generó más de una fila. Mostrar el crudo
+diría "17 pedidos" cuando en la práctica hay 2. `quoteRequestPulse()` en
+`quote-requests.repo.ts` trae los dos números en una sentencia; la resta la
+hace la UI, no el SQL, para que el hint pueda decir cuántos se excluyeron.
+
+`quoteRequestPulse()` llama a `quoteRequestsAvailability()` ANTES de contar —
+mismo motivo que `listQuoteRequestsFn`: un `SELECT` contra una tabla
+inexistente explota al planificarse, un `to_regclass` en la misma sentencia no
+lo evita. Con `available: false` la card muestra "—" y el hint lo dice, en vez
+de romper Inicio por una tabla que otra base todavía no migró.
 
 ### `QuoteRequest` ≠ `Lead`
 
