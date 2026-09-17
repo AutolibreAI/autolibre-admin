@@ -275,6 +275,47 @@ campo está en su `hint`, que la UI muestra: el corte no se adivina.
 significando "se registró y no hizo nada" igual que en `/usuarios`. Si alguno
 diverge, dos pantallas del panel dicen dos verdades sobre el mismo usuario.
 
+### El grupo «Vehículos» — desde el 2026-09-17, grano VEHÍCULO y no usuario
+
+`.claude/plans/cambios-2026-09-17.md`, punto A, Fase 1. Hasta acá todo el
+catálogo era de grano usuario, y eso tiene un hueco real: un usuario con dos
+autos puede tener uno asegurado y el otro no, y ninguna condición de grano
+usuario los separa. Relevado el 2026-09-17 contra producción — de 95 usuarios
+con **algún** auto sin seguro, sólo 90 tienen **ningún** seguro cargado; los 5
+de diferencia son exactamente la gente que el catálogo viejo no podía
+alcanzar.
+
+Los seis campos nuevos (`vehicleWithoutInsurance`, `vehicleWithoutVtv`,
+`vehicleWithoutRegistration`, `vehicleWithPendingFines`, `vehicleNeverScanned`,
+`vehicleWithoutOdometer`) son `kind: 'flag'` — sí/no — y comparten la forma
+`vehicleFlag()` de `audience.repo.ts`: `EXISTS (un auto no archivado de este
+usuario que cumple X)`.
+
+**Sólo "alguno", nunca "todos".** Con cero autos no archivados, `NOT EXISTS (un
+auto que sí cumple)` sería vacuamente verdadero — le mandaría un push a los 51
+usuarios sin ningún vehículo cargado, exactamente el error opuesto (y más caro)
+al de `null` que no matchea, documentado arriba. "Alguno" no tiene esa mina: la
+`EXISTS` da `false` sola sin autos. Si algún día hace falta "todos", es un
+cuantificador nuevo — no una reinterpretación de éste.
+
+`vehicleWithoutVtv` tuvo que ELEGIR entre "no subió el documento" y "no tiene
+una VTV vigente": son preguntas distintas. Se eligió la primera —el predicado
+de "es OCR" de `documents.md`, `file_id is not null and source = 'manual'`—
+para no contar el lookup por patente como si fuera un documento cargado. La
+elección está en el `hint` del campo, para que no haya que leer el SQL para
+saberla. `vehicleNeverScanned` importa `OK` de `scanners.repo.ts` (requiere el
+alias `ds`, que `OK` trae cableado) en vez de repetir el corte a mano —mismo
+motivo que el resto del catálogo: si diverge de la matriz de `/escaneres`, dos
+pantallas dicen dos verdades del mismo auto.
+
+**Lo que este grupo NO resuelve**: personalizar el TEXTO del envío con el auto
+("cargá el seguro de tu Vento"). Eso es la Fase 2 del mismo plan y necesita que
+el backend acepte un vehículo por destinatario —`POST /notifications/broadcast`
+hoy sólo recibe `userIds` con un único `title`/`body` para todo el lote, y las
+276 filas `source_type = 'broadcast'` de producción tienen `vehicle_id` NULL,
+verificado el 2026-09-17—. El grupo «Vehículos» resuelve la mitad que SÍ se
+puede sin tocar el backend: filtrar a quién le llega.
+
 ### La condición resuelve a destinatarios EXPLÍCITOS antes de enviar
 
 "Usar estos N" trae la lista de usuarios y la vuelca en los mismos chips que el

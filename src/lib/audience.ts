@@ -67,6 +67,13 @@ export const AUDIENCE_FIELD_KEYS = [
   'registrationExpiry',
   // Multas
   'pendingFines',
+  // Vehículos — grano vehículo, no usuario
+  'vehicleWithoutInsurance',
+  'vehicleWithoutVtv',
+  'vehicleWithoutRegistration',
+  'vehicleWithPendingFines',
+  'vehicleNeverScanned',
+  'vehicleWithoutOdometer',
   // Actividad
   'signup',
   'lastActivity',
@@ -86,6 +93,7 @@ export const AUDIENCE_GROUPS = [
   'Documentos',
   'Vencimientos',
   'Multas',
+  'Vehículos',
   'Actividad',
   'Cuenta y entrega',
 ] as const
@@ -204,6 +212,52 @@ export const AUDIENCE_FIELDS: Record<AudienceFieldKey, AudienceFieldDef> = {
     group: 'Multas',
     kind: 'count',
     hint: 'Multas pendientes de sus autos — el mismo corte que /leads/multas.',
+  },
+
+  /**
+   * Grano VEHÍCULO, no usuario — `.claude/plans/cambios-2026-09-17.md`, punto A,
+   * Fase 1. Un usuario con dos autos puede tener uno asegurado y otro no; los
+   * campos de arriba (grano usuario) no pueden separarlos. Cada uno es
+   * `EXISTS` sobre "alguno de sus autos no archivados cumple esto" — no
+   * "todos", que con cero autos sería vacuamente verdadero y mandaría de más
+   * (ver `audience.repo.ts`). Si algún día hace falta "todos", es un
+   * cuantificador nuevo, no una reinterpretación de éste.
+   */
+  vehicleWithoutInsurance: {
+    label: 'Algún auto sin seguro',
+    group: 'Vehículos',
+    kind: 'flag',
+    hint: 'Al menos un auto no archivado sin ninguna póliza no archivada cargada.',
+  },
+  vehicleWithoutVtv: {
+    label: 'Algún auto sin VTV cargada',
+    group: 'Vehículos',
+    kind: 'flag',
+    hint: 'Sin ningún documento SUBIDO (no cuenta la consulta por patente) — mismo predicado que /documentos.',
+  },
+  vehicleWithoutRegistration: {
+    label: 'Algún auto sin cédula',
+    group: 'Vehículos',
+    kind: 'flag',
+    hint: 'Al menos un auto no archivado sin ninguna cédula no archivada cargada.',
+  },
+  vehicleWithPendingFines: {
+    label: 'Algún auto con multas pendientes',
+    group: 'Vehículos',
+    kind: 'flag',
+    hint: 'El mismo corte que /leads/multas: multas de ese auto con status pending.',
+  },
+  vehicleNeverScanned: {
+    label: 'Algún auto nunca escaneado con éxito',
+    group: 'Vehículos',
+    kind: 'flag',
+    hint: 'Ningún escaneo de ese auto trajo datos — el mismo corte OK que /escaneres.',
+  },
+  vehicleWithoutOdometer: {
+    label: 'Algún auto sin kilometraje cargado',
+    group: 'Vehículos',
+    kind: 'flag',
+    hint: 'odometer_value en 0 o vacío — el mismo corte que la tabla de adopción de /metricas.',
   },
 
   signup: {

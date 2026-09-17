@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql } from './db'
 import { INTERNAL_PREDICATE } from './ops.repo'
+import { OK } from './scanners.repo'
 import { lastSignalSql } from '~/lib/activity'
 import {
   AUDIENCE_RECIPIENT_LIMIT,
@@ -65,6 +66,27 @@ import type {
  * distintas sobre el mismo usuario y nada lo delata — la misma clase de
  * acoplamiento que `INTERNAL_PREDICATE` entre `ops.repo.ts` y `ops.v_ai_usage`.
  */
+/**
+ * `EXISTS (auto no archivado de este usuario que cumple `predicate`)` — la
+ * forma compartida de los seis campos de grano VEHÍCULO.
+ *
+ * Sólo "ALGUNO", nunca "TODOS": con cero autos no archivados, `NOT EXISTS
+ * (auto que sí cumple X)` sería vacuamente verdadero y mandaría un push a los
+ * 51 usuarios sin ningún vehículo cargado — el error contrario al de `null`
+ * que documenta `conditionSql`, y en la dirección más cara (manda de más, no
+ * de menos). "Alguno" no tiene esa mina: sin autos, la EXISTS de acá da
+ * `false` sola.
+ *
+ * `predicate` referencia `v2` (el alias del auto) y puede sumar sus propios
+ * `JOIN`/subconsultas — ver `vehicleNeverScanned`, que necesita el alias `ds`
+ * que trae cableado la constante `OK`.
+ */
+function vehicleFlag(predicate: string): string {
+  return `exists (select 1 from vehicles v2
+                    where v2.user_id = u.id and not v2.archived
+                      and ${predicate})`
+}
+
 const AUDIENCE_SQL: Record<AudienceFieldKey, string> = {
   vehicles: `(select count(*) from vehicles v where v.user_id = u.id and not v.archived)`,
 
@@ -107,6 +129,41 @@ const AUDIENCE_SQL: Record<AudienceFieldKey, string> = {
   // columna «Monto adeudado» de `users.repo.ts`. `paid` está saldada y
   // `appealed` en disputa: ninguna de las dos es algo para ir a cobrar.
   pendingFines: `(select count(*) from fines f where f.user_id = u.id and f.status::text = 'pending')`,
+
+  // ── Grano VEHÍCULO — `.claude/plans/cambios-2026-09-17.md`, punto A ────────
+  //
+  // `vehicleFlag()` es el `EXISTS (auto no archivado que cumple X)` compartido.
+  // "Todos sus autos" NO se ofrece: con cero autos, un `NOT EXISTS (auto que sí
+  // cumple)` sería vacuamente verdadero y mandaría de más — ver `vehicleFlag`.
+  vehicleWithoutInsurance: vehicleFlag(
+    `not exists (select 1 from insurances i2
+                  where i2.vehicle_id = v2.id and not i2.archived)`,
+  ),
+  // El predicado de "es OCR" de `documents.md`: `file_id is not null`, y
+  // `source = 'manual'` para no contar el lookup por patente como si fuera un
+  // documento cargado — la misma elección que ya hace la pantalla de VTV.
+  vehicleWithoutVtv: vehicleFlag(
+    `not exists (select 1 from vehicle_inspections vi2
+                  where vi2.vehicle_id = v2.id and not vi2.archived
+                    and vi2.file_id is not null and vi2.source::text = 'manual')`,
+  ),
+  vehicleWithoutRegistration: vehicleFlag(
+    `not exists (select 1 from registration_cards r2
+                  where r2.vehicle_id = v2.id and not r2.archived)`,
+  ),
+  // Mismo corte que `fines.repo.ts` y `pendingFines` de arriba, sobre el auto.
+  vehicleWithPendingFines: vehicleFlag(
+    `exists (select 1 from fines f2
+              where f2.vehicle_id = v2.id and f2.status::text = 'pending')`,
+  ),
+  // `OK`, importado de `scanners.repo.ts` — el mismo corte que la matriz de
+  // `/escaneres` y la columna «Escaneos» de `users.repo.ts`. Requiere alias
+  // `ds` porque `OK` lo trae cableado.
+  vehicleNeverScanned: vehicleFlag(
+    `not exists (select 1 from driving_sessions ds where ds.vehicle_id = v2.id and ${OK})`,
+  ),
+  // Mismo corte que `odometer` en `usageAdoption()` de `ops.repo.ts`.
+  vehicleWithoutOdometer: vehicleFlag(`coalesce(v2.odometer_value, 0) = 0`),
 
   signup: `u.created_at`,
 

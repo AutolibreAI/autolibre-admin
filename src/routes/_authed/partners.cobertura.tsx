@@ -419,7 +419,7 @@ function SpofCard({ spofs }: { spofs: ReturnType<typeof singlePartnerCells> }) {
               <li key={slug}>
                 <Link
                   to="/partners/listado"
-                  search={{ category: slug }}
+                  search={{ partnerCategories: [slug] }}
                   className="block rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-sm transition-colors hover:border-status-yellow/60"
                 >
                   <span className="flex items-baseline justify-between gap-3">

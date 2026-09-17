@@ -12,6 +12,7 @@ import { quotePublicCode, readableQuoteRequestError } from '~/lib/quote-requests
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
+import { Chip, FilterGroup } from '~/components/Filters'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 import { cn } from '~/lib/utils'
 import type { ServiceFamily } from '~/lib/catalog'
@@ -33,6 +34,16 @@ import type { ServiceFamily } from '~/lib/catalog'
  * Elegir un rubro en el selector sólo cambia qué se está MIRANDO (viaja en el
  * search param `quoteRubro`, vía `onSelectCategory`) — no persiste nada hasta
  * que se aprieta "Guardar clasificación". Filtrar para mirar no es clasificar.
+ *
+ * ── Zona y "solo aliados" — filtros de CLIENTE, sin search param ────────────
+ *
+ * `.claude/plans/cambios-2026-09-17.md`, punto C. A diferencia de `quoteRubro`,
+ * que cambia la CONSULTA (el loader vuelve a pedir candidatos de ese rubro),
+ * zona y aliado sólo PODAN lo que ya vino — como mucho 46 filas. Van en
+ * `useState`, no en la URL: cero round-trips, cero search param nuevo (cero
+ * riesgo de colisión en `FullSearchSchema`), y el filtro es de trabajo dentro
+ * de una ficha que ya se abrió — que un link pegado no lo reproduzca no cuesta
+ * nada.
  */
 
 const MIN_LOCATED_SHARE = 0.5
@@ -43,6 +54,8 @@ interface PartnerCandidatesProps {
   /** El pedido tiene coordenadas (`location_source = 'device'`). */
   pedidoHasLocation: boolean
   catalog: Array<ServiceFamily>
+  /** Las zonas que hoy declaran los partners, para los chips de zona. */
+  zones: Array<string>
   /** Lo que hay guardado en `ops.quote_request_rubro`, si algo. */
   savedCategorySlug: string | null
   /** El rubro efectivo que se está mirando: `quoteRubro` de la URL, o el guardado. */
@@ -56,6 +69,7 @@ export function PartnerCandidates({
   publicNumber,
   pedidoHasLocation,
   catalog,
+  zones,
   savedCategorySlug,
   selectedCategorySlug,
   candidates,
@@ -64,9 +78,24 @@ export function PartnerCandidates({
   const router = useRouter()
   const [savingRubro, setSavingRubro] = useState(false)
   const [rubroError, setRubroError] = useState<string | null>(null)
+  const [zoneFilter, setZoneFilter] = useState<Array<string>>([])
+  const [onlyFounding, setOnlyFounding] = useState(false)
 
   const categories = catalog.map((f) => ({ slug: f.slug, name: f.name }))
   const dirty = selectedCategorySlug !== null && selectedCategorySlug !== savedCategorySlug
+
+  /**
+   * Zona por CONTENCIÓN, igual que el filtro del listado y el tablero de
+   * cobertura: con igualdad exacta, un partner que declara dos zonas en el
+   * mismo campo de texto (`"CABA, Zona Norte"`) desaparecería justo cuando el
+   * operador busca una de las suyas.
+   */
+  const visibleCandidates = candidates.filter((c) => {
+    if (onlyFounding && c.tier !== 'founding') return false
+    if (zoneFilter.length === 0) return true
+    const zone = c.coverageZone.toLowerCase()
+    return zoneFilter.some((z) => zone.includes(z.toLowerCase()))
+  })
 
   async function saveRubro() {
     if (!selectedCategorySlug) return
@@ -84,11 +113,13 @@ export function PartnerCandidates({
     }
   }
 
-  const located = candidates.filter((c) => c.distanceKm !== null).length
-  const locatedShare = candidates.length > 0 ? located / candidates.length : 1
+  const located = visibleCandidates.filter((c) => c.distanceKm !== null).length
+  const locatedShare = visibleCandidates.length > 0 ? located / visibleCandidates.length : 1
 
-  const remote = candidates.filter((c) => isRemoteModality(c.modality))
-  const local = candidates.filter((c) => !isRemoteModality(c.modality))
+  const remote = visibleCandidates.filter((c) => isRemoteModality(c.modality))
+  const local = visibleCandidates.filter((c) => !isRemoteModality(c.modality))
+
+  const zoneFilterActive = zoneFilter.length > 0 || onlyFounding
 
   return (
     <Card className="mb-4">
@@ -147,25 +178,60 @@ export function PartnerCandidates({
           </p>
         ) : (
           <div className="space-y-4">
+            {candidates.length > 0 ? (
+              <div className="flex flex-wrap items-end gap-4">
+                <FilterGroup
+                  label="Zona"
+                  onClear={zoneFilter.length > 0 ? () => setZoneFilter([]) : undefined}
+                >
+                  {zones.map((zone) => (
+                    <Chip
+                      key={zone}
+                      active={zoneFilter.includes(zone)}
+                      onClick={() =>
+                        setZoneFilter(
+                          zoneFilter.includes(zone)
+                            ? zoneFilter.filter((z) => z !== zone)
+                            : [...zoneFilter, zone],
+                        )
+                      }
+                    >
+                      {zone}
+                    </Chip>
+                  ))}
+                </FilterGroup>
+
+                <FilterGroup label="Aliado">
+                  <Chip active={onlyFounding} onClick={() => setOnlyFounding(!onlyFounding)}>
+                    Solo aliados
+                  </Chip>
+                </FilterGroup>
+              </div>
+            ) : null}
+
             {!pedidoHasLocation ? (
               <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
                 Este pedido no tiene coordenadas cargadas (la persona tipeó la dirección en vez de dar
                 permiso de ubicación) — no hay distancia que calcular para ningún candidato. Guiate por
                 la zona.
               </p>
-            ) : candidates.length > 0 && locatedShare < MIN_LOCATED_SHARE ? (
+            ) : visibleCandidates.length > 0 && locatedShare < MIN_LOCATED_SHARE ? (
               <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
-                Sólo {located} de {candidates.length} candidatos tienen ubicación cargada — el orden por
-                distancia no es confiable todavía.
+                Sólo {located} de {visibleCandidates.length} candidatos tienen ubicación cargada — el
+                orden por distancia no es confiable todavía.
               </p>
-            ) : candidates.length > 0 ? (
+            ) : visibleCandidates.length > 0 ? (
               <p className="text-xs text-muted-foreground">
-                {located} de {candidates.length} candidatos tienen ubicación cargada.
+                {located} de {visibleCandidates.length} candidatos tienen ubicación cargada.
               </p>
             ) : null}
 
             {candidates.length === 0 ? (
               <p className="text-sm text-muted-foreground">No hay partners activos con este rubro.</p>
+            ) : visibleCandidates.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Ningún candidato con este filtro{zoneFilterActive ? ' de zona / aliado' : ''}.
+              </p>
             ) : (
               <div className="space-y-2">
                 {local.map((c) => (

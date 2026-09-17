@@ -157,18 +157,49 @@ sin `{...prev}`, así que no hay spread cross-route que los una.
 `SORT_COLUMNS` es el `Record` cerrado que hace seguro interpolar la columna en
 el `ORDER BY` — mismo patrón que `scan-sessions.repo.ts` y `listUsers`.
 
-## Ni una escritura, ni detalle por fila
+## Ni una escritura
 
 `session_dtc_snapshots` y `driving_telemetry_analysis` los escribe el backend
 cuando el teléfono sube los chunks. Una detección es un hecho que pasó — mismo
 criterio que `driving_sessions`, `conversations`, `notifications`. Si aparece un
 `UPDATE`/`INSERT` en `detections.repo.ts`, está mal.
 
-**No hay `/escaneres/detecciones/:key`.** El drill-down de "qué sesiones vieron
-este código" ya lo cubre `/escaneres/sesiones?q=P0171`, y el detalle de una
-anomalía (`justification`, `probableCauses`, `evidence`) vive en el jsonb sin
-pantalla propia — si algún día hace falta, es el mismo pendiente que anota
-`scan-sessions.md`.
+## El panel de sesiones — desde el 2026-09-17, ya NO es "pendiente"
+
+Esta sección decía *"no hay `/escaneres/detecciones/:key`"* y mandaba el
+drill-down a `/escaneres/sesiones?q=P0171`. **Eso estaba mal para una
+anomalía**: `q` matchea el código/tipo CRUDO y el tipo de anomalía no está
+entre las columnas que esa pantalla busca — el link no traía nada.
+`.claude/plans/cambios-2026-09-17.md`, punto D, lo reemplazó por un panel
+propio.
+
+No es una ruta nueva. Es el mismo patrón que `SessionsPanel` de
+`/escaneres/compatibilidad`: vive **debajo de la tabla**, no en un modal —la
+pantalla es de comparación, y un modal taparía la tabla que le da contexto al
+detalle— y la selección vive en la URL (`detectionKey` + `detectionOf`, no en
+`detectionKind`, que es el FILTRO de la tabla). `detectionSessions({ of, key })`
+en `detections.repo.ts` parte del MISMO `SCAN_SESSIONS_CTE` que ya usa
+`listDetections`, no una copia.
+
+Las dos ramas tienen forma distinta a propósito:
+
+- **DTC**: co-ocurrencia (los OTROS códigos del mismo `session_dtc_snapshots`,
+  vía subconsulta ESCALAR con `<> $1` — **no** un `LEFT JOIN` a
+  `diagnostic_dtcs`, que podría multiplicar la fila si algún día hay más de una
+  fila por `(session_id, code)`) y la `raw_response` de `diagnostic_dtcs`, si
+  se buscó.
+- **Anomalía**: cada disparo de ESE tipo en la sesión —`severity`,
+  `affectedPid`, `justification`— porque una anomalía puede dispararse dos
+  veces en la misma sesión (dos PIDs distintos). La fila lo dice ("N disparos")
+  en vez de mostrar sólo el primero.
+
+`affectedPid` se lee de `a->>'affectedPid'`, **no** `a->>'pid'` — la misma
+trampa que ya documenta `scan-sessions.md` sobre `scan-sessions.repo.ts:205`:
+la clave del jsonb es `affectedPid`, y leer `pid` da `NULL` siempre (se vería
+como "sin PID", que es un dato falso, no un error).
+
+Ni una escritura acá tampoco: `detectionSessions` es sólo lectura, mismo
+criterio que el resto del archivo.
 
 ## Cómo verificar un cambio acá
 
@@ -178,7 +209,7 @@ build) y después `& ".\node_modules\.bin\tsc.CMD" --noEmit`. Más el borde
 server-only:
 
 ```bash
-grep -rl "listDetections\|detections.repo\|POSTGRES_DATABASE_URL\|scan_sessions\|nombre_corto" .output/public
+grep -rl "listDetections\|detectionSessions\|detections.repo\|POSTGRES_DATABASE_URL\|scan_sessions\|nombre_corto" .output/public
 ```
 
 Cero resultados. `~/server/detections.repo` y el `dtc-codes.json` de 1MB NO

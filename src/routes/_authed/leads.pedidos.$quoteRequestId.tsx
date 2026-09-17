@@ -14,7 +14,7 @@ import {
   type QuoteRequestDetail,
 } from '~/lib/quote-requests'
 import { getQuoteRequestFn } from '~/fn/quote-requests'
-import { getServiceCatalog, listPartnerCandidatesFn } from '~/fn/partners'
+import { getServiceCatalog, listPartnerCandidatesFn, listPartnerZonesFn } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
@@ -78,9 +78,13 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       throw cause
     })
     if (!result) throw notFound()
-    if (!('detail' in result)) return { result, catalog: [], candidates: [], effectiveCategorySlug: null }
+    if (!('detail' in result))
+      return { result, catalog: [], zones: [], candidates: [], effectiveCategorySlug: null }
 
-    const catalog = await getServiceCatalog({ signal })
+    const [catalog, zones] = await Promise.all([
+      getServiceCatalog({ signal }),
+      listPartnerZonesFn({ signal }),
+    ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
     // param gana; si no está, el default es el rubro guardado.
@@ -97,7 +101,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         })
       : []
 
-    return { result, catalog, candidates, effectiveCategorySlug }
+    return { result, catalog, zones, candidates, effectiveCategorySlug }
   },
 
   head: ({ loaderData }) => ({
@@ -115,7 +119,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
 })
 
 function QuoteRequestScreen() {
-  const { result, catalog, candidates, effectiveCategorySlug } = Route.useLoaderData()
+  const { result, catalog, zones, candidates, effectiveCategorySlug } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -213,6 +217,7 @@ function QuoteRequestScreen() {
         publicNumber={d.publicNumber}
         pedidoHasLocation={d.locationLatitude !== null && d.locationLongitude !== null}
         catalog={catalog}
+        zones={zones}
         savedCategorySlug={d.rubroCategorySlug}
         selectedCategorySlug={effectiveCategorySlug}
         candidates={candidates}

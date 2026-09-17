@@ -1,4 +1,6 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
+import { User, X, type LucideIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
 import {
   DETECTION_FAMILY_FILTERS,
   DETECTION_KIND_FILTERS,
@@ -7,13 +9,18 @@ import {
   DTC_SYSTEM_LABELS,
   SEVERITY_LABELS,
   detectionSearchSchema,
+  detectionSelectionOpen,
   dtcFamily,
   ratioPct,
+  type DetectionKind,
   type DetectionRow,
   type DetectionSearch,
+  type DetectionSessionRow,
+  type DetectionSessionsView,
   type MissingDtc,
 } from '~/lib/detections'
-import { listDetectionsFn } from '~/fn/detections'
+import { anomalyTypeLabel, scanDurationLabel } from '~/lib/scan-sessions'
+import { getDetectionSessionsFn, listDetectionsFn } from '~/fn/detections'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
@@ -26,7 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
-import { formatDate, formatInt } from '~/lib/format'
+import { formatDate, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
 /**
@@ -43,20 +50,39 @@ import { cn } from '~/lib/utils'
 export const Route = createFileRoute('/_authed/escaneres/detecciones')({
   validateSearch: detectionSearchSchema,
   loaderDeps: ({ search }) => search,
-  loader: ({ deps, abortController }) =>
-    listDetectionsFn({ data: deps, signal: abortController.signal }),
+  /**
+   * Dos consultas en paralelo: la tabla (siempre) y las sesiones de la
+   * detección seleccionada (sólo si hay una). El detalle va en el loader y no
+   * en un `useState` con fetch, mismo criterio que `sessionsPanelOpen` de
+   * `/escaneres/compatibilidad`: la selección vive en la URL, así que
+   * compartir `/escaneres/detecciones?detectionKey=P0171&detectionOf=dtc`
+   * pegado en un ticket tiene que abrir el panel ya cargado.
+   */
+  loader: async ({ deps, abortController }) => {
+    const signal = abortController.signal
+    const [detections, sessions] = await Promise.all([
+      listDetectionsFn({ data: deps, signal }),
+      detectionSelectionOpen(deps)
+        ? getDetectionSessionsFn({ data: { of: deps.detectionOf, key: deps.detectionKey }, signal })
+        : Promise.resolve(null),
+    ])
+    return { detections, sessions }
+  },
   head: () => ({ meta: [{ title: 'Escáneres · Detecciones — AutoLibre' }] }),
   component: Detections,
 })
 
 function Detections() {
-  const { rows, missingDtcs, dtcSessions, dtcVehicles, anomalySessions, anomalyVehicles } =
-    Route.useLoaderData()
+  const { detections, sessions } = Route.useLoaderData()
+  const { rows, missingDtcs, dtcSessions, dtcVehicles, anomalySessions, anomalyVehicles } = detections
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
   const setSearch = (next: Partial<DetectionSearch>) =>
     navigate({ search: { ...search, ...next }, replace: true })
+
+  const selectDetection = (row: DetectionRow) =>
+    setSearch({ detectionKey: row.key, detectionOf: row.kind })
 
   const filtered =
     Boolean(search.q) ||
@@ -165,6 +191,7 @@ function Detections() {
                 <SortHeader label="Modelos" sortKey="models" active={search.sort === 'models'} dir={search.dir} to="/escaneres/detecciones" align="right" firstClick="desc" />
                 <SortHeader label="Primera" sortKey="first" active={search.sort === 'first'} dir={search.dir} to="/escaneres/detecciones" firstClick="desc" />
                 <SortHeader label="Última" sortKey="last" active={search.sort === 'last'} dir={search.dir} to="/escaneres/detecciones" firstClick="desc" />
+                <TableHead className="w-px" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -172,14 +199,21 @@ function Detections() {
                 <DetectionTableRow
                   key={`${r.kind}-${r.key}`}
                   row={r}
+                  isSelected={search.detectionOf === r.kind && search.detectionKey === r.key}
                   sessionsDenominator={r.kind === 'dtc' ? dtcSessions : anomalySessions}
                   vehiclesDenominator={r.kind === 'dtc' ? dtcVehicles : anomalyVehicles}
+                  onSelect={() => selectDetection(r)}
                 />
               ))}
             </TableBody>
           </Table>
         </div>
       )}
+
+      <SessionsPanel
+        view={sessions}
+        onClose={() => setSearch({ detectionKey: undefined, detectionOf: undefined })}
+      />
 
       <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
         Los DTC se cuentan sobre los <strong>{formatInt(dtcSessions)}</strong> escaneos
@@ -209,19 +243,23 @@ const SEVERITY_CHIP: Record<string, string> = {
 
 function DetectionTableRow({
   row: r,
+  isSelected,
   sessionsDenominator,
   vehiclesDenominator,
+  onSelect,
 }: {
   row: DetectionRow
+  isSelected: boolean
   sessionsDenominator: number
   vehiclesDenominator: number
+  onSelect: () => void
 }) {
   const sessionsPct = ratioPct(r.sessions, sessionsDenominator)
   const vehiclesPct = ratioPct(r.vehicles, vehiclesDenominator)
   const family = r.kind === 'dtc' ? dtcFamily(r.key) : null
 
   return (
-    <TableRow>
+    <TableRow className={cn(isSelected && 'bg-brand-soft/40')}>
       <TableCell>
         <span
           className={cn(
@@ -320,6 +358,22 @@ function DetectionTableRow({
       <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
         {formatDate(r.lastSeen)}
       </TableCell>
+
+      <TableCell className="whitespace-nowrap">
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-pressed={isSelected}
+          className={cn(
+            'rounded-md border px-2 py-1 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            isSelected
+              ? 'border-brand bg-brand-soft text-brand'
+              : 'border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground',
+          )}
+        >
+          Ver sesiones
+        </button>
+      </TableCell>
     </TableRow>
   )
 }
@@ -366,6 +420,198 @@ function MissingDtcBlock({
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+// ── El panel de sesiones de una detección ──────────────────────────────────
+
+/**
+ * Las sesiones donde apareció la detección seleccionada, con las condiciones
+ * en las que apareció — la evidencia que la fila agregada no puede mostrar.
+ *
+ * Vive DEBAJO de la tabla y no en un modal: mismo criterio que el
+ * `SessionsPanel` de `/escaneres/compatibilidad` — es una pantalla de
+ * comparación, y un modal taparía la tabla que le da contexto al detalle. La
+ * selección vive en la URL (`detectionKey`/`detectionOf`), así que compartir
+ * el link pegado en un ticket abre el panel ya cargado.
+ */
+function SessionsPanel({
+  view,
+  onClose,
+}: {
+  view: DetectionSessionsView | null
+  onClose: () => void
+}) {
+  if (!view) return null
+
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-card">
+      <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium">
+            Sesiones{' '}
+            <span className="text-muted-foreground">
+              · {view.of === 'anomaly' ? anomalyTypeLabel(view.key) : view.key}
+            </span>
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {formatInt(view.sessions.length)}{' '}
+            {view.sessions.length === 1 ? 'sesión' : 'sesiones'}, de la más reciente a la más vieja.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
+          <X className="size-3.5" aria-hidden />
+          cerrar
+        </button>
+      </header>
+
+      {view.sessions.length === 0 ? (
+        <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+          No hay sesiones para esta detección.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {view.sessions.map((s) => (
+            <SessionRow key={s.sessionId} session={s} of={view.of} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function SessionRow({ session: s, of }: { session: DetectionSessionRow; of: DetectionKind }) {
+  const duration = scanDurationLabel(s.durationSeconds)
+
+  return (
+    <li className="px-4 py-3.5">
+      <div className="flex items-center gap-2 text-sm">
+        <Link
+          to="/escaneres/sesiones/$sessionId"
+          params={{ sessionId: s.sessionId }}
+          className="rounded font-medium tabular-nums outline-none hover:text-brand hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
+          {formatDateTime(s.startedAt)}
+        </Link>
+        {duration ? <span className="text-xs text-muted-foreground">· {duration}</span> : null}
+      </div>
+
+      <div className="mt-2 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        <Field icon={User} label="Usuario">
+          <Link
+            to="/usuarios/$userId"
+            params={{ userId: s.userId }}
+            className="rounded font-medium outline-none hover:text-brand hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            {s.userName ?? s.userEmail}
+          </Link>
+          {s.userName ? <div className="text-xs text-muted-foreground">{s.userEmail}</div> : null}
+        </Field>
+
+        <Field label="Vehículo">
+          <span className="font-mono font-semibold tracking-wider">{s.plate}</span>
+          <div className="text-xs text-muted-foreground">{s.catalogLabel ?? 'sin modelo de catálogo'}</div>
+        </Field>
+
+        <Field label="Escáner">
+          <span>{s.firmware ?? 'no identificado'}</span>
+          {s.obdProtocol ? <div className="text-xs text-muted-foreground">{s.obdProtocol}</div> : null}
+        </Field>
+
+        <Field label="Lecturas">
+          <span className="tabular-nums">{formatInt(s.totalReadings)}</span>
+        </Field>
+
+        <Field label="Batería">
+          <span>{s.batteryVoltage ?? '—'}</span>
+        </Field>
+
+        <Field label="Desde el borrado de fallas">
+          <span className="tabular-nums">
+            {s.distanceSinceDtcClearKm === null ? '—' : `${s.distanceSinceDtcClearKm} km`}
+          </span>
+        </Field>
+      </div>
+
+      {of === 'dtc' ? (
+        <div className="mt-2.5 space-y-1.5">
+          {s.coOccurringDtcCodes.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5 text-sm">
+              <span className="text-xs text-muted-foreground">Junto con:</span>
+              {s.coOccurringDtcCodes.map((c) => (
+                <code
+                  key={c}
+                  className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs font-semibold"
+                >
+                  {c}
+                </code>
+              ))}
+            </div>
+          ) : null}
+          {s.dtcRawResponse ? (
+            <details className="text-xs">
+              <summary className="cursor-pointer select-none text-muted-foreground outline-none">
+                Respuesta cruda del escáner
+              </summary>
+              <pre className="mt-1 overflow-x-auto rounded bg-secondary p-2 font-mono">
+                {s.dtcRawResponse}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      ) : (
+        <div className="mt-2.5 space-y-1.5">
+          {s.anomalyOccurrences.length > 1 ? (
+            <p className="text-xs text-muted-foreground">
+              {formatInt(s.anomalyOccurrences.length)} disparos en esta sesión — dos PIDs distintos
+              pueden disparar la misma anomalía.
+            </p>
+          ) : null}
+          {s.anomalyOccurrences.map((o, i) => (
+            <div key={i} className="rounded-md border border-border bg-secondary/50 px-2.5 py-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className={cn(
+                    'inline-flex items-center rounded border px-1 py-px text-[11px]',
+                    SEVERITY_CHIP[o.severity] ?? 'border-border text-muted-foreground',
+                  )}
+                >
+                  {SEVERITY_LABELS[o.severity] ?? o.severity}
+                </span>
+                {o.affectedPid ? (
+                  <span className="font-mono text-xs text-muted-foreground">{o.affectedPid}</span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{o.justification}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </li>
+  )
+}
+
+function Field({
+  icon: Icon,
+  label,
+  children,
+}: {
+  icon?: LucideIcon
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-0.5 flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {Icon ? <Icon className="size-3" aria-hidden /> : null}
+        {label}
+      </div>
+      <div>{children}</div>
     </div>
   )
 }

@@ -656,13 +656,45 @@ referirse.
   vuelve importante, el arreglo es una tabla nueva con su SP, no un parser de
   `internal_notes`.
 
-**El search param se llama `quoteRubro`**, calificado por dominio: `category`
-ya lo usa `/partners/listado` (`string`) y `coverageRubros` lo usa
-`/partners/cobertura` (`string[]`) bajo la misma clave semántica — un tercer
-nombre genérico repetiría la colisión de `.claude/rules/notifications.md`.
-Cambiar el chip de rubro sólo cambia qué se está MIRANDO (no persiste nada);
-la precedencia es **el search param gana, si no está el default es el rubro
-guardado** en `ops.quote_request_rubro`.
+**El search param se llama `quoteRubro`**, calificado por dominio:
+`partnerCategories` ya lo usa `/partners/listado` (`string[]`, desde el
+2026-09-17) y `coverageRubros` lo usa `/partners/cobertura` (`string[]`) bajo
+la misma clave semántica — un tercer nombre genérico repetiría la colisión de
+`.claude/rules/notifications.md`. Cambiar el chip de rubro sólo cambia qué se
+está MIRANDO (no persiste nada); la precedencia es **el search param gana, si
+no está el default es el rubro guardado** en `ops.quote_request_rubro`.
+
+### Filtrar candidatos por zona y por aliado — desde el 2026-09-17, filtros de CLIENTE
+
+`.claude/plans/cambios-2026-09-17.md`, punto C. Al 2026-09-17, **0 de 48
+partners activos tienen coordenadas cargadas** en producción (la Fase 0 del
+plan de abajo sigue sin correrse): `distanceKm` es `null` para todos, el
+`ORDER BY` cae al desempate por tier/nombre, y con hasta 48 candidatos por
+rubro el operador no tiene con qué acotar la lista salvo mirarla entera. Zona
+(chips multiselect, contra `listPartnerZonesFn` — la MISMA lista que el chip
+de zona de `/partners/listado`) y "Solo aliados" (`tier = 'founding'`)
+resuelven eso.
+
+Los dos van en `useState` de `PartnerCandidates.tsx`, **no en la URL**: a
+diferencia de `quoteRubro`, que cambia la CONSULTA (el loader vuelve a pedir
+candidatos de ese rubro), zona y aliado sólo PODAN lo que ya vino —como mucho
+48 filas—, así que no hay round trip que ahorrar ni consulta que repetir.
+Consecuencia aceptada: un link pegado no reproduce el filtro, sólo el rubro.
+Si algún día eso importa, sube a la URL con nombres calificados
+(`quoteCandidateZones`, `quoteCandidateTier`) — nunca `zone`/`tier` pelados.
+
+Zona filtra por **contención** (`coverageZone.toLowerCase().includes(...)`),
+igual que el filtro homónimo del listado y por el mismo motivo: varios
+partners declaran dos zonas en el mismo campo de texto, y una igualdad exacta
+los dejaría invisibles justo cuando el operador busca una de las suyas. "Solo
+aliados" PODA la lista, no la reordena — `founding` ya es el desempate del
+`ORDER BY` del repo, y convertirlo además en un criterio de orden del cliente
+dejaría dos criterios peleando.
+
+Los dos carteles ("X de N candidatos tienen ubicación", el aviso de share
+bajo) se recalculan sobre la lista YA FILTRADA (`visibleCandidates`, no
+`candidates`): si siguieran contando sobre el total, dirían "3 de 48" cuando
+en pantalla sólo hay 5 filas visibles por el filtro de zona.
 
 **Un partner sin coordenada no es un partner lejos.** `listPartnerCandidates`
 calcula la distancia con Haversine inline (sin `postgis`/`earthdistance`:

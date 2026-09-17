@@ -223,6 +223,15 @@ export type DetectionFamilyFilter = (typeof DETECTION_FAMILY_FILTERS)[number]
  * comparte search params con `/escaneres/detecciones` vía un `<Link>` con
  * spread (las pestañas linkean sin `{...prev}`). Mismo criterio que
  * `/escaneres/sesiones`.
+ *
+ * `detectionKey` / `detectionOf`: la detección seleccionada para el panel de
+ * sesiones de abajo (`.claude/plans/cambios-2026-09-17.md`, punto D). No se
+ * puede reusar `detectionKind` —que es el FILTRO de la tabla
+ * (`all|dtc|anomaly`)— para esto: acá hace falta saber de qué RAMA es la
+ * clave, aunque hoy un código DTC y un tipo de anomalía no colisionen como
+ * string, porque el universo de sesiones es distinto según la rama (DTC sobre
+ * `completed`, anomalía sobre las que trajeron datos) y deducirlo de la forma
+ * del string sería adivinar justo el dato que cambia el resultado.
  */
 export const detectionSearchSchema = z.object({
   q: z.string().trim().max(80).optional(),
@@ -231,11 +240,74 @@ export const detectionSearchSchema = z.object({
   detectionFamily: z.enum(DETECTION_FAMILY_FILTERS).catch('all').default('all'),
   sort: z.enum(DETECTION_SORT_KEYS).catch('sessions').default('sessions'),
   dir: z.enum(['asc', 'desc']).catch('desc').default('desc'),
+  detectionKey: z.string().trim().max(80).optional(),
+  detectionOf: z.enum(['dtc', 'anomaly']).optional(),
 })
 export type DetectionSearch = z.infer<typeof detectionSearchSchema>
+
+/**
+ * El panel de sesiones abajo de la tabla está abierto cuando los DOS viajan
+ * juntos — mismo criterio que `sessionsPanelOpen` de `~/lib/scanners`. Sólo
+ * `detectionKey` sin `detectionOf` (o viceversa) no alcanza para saber contra
+ * qué universo consultar.
+ */
+export function detectionSelectionOpen(
+  search: Pick<DetectionSearch, 'detectionKey' | 'detectionOf'>,
+): search is { detectionKey: string; detectionOf: DetectionKind } {
+  return search.detectionKey != null && search.detectionOf != null
+}
 
 /** `12 / 28` sesiones → `43%`. Sin decimales: los volúmenes son chicos. */
 export function ratioPct(numerator: number, denominator: number): number | null {
   if (denominator <= 0) return null
   return Math.round((numerator / denominator) * 100)
+}
+
+// ── El panel de sesiones de una detección ─────────────────────────────────
+
+/** Un disparo de la anomalía EN esta sesión — puede haber más de uno (dos PIDs distintos). */
+export interface DetectionSessionOccurrence {
+  severity: string
+  /** El PID afectado. `null` si el jsonb no lo trae. */
+  affectedPid: string | null
+  justification: string
+}
+
+/**
+ * Una sesión donde apareció la detección seleccionada, con las "condiciones"
+ * en las que apareció — lo que la fila agregada de la tabla no puede mostrar.
+ */
+export interface DetectionSessionRow {
+  sessionId: string
+  startedAt: string
+  durationSeconds: number | null
+
+  userId: string
+  userEmail: string
+  userName: string | null
+
+  vehicleId: string
+  plate: string
+  /** `BRAND MODEL TRIM YEAR` si el auto resuelve a un catálogo; si no, `null`. */
+  catalogLabel: string | null
+
+  firmware: string | null
+  obdProtocol: string | null
+  totalReadings: number
+  /** Texto crudo del handshake (`"14.6V"`), sin normalizar — mismo criterio que `ScanSessionRow`. */
+  batteryVoltage: string | null
+  distanceSinceDtcClearKm: number | null
+
+  /** DTC: los OTROS códigos del MISMO snapshot (co-ocurrencia). `[]` para anomalías. */
+  coOccurringDtcCodes: Array<string>
+  /** DTC: `diagnostic_dtcs.raw_response` de esta sesión, si se guardó. `null` si no, o si es anomalía. */
+  dtcRawResponse: string | null
+  /** Anomalía: cada disparo de ESTE tipo en esta sesión. `[]` para DTC. */
+  anomalyOccurrences: Array<DetectionSessionOccurrence>
+}
+
+export interface DetectionSessionsView {
+  of: DetectionKind
+  key: string
+  sessions: Array<DetectionSessionRow>
 }

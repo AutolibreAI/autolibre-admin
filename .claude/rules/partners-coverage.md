@@ -138,7 +138,34 @@ motivo que el tablero de cobertura ya decidió no hacerlo (ver más abajo, "El
 eje de zonas del tablero…"): 30 valores para 46 partners es una lista larga
 pero honesta.
 
-## El search param del filtro de estado se llama `partnerStatus`, NO `status`
+## El listado pasó a multiselect el 2026-09-17, y las claves se RENOMBRARON
+
+`.claude/plans/cambios-2026-09-17.md`, punto B. Los cuatro filtros de
+`/partners/listado` (estado, rubro, servicio, zona) eran de un solo valor y
+pasaron a arrays: `partnerStatuses` / `partnerCategories` / `partnerServices` /
+`partnerZones`. Las claves viejas (`partnerStatus`, `category`, `service`,
+`partnerZone`) **se eliminaron, no conviven** — un favorito viejo con
+`?category=motor` deja de filtrar en silencio (la clave desconocida se
+ignora), decisión tomada a propósito antes que mantener dos fuentes de verdad
+para el mismo filtro.
+
+El SQL de `listPartners` cambia el patrón: cada condición pasa de
+`$n::text IS NULL OR …` a `cardinality($n::text[]) = 0 OR … = any($n)` (zona
+sigue por `EXISTS` + `unnest`, para la contención). **Array vacío = sin
+filtro**, nunca "cero resultados" — es el `if` que más fácil se escribe al
+revés. Dentro de un grupo la semántica es O; entre grupos, Y. Los paréntesis
+los pone el código y son fijos, así que esto NO contradice la regla de
+"nunca O" del armador de audiencias de `/notificaciones`: ahí el riesgo es que
+un operador arme mal un paréntesis y le mande un push a quien no corresponde;
+acá el resultado es una tabla que se mira, no un envío.
+
+El chip «Todos» **desapareció** de los cuatro grupos: vacío ya significa
+todos, y un «Todos» que conviviera con selecciones sería un cuarto estado
+ambiguo. `FilterGroup` (`~/components/Filters`) ganó un `onClear?` opcional —
+una X al lado del label, visible sólo con algo elegido— y un botón «Limpiar
+todo» aparece en el header cuando hay cualquier filtro activo.
+
+## El search param del filtro de estado se llama `partnerStatuses`, NO `status`
 
 `/solicitudes` (`applicationSearchSchema`) ya usa `status` con el enum
 `partner_application_status`. Dos search params con la misma clave y enums
@@ -147,11 +174,14 @@ updaters — la trampa que documenta `.claude/rules/notifications.md` y que ya
 rompió un build.
 
 Por el mismo motivo el multi-select de rubros del tablero se llama
-**`coverageRubros`** (`string[]`) y NO reusa el `category` (`string`) del
-listado: `string` contra `string[]` es tipos incompatibles bajo la misma clave.
-El `q` sí se comparte —`string` en todos lados— y el `<Link>` del SPOF que va de
-Cobertura a `/partners/listado` pasa `search={{ category: slug }}` como objeto
-literal (no spread), así que ese sí puede nombrar `category`.
+**`coverageRubros`** (`string[]`) y NO reusa el `partnerCategories`
+(`string[]`) del listado: son dos search params del mismo tipo pero con
+significado distinto (uno enfoca columnas del tablero, el otro filtra filas
+del listado), y unificarlos acoplaría dos pantallas que hoy pueden evolucionar
+separado. El `q` sí se comparte —`string` en todos lados— y el `<Link>` del
+SPOF que va de Cobertura a `/partners/listado` pasa
+`search={{ partnerCategories: [slug] }}` como objeto literal (no spread), así
+que compila cross-route sin arrastrar el tipo ancho de `FullSearchSchema`.
 
 ## Tildar un rubro no debe scrollear al tope
 

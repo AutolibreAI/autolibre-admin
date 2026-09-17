@@ -606,6 +606,16 @@ const PARTNER_SORT_COLUMNS: Record<PartnerListSortKey, string> = {
  * `services.active` — para que coincida exacto con `pipelineHealth.invisible` y
  * con la card de Inicio. Los chips de rubro sí filtran por `s.active`, que es lo
  * que la app usa.
+ *
+ * ── Multiselect desde el 2026-09-17 ─────────────────────────────────────────
+ *
+ * `partnerStatuses` / `partnerCategories` / `partnerServices` / `partnerZones`
+ * son arrays. **Array vacío = sin filtro, nunca "cero resultados"** — cada
+ * condición es `cardinality($n::text[]) = 0 OR …`. Dentro de un grupo la
+ * semántica es O (`= any(...)`, o un `EXISTS` sobre `unnest` para la zona, que
+ * necesita CONTENCIÓN y no igualdad); entre grupos es Y. Los paréntesis los
+ * pone el código y son fijos — no hay riesgo de que un operador arme un `OR`
+ * mal puesto, a diferencia del armador de audiencias de `/notificaciones`.
  */
 export async function listPartners(
   search: PartnerSearch,
@@ -639,27 +649,29 @@ export async function listPartners(
         GROUP BY p.id, p.name, p.status, p.coverage_zone
      ) t
       WHERE (NOT $2::boolean OR t.invisible)
-        AND ($3::text = 'all' OR t.status = $3)
-        AND ($4::text IS NULL OR EXISTS (
+        AND (cardinality($3::text[]) = 0 OR t.status = any($3))
+        AND (cardinality($4::text[]) = 0 OR EXISTS (
               SELECT 1
                 FROM partner_services ps2
                 JOIN services s2 ON s2.id = ps2.service_id AND s2.active
                 JOIN service_categories sc2 ON sc2.id = s2.category_id
-               WHERE ps2.partner_id = t.id AND sc2.slug = $4))
-        AND ($5::text IS NULL OR EXISTS (
+               WHERE ps2.partner_id = t.id AND sc2.slug = any($4)))
+        AND (cardinality($5::text[]) = 0 OR EXISTS (
               SELECT 1
                 FROM partner_services ps3
                 JOIN services s3 ON s3.id = ps3.service_id
-               WHERE ps3.partner_id = t.id AND s3.slug = $5))
-        AND ($6::text IS NULL OR t.coverage_zone ILIKE '%' || $6 || '%')
+               WHERE ps3.partner_id = t.id AND s3.slug = any($5)))
+        AND (cardinality($6::text[]) = 0 OR EXISTS (
+              SELECT 1 FROM unnest($6::text[]) AS z
+               WHERE t.coverage_zone ILIKE '%' || z || '%'))
       ORDER BY ${orderBy} ${search.dir} NULLS LAST, t.name ASC`,
     [
       search.q ?? null,
       search.onlyInvisible,
-      search.partnerStatus,
-      search.category ?? null,
-      search.service ?? null,
-      search.partnerZone ?? null,
+      search.partnerStatuses,
+      search.partnerCategories,
+      search.partnerServices,
+      search.partnerZones,
     ],
   )
 

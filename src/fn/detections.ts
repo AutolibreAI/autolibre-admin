@@ -1,9 +1,10 @@
 import { createServerFn } from '@tanstack/react-start'
+import { z } from 'zod'
 import { detectionSearchSchema } from '~/lib/detections'
-import { listDetections } from '~/server/detections.repo'
+import { detectionSessions, listDetections } from '~/server/detections.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { DetectionsView } from '~/lib/detections'
+import type { DetectionsView, DetectionSessionsView } from '~/lib/detections'
 
 /**
  * Detecciones de escáner — el borde RPC.
@@ -20,4 +21,17 @@ export const listDetectionsFn = createServerFn({ method: 'GET' })
   .handler(
     async ({ data }): Promise<DetectionsView> =>
       listDetections(data, { signal: requestSignal() }),
+  )
+
+/**
+ * Las sesiones donde apareció una detección puntual — el panel debajo de la
+ * tabla. Mismo `adminMiddleware` que `listDetectionsFn`: trae usuario, patente
+ * y catálogo del vehículo, y un server function es un endpoint HTTP público.
+ */
+export const getDetectionSessionsFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(z.object({ of: z.enum(['dtc', 'anomaly']), key: z.string().trim().min(1).max(80) }))
+  .handler(
+    async ({ data }): Promise<DetectionSessionsView> =>
+      detectionSessions(data, { signal: requestSignal() }),
   )

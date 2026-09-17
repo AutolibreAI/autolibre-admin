@@ -5,8 +5,11 @@ import { lookupDtc } from './dtc-catalog'
 import { SEVERITY_RANK } from '~/lib/detections'
 import { anomalyTypeLabel } from '~/lib/scan-sessions'
 import type {
+  DetectionKind,
   DetectionRow,
   DetectionSearch,
+  DetectionSessionRow,
+  DetectionSessionsView,
   DetectionSortKey,
   DetectionsView,
   MissingDtc,
@@ -281,4 +284,190 @@ export async function listDetections(
     anomalySessions: toInt(denom?.anomaly_sessions),
     anomalyVehicles: toInt(denom?.anomaly_vehicles),
   }
+}
+
+// ── El panel de sesiones de una detección ────────────────────────────────
+
+interface DtcSessionRow {
+  session_id: string
+  started_at: Date | string
+  duration_s: number | string | null
+  user_id: string
+  user_email: string
+  user_name: string | null
+  vehicle_id: string
+  plate: string
+  brand: string | null
+  model: string | null
+  trim: string | null
+  year: number | string | null
+  scanner_firmware: string | null
+  obd_protocol: string | null
+  total_readings: number | string
+  battery_voltage: string | null
+  distance_since_dtc_clear_km: number | string | null
+  co_occurring: Array<string> | null
+  dtc_raw_response: string | null
+}
+
+interface AnomalySessionRow {
+  session_id: string
+  started_at: Date | string
+  duration_s: number | string | null
+  user_id: string
+  user_email: string
+  user_name: string | null
+  vehicle_id: string
+  plate: string
+  brand: string | null
+  model: string | null
+  trim: string | null
+  year: number | string | null
+  scanner_firmware: string | null
+  obd_protocol: string | null
+  total_readings: number | string
+  battery_voltage: string | null
+  distance_since_dtc_clear_km: number | string | null
+  occurrences: Array<{ severity: string; affectedPid: string | null; justification: string }> | null
+}
+
+/**
+ * Las sesiones donde apareció una detección puntual, con "las condiciones" en
+ * las que apareció — la evidencia que la fila agregada de `listDetections` no
+ * puede mostrar. `.claude/rules/scan-detections.md`.
+ *
+ * ── Parte del MISMO `SCAN_SESSIONS_CTE`, no una copia ──────────────────────
+ *
+ * Universo distinto según `of`, igual que `listDetections`: un DTC se lee
+ * sobre todas las `completed` (`session_dtc_snapshots` existe aunque el
+ * escaneo no haya traído telemetría en vivo); una anomalía sólo existe cuando
+ * `has_data`. `ss.catalog_id` ya resuelve el catálogo en dos saltos LEFT — no
+ * hace falta rejoinear specs.
+ *
+ * ── Dos consultas separadas, no un UNION ───────────────────────────────────
+ *
+ * DTC y anomalía no comparten forma (`co_occurring`/`dtc_raw_response` vs
+ * `occurrences`), así que se arman por separado y el caller elige según `of`.
+ */
+export async function detectionSessions(
+  input: { of: DetectionKind; key: string },
+  opts: { signal?: AbortSignal } = {},
+): Promise<DetectionSessionsView> {
+  void opts.signal
+
+  if (input.of === 'dtc') {
+    const rows = await sql<DtcSessionRow>(
+      `
+      with ${SCAN_SESSIONS_CTE}
+      select ds.id                                     as session_id,
+             ds.started_at,
+             extract(epoch from (ds.ended_at - ds.started_at))::int as duration_s,
+             u.id as user_id, u.email as user_email, u.name as user_name,
+             v.id as vehicle_id, v.plate,
+             vc.brand, vc.model, vc.trim, vc.year,
+             ds.scanner_firmware, ds.obd_protocol, ds.total_readings,
+             ds.battery_voltage, ds.distance_since_dtc_clear_km,
+             (select array_agg(c order by c) from unnest(s.codes) as c where c <> $1)
+                                                         as co_occurring,
+             (select dd.raw_response from diagnostic_dtcs dd
+               where dd.session_id = ds.id and dd.code = $1
+               order by dd.created_at desc limit 1)      as dtc_raw_response
+      from session_dtc_snapshots s
+      join scan_sessions ss on ss.id = s.session_id
+      join driving_sessions ds on ds.id = ss.id
+      join users u on u.id = ds.user_id
+      join vehicles v on v.id = ds.vehicle_id
+      left join vehicle_catalogs vc on vc.id = ss.catalog_id
+      where $1 = any(s.codes)
+      order by ds.started_at desc
+      `,
+      [input.key],
+    )
+
+    const sessions: Array<DetectionSessionRow> = rows.map((r) => ({
+      sessionId: r.session_id,
+      startedAt: toIso(r.started_at) as string,
+      durationSeconds: r.duration_s === null ? null : toInt(r.duration_s),
+      userId: r.user_id,
+      userEmail: r.user_email,
+      userName: r.user_name,
+      vehicleId: r.vehicle_id,
+      plate: r.plate,
+      catalogLabel: r.brand
+        ? [r.brand, r.model, r.trim, r.year].filter(Boolean).join(' ')
+        : null,
+      firmware: r.scanner_firmware,
+      obdProtocol: r.obd_protocol,
+      totalReadings: toInt(r.total_readings),
+      batteryVoltage: r.battery_voltage,
+      distanceSinceDtcClearKm:
+        r.distance_since_dtc_clear_km === null ? null : Number(r.distance_since_dtc_clear_km),
+      coOccurringDtcCodes: r.co_occurring ?? [],
+      dtcRawResponse: r.dtc_raw_response,
+      anomalyOccurrences: [],
+    }))
+
+    return { of: 'dtc', key: input.key, sessions }
+  }
+
+  const rows = await sql<AnomalySessionRow>(
+    `
+    with ${SCAN_SESSIONS_CTE}
+    select ds.id                                     as session_id,
+           ds.started_at,
+           extract(epoch from (ds.ended_at - ds.started_at))::int as duration_s,
+           u.id as user_id, u.email as user_email, u.name as user_name,
+           v.id as vehicle_id, v.plate,
+           vc.brand, vc.model, vc.trim, vc.year,
+           ds.scanner_firmware, ds.obd_protocol, ds.total_readings,
+           ds.battery_voltage, ds.distance_since_dtc_clear_km,
+           (
+             select coalesce(jsonb_agg(
+                      jsonb_build_object(
+                        'severity', a->>'severity',
+                        'affectedPid', a->>'affectedPid',
+                        'justification', a->>'justification'
+                      )
+                    ), '[]'::jsonb)
+             from jsonb_array_elements(t.anomalies) a
+             where a->>'type' = $1
+           )                                         as occurrences
+    from driving_telemetry_analysis t
+    join scan_sessions ss on ss.id = t.session_id and ss.has_data
+    join driving_sessions ds on ds.id = ss.id
+    join users u on u.id = ds.user_id
+    join vehicles v on v.id = ds.vehicle_id
+    left join vehicle_catalogs vc on vc.id = ss.catalog_id
+    where exists (select 1 from jsonb_array_elements(t.anomalies) a where a->>'type' = $1)
+    order by ds.started_at desc
+    `,
+    [input.key],
+  )
+
+  const sessions: Array<DetectionSessionRow> = rows.map((r) => ({
+    sessionId: r.session_id,
+    startedAt: toIso(r.started_at) as string,
+    durationSeconds: r.duration_s === null ? null : toInt(r.duration_s),
+    userId: r.user_id,
+    userEmail: r.user_email,
+    userName: r.user_name,
+    vehicleId: r.vehicle_id,
+    plate: r.plate,
+    catalogLabel: r.brand ? [r.brand, r.model, r.trim, r.year].filter(Boolean).join(' ') : null,
+    firmware: r.scanner_firmware,
+    obdProtocol: r.obd_protocol,
+    totalReadings: toInt(r.total_readings),
+    batteryVoltage: r.battery_voltage,
+    distanceSinceDtcClearKm:
+      r.distance_since_dtc_clear_km === null ? null : Number(r.distance_since_dtc_clear_km),
+    coOccurringDtcCodes: [],
+    dtcRawResponse: null,
+    anomalyOccurrences: (r.occurrences ?? []).map((o) => ({
+      severity: o.severity,
+      affectedPid: o.affectedPid,
+      justification: o.justification,
+    })),
+  }))
+
+  return { of: 'anomaly', key: input.key, sessions }
 }

@@ -138,14 +138,29 @@ export const PARTNER_LIST_SORT_KEYS = [
 ] as const
 export type PartnerListSortKey = (typeof PARTNER_LIST_SORT_KEYS)[number]
 
-export const PARTNER_STATUS_FILTERS = ['all', 'active', 'paused', 'archived'] as const
-export type PartnerStatusFilter = (typeof PARTNER_STATUS_FILTERS)[number]
+export const PARTNER_STATUS_FILTER_VALUES = ['active', 'paused', 'archived'] as const
+export type PartnerStatusFilterValue = (typeof PARTNER_STATUS_FILTER_VALUES)[number]
 
-export const PARTNER_STATUS_FILTER_LABELS: Record<PartnerStatusFilter, string> = {
-  all: 'Todos',
+export const PARTNER_STATUS_FILTER_LABELS: Record<PartnerStatusFilterValue, string> = {
   active: 'Publicados',
   paused: 'Pausados',
   archived: 'Archivados',
+}
+
+/**
+ * Un search param multiselect: acepta que llegue un solo valor
+ * (`?partnerZones=CABA`, tipeado a mano) y lo envuelve en array — sin esto
+ * `z.array` falla y `.catch` lo deja vacío EN SILENCIO. Mismo patrón que
+ * `coverageRubros` en `~/lib/partners-coverage`.
+ */
+function multiSelectParam<T extends z.ZodTypeAny>(item: T) {
+  return z
+    .preprocess(
+      (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]),
+      z.array(item),
+    )
+    .catch([])
+    .default([])
 }
 
 export const partnerSearchSchema = z.object({
@@ -153,26 +168,32 @@ export const partnerSearchSchema = z.object({
   /** Solo los que quedaron sin rubros — el chequeo de la consulta 6. */
   onlyInvisible: z.coerce.boolean().catch(false).default(false),
   /**
-   * Estado del partner. Se llama `partnerStatus` y NO `status` a propósito:
+   * Estado del partner. Se llama `partnerStatuses` y NO `status` a propósito:
    * `/solicitudes` ya usa `status` con el enum `partner_application_status`, y
    * dos search params con la misma clave y enums disjuntos rompen el typecheck
    * de la ruta ajena (ver `.claude/rules/notifications.md`).
+   *
+   * Array vacío = sin filtro (todos los estados) — no hay un valor `'all'`
+   * explícito, porque en un grupo multiselect "nada elegido" YA significa
+   * "todos": un chip «Todos» que conviviera con selecciones sería un cuarto
+   * estado ambiguo.
    */
-  partnerStatus: z.enum(PARTNER_STATUS_FILTERS).catch('all').default('all'),
-  /** Slug de `service_categories`: filtra a los que cubren ≥1 servicio de ese rubro. */
-  category: z.string().trim().max(60).optional(),
-  /** Slug de `services`: filtra a los que tienen ese servicio puntual. */
-  service: z.string().trim().max(80).optional(),
+  partnerStatuses: multiSelectParam(z.enum(PARTNER_STATUS_FILTER_VALUES)),
+  /** Slugs de `service_categories`: filtra a los que cubren ≥1 servicio de alguno de esos rubros. */
+  partnerCategories: multiSelectParam(z.string().trim().max(60)),
+  /** Slugs de `services`: filtra a los que tienen alguno de esos servicios puntuales. */
+  partnerServices: multiSelectParam(z.string().trim().max(80)),
   /**
    * Filtra por `coverage_zone`, por CONTENCIÓN (`ILIKE '%…%'`) y no por
-   * igualdad: `coverage_zone` es texto crudo y 4 partners declaran DOS zonas en
-   * el mismo campo (`"CABA, Zona Norte"`, `"Zona Oeste / Zona Norte"`…). Con `=`
-   * esos quedan invisibles justo cuando el operador busca su zona.
+   * igualdad, contra CADA zona elegida: `coverage_zone` es texto crudo y varios
+   * partners declaran DOS zonas en el mismo campo (`"CABA, Zona Norte"`,
+   * `"Zona Oeste / Zona Norte"`…). Con `=` esos quedan invisibles justo cuando
+   * el operador busca su zona.
    *
-   * Calificado por dominio (`partnerZone`, no `zone` pelado): la misma regla que
-   * `partnerStatus` arriba, documentada en `.claude/rules/notifications.md`.
+   * Calificado por dominio (`partnerZones`, no `zone` pelado): la misma regla
+   * que `partnerStatuses` arriba, documentada en `.claude/rules/notifications.md`.
    */
-  partnerZone: z.string().trim().max(200).optional(),
+  partnerZones: multiSelectParam(z.string().trim().max(200)),
   /**
    * Default `services` asc: los de menos servicios —los invisibles— van
    * primero. Reproduce el `ORDER BY count(ps.service_id), p.name` que la regla

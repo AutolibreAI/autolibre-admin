@@ -1,7 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { EyeOff, X } from 'lucide-react'
 import {
-  PARTNER_STATUS_FILTERS,
+  PARTNER_STATUS_FILTER_VALUES,
   PARTNER_STATUS_FILTER_LABELS,
   partnerSearchSchema,
 } from '~/lib/catalog'
@@ -62,20 +62,28 @@ function PartnersListado() {
 
   const invisibleCount = partners.filter((p) => p.invisible).length
 
-  const activeService =
-    search.service != null
-      ? catalog
-          .flatMap((f) => f.services)
-          .find((s) => s.slug === search.service)
-      : undefined
+  const allServices = catalog.flatMap((f) => f.services)
+  const activeServices = search.partnerServices.map(
+    (slug) => allServices.find((s) => s.slug === slug) ?? { slug, name: slug },
+  )
 
   const filtered =
     Boolean(search.q) ||
     search.onlyInvisible ||
-    search.partnerStatus !== 'all' ||
-    search.category != null ||
-    search.service != null ||
-    search.partnerZone != null
+    search.partnerStatuses.length > 0 ||
+    search.partnerCategories.length > 0 ||
+    search.partnerServices.length > 0 ||
+    search.partnerZones.length > 0
+
+  const clearAll = () =>
+    setSearch({
+      q: undefined,
+      onlyInvisible: false,
+      partnerStatuses: [],
+      partnerCategories: [],
+      partnerServices: [],
+      partnerZones: [],
+    })
 
   return (
     <>
@@ -84,6 +92,19 @@ function PartnersListado() {
         subtitle={`${formatInt(partners.length)} ${filtered ? 'con este filtro' : 'partners'}`}
         actions={<SsrTag>ssr: full</SsrTag>}
       />
+
+      {filtered ? (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={clearAll}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <X className="size-3.5" aria-hidden />
+            Limpiar todo
+          </button>
+        </div>
+      ) : null}
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
         <div className="space-y-1.5">
@@ -106,29 +127,45 @@ function PartnersListado() {
           />
         </div>
 
-        <FilterGroup label="Estado">
-          {PARTNER_STATUS_FILTERS.map((s) => (
+        {/*
+          Multiselect: dentro de un grupo la semántica es O ("Motor o Frenos"),
+          entre grupos es Y. Sin chip «Todos» — vacío ya significa todos, y un
+          «Todos» que conviva con selecciones sería un cuarto estado ambiguo.
+        */}
+        <FilterGroup
+          label="Estado"
+          onClear={search.partnerStatuses.length > 0 ? () => setSearch({ partnerStatuses: [] }) : undefined}
+        >
+          {PARTNER_STATUS_FILTER_VALUES.map((s) => (
             <Chip
               key={s}
-              active={search.partnerStatus === s}
-              onClick={() => setSearch({ partnerStatus: s })}
+              active={search.partnerStatuses.includes(s)}
+              onClick={() =>
+                setSearch({
+                  partnerStatuses: search.partnerStatuses.includes(s)
+                    ? search.partnerStatuses.filter((v) => v !== s)
+                    : [...search.partnerStatuses, s],
+                })
+              }
             >
               {PARTNER_STATUS_FILTER_LABELS[s]}
             </Chip>
           ))}
         </FilterGroup>
 
-        <FilterGroup label="Rubro">
-          <Chip active={search.category == null} onClick={() => setSearch({ category: undefined })}>
-            Todos
-          </Chip>
+        <FilterGroup
+          label="Rubro"
+          onClear={search.partnerCategories.length > 0 ? () => setSearch({ partnerCategories: [] }) : undefined}
+        >
           {catalog.map((fam) => (
             <Chip
               key={fam.slug}
-              active={search.category === fam.slug}
+              active={search.partnerCategories.includes(fam.slug)}
               onClick={() =>
                 setSearch({
-                  category: search.category === fam.slug ? undefined : fam.slug,
+                  partnerCategories: search.partnerCategories.includes(fam.slug)
+                    ? search.partnerCategories.filter((s) => s !== fam.slug)
+                    : [...search.partnerCategories, fam.slug],
                 })
               }
             >
@@ -152,18 +189,25 @@ function PartnersListado() {
         {/*
           Texto crudo de `coverage_zone`, sin normalizar a zonas canónicas —
           decisión ya tomada en `.claude/rules/partners-coverage.md`. El
-          predicado del lado del server es por CONTENCIÓN (`ILIKE`), no
-          igualdad: 4 partners declaran dos zonas en el mismo campo de texto.
+          predicado del lado del server es por CONTENCIÓN (`ILIKE`) contra CADA
+          zona elegida, no igualdad: varios partners declaran dos zonas en el
+          mismo campo de texto.
         */}
-        <FilterGroup label="Zona">
-          <Chip active={search.partnerZone == null} onClick={() => setSearch({ partnerZone: undefined })}>
-            Todas
-          </Chip>
+        <FilterGroup
+          label="Zona"
+          onClear={search.partnerZones.length > 0 ? () => setSearch({ partnerZones: [] }) : undefined}
+        >
           {zones.map((zone) => (
             <Chip
               key={zone}
-              active={search.partnerZone === zone}
-              onClick={() => setSearch({ partnerZone: search.partnerZone === zone ? undefined : zone })}
+              active={search.partnerZones.includes(zone)}
+              onClick={() =>
+                setSearch({
+                  partnerZones: search.partnerZones.includes(zone)
+                    ? search.partnerZones.filter((z) => z !== zone)
+                    : [...search.partnerZones, zone],
+                })
+              }
             >
               {zone}
             </Chip>
@@ -171,16 +215,22 @@ function PartnersListado() {
         </FilterGroup>
       </div>
 
-      {search.service != null ? (
+      {activeServices.length > 0 ? (
         <div className="mb-4">
-          <button
-            type="button"
-            onClick={() => setSearch({ service: undefined })}
-            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-brand bg-brand-soft px-2.5 text-xs text-brand"
-          >
-            Servicio: {activeService?.name ?? search.service}
-            <X className="size-3.5" aria-hidden />
-          </button>
+          <FilterGroup label="Servicio" onClear={() => setSearch({ partnerServices: [] })}>
+            {activeServices.map((s) => (
+              <Chip
+                key={s.slug}
+                active
+                onClick={() =>
+                  setSearch({ partnerServices: search.partnerServices.filter((slug) => slug !== s.slug) })
+                }
+              >
+                {s.name}
+                <X className="size-3.5" aria-hidden />
+              </Chip>
+            ))}
+          </FilterGroup>
         </div>
       ) : null}
 
@@ -242,9 +292,13 @@ function PartnersListado() {
                 <Row
                   key={p.id}
                   partner={p}
-                  activeCategory={search.category}
+                  activeCategories={search.partnerCategories}
                   onToggleCategory={(slug) =>
-                    setSearch({ category: search.category === slug ? undefined : slug })
+                    setSearch({
+                      partnerCategories: search.partnerCategories.includes(slug)
+                        ? search.partnerCategories.filter((s) => s !== slug)
+                        : [...search.partnerCategories, slug],
+                    })
                   }
                 />
               ))}
@@ -258,11 +312,11 @@ function PartnersListado() {
 
 function Row({
   partner,
-  activeCategory,
+  activeCategories,
   onToggleCategory,
 }: {
   partner: PartnerListItem
-  activeCategory?: string
+  activeCategories: Array<string>
   onToggleCategory: (slug: string) => void
 }) {
   return (
@@ -304,7 +358,7 @@ function Row({
                 onClick={() => onToggleCategory(c.slug)}
                 className={cn(
                   'rounded border px-1.5 py-px text-xs transition-colors',
-                  c.slug === activeCategory
+                  activeCategories.includes(c.slug)
                     ? 'border-brand bg-brand-soft text-brand'
                     : 'border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground',
                 )}

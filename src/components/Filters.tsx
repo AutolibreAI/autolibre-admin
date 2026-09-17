@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { cn } from '~/lib/utils'
 import type { ReactNode } from 'react'
 
@@ -13,11 +14,34 @@ import type { ReactNode } from 'react'
  * Así que el patrón es uno solo y vive acá.
  */
 
-export function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
+export function FilterGroup({
+  label,
+  onClear,
+  children,
+}: {
+  label: string
+  /**
+   * Limpia TODO el grupo de un click. Opcional: sólo tiene sentido en grupos
+   * multiselect, y sólo se muestra cuando el grupo tiene algo elegido — los
+   * llamadores que ya usaban `FilterGroup` antes de esto no cambian.
+   */
+  onClear?: () => void
+  children: ReactNode
+}) {
   return (
     <div className="space-y-1.5">
-      <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         {label}
+        {onClear ? (
+          <button
+            type="button"
+            onClick={onClear}
+            aria-label={`Limpiar filtro de ${label}`}
+            className="rounded text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <X className="size-3" aria-hidden />
+          </button>
+        ) : null}
       </span>
       <div className="flex flex-wrap gap-1.5">{children}</div>
     </div>
