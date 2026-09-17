@@ -440,6 +440,35 @@ export interface UsageAdoption {
   features: Array<AdoptionFeatureRow>
 }
 
+// ── Preguntas: deuda de patente y de multas, por vehículo (bloque 1b) ───────
+
+export const VEHICLE_DEBT_TYPES = ['taxDebt', 'fineDebt'] as const
+export type VehicleDebtType = (typeof VEHICLE_DEBT_TYPES)[number]
+
+/**
+ * Una fila: de los vehículos a los que SE LES CONSULTÓ esta deuda, cuántos
+ * tienen saldo > 0 hoy.
+ *
+ * A diferencia de `AdoptionFeatureRow` (grano = usuario, `pct` sobre el padrón
+ * real), acá el grano es el VEHÍCULO y `pct` es sobre `queried`, no sobre el
+ * total de vehículos — un auto nunca consultado no es "sin deuda", es "no
+ * sabemos", y meterlo en el denominador diluiría el % con silencio.
+ */
+export interface VehicleDebtRow {
+  key: VehicleDebtType
+  label: string
+  /** Vehículos con una consulta que puede confirmar o descartar esta deuda. */
+  queried: number
+  /** De `queried`, cuántos tienen saldo > 0 hoy. */
+  withDebt: number
+  /** `withDebt` sobre `queried`. 0 si `queried` es 0. */
+  pct: number
+}
+
+export interface VehicleDebtAdoption {
+  rows: Array<VehicleDebtRow>
+}
+
 // ── Preguntas: recurrencia de escaneo (bloque 2 de /metricas) ────────────────
 
 /**

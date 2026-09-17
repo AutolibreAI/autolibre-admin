@@ -24,6 +24,8 @@ import type {
   UnsolvedTaskRow,
   UnsolvedTasks,
   UsageAdoption,
+  VehicleDebtAdoption,
+  VehicleDebtRow,
   VehicleDistBucket,
   VehicleDistribution,
   VehicleDistSearch,
@@ -533,6 +535,97 @@ export async function usageAdoption(
   })
 
   return { totalUsers: total, features }
+}
+
+// ── Preguntas: deuda de patente y de multas, por vehículo ───────────────────
+
+interface VehicleDebtSqlRow {
+  tax_queried: number | string
+  tax_with_debt: number | string
+  fine_queried: number | string
+  fine_with_debt: number | string
+}
+
+/**
+ * Reemplaza: nada — hoy nadie cruza "a cuántos autos se les llegó a consultar
+ * esta deuda" contra "a cuántos de esos les dio positivo". Grano = VEHÍCULO,
+ * no usuario (a diferencia de `usageAdoption`): dos autos del mismo dueño
+ * pueden tener resultados distintos.
+ *
+ * El denominador de cada fila NO es el padrón de vehículos: es "a cuántos se
+ * les preguntó". Uno nunca consultado no es "sin deuda", es "no sabemos", y
+ * contarlo en el denominador diluiría el % con silencio.
+ *
+ * - **Patente**: el universo son los vehículos con una consulta COMPLETADA del
+ *   módulo `tax_debt` en `vehicle_data_queries` — sólo una consulta terminada
+ *   confirma o descarta la deuda (`queued`/`processing`/`failed` no dicen
+ *   nada todavía). `vehicle_tax_debts` sólo tiene fila cuando SÍ hay deuda
+ *   (verificado el 2026-09-17 contra producción: las filas con
+ *   `cleared_at IS NULL` y saldo > 0 son subconjunto exacto de las consultas
+ *   completadas), así que "consultado y sin fila" es "consultado, sin
+ *   deuda" — mismo criterio null-vs-0 que `fine_debt_amount` en
+ *   `listUserVehicleSummaries` (`users.repo.ts`).
+ * - **Multas**: el universo es `vehicle_fine_syncs` (1:1 por vehículo, la
+ *   ÚLTIMA sincronización) — mismo corte que usa `/leads/multas` y la columna
+ *   de multas de `/usuarios`. `status = 'pending'` es lo adeudado (`paid` está
+ *   saldada, `appealed` en disputa), igual que en `fines.repo.ts`. Si este
+ *   predicado diverge del de `fines.repo.ts`/`users.repo.ts`, el panel dice
+ *   dos montos distintos del mismo auto.
+ */
+export async function vehicleDebtAdoption(
+  opts: { signal?: AbortSignal } = {},
+): Promise<VehicleDebtAdoption> {
+  void opts.signal
+
+  const row = await sqlOne<VehicleDebtSqlRow>(`
+    WITH tax_queried AS (
+      SELECT DISTINCT vehicle_id FROM vehicle_data_queries
+       WHERE 'tax_debt' = any(requested_modules) AND status = 'completed'
+    ),
+    fine_debt AS (
+      SELECT f.vehicle_id
+        FROM fines f
+        JOIN vehicle_fine_syncs vfs ON vfs.vehicle_id = f.vehicle_id
+       WHERE f.status = 'pending'
+       GROUP BY f.vehicle_id
+      HAVING sum(f.amount) > 0
+    )
+    SELECT
+      (SELECT count(*) FROM tax_queried)::int AS tax_queried,
+      (SELECT count(*) FROM tax_queried q
+        WHERE EXISTS (
+          SELECT 1 FROM vehicle_tax_debts td
+           WHERE td.vehicle_id = q.vehicle_id
+             AND td.cleared_at IS NULL
+             AND coalesce(td.updated_amount, td.amount) > 0
+        ))::int AS tax_with_debt,
+      (SELECT count(*) FROM vehicle_fine_syncs)::int AS fine_queried,
+      (SELECT count(*) FROM fine_debt)::int AS fine_with_debt
+  `)
+
+  const taxQueried = toInt(row?.tax_queried)
+  const taxWithDebt = toInt(row?.tax_with_debt)
+  const fineQueried = toInt(row?.fine_queried)
+  const fineWithDebt = toInt(row?.fine_with_debt)
+
+  const rows: Array<VehicleDebtRow> = [
+    {
+      key: 'taxDebt',
+      label: 'Deuda de patente',
+      queried: taxQueried,
+      withDebt: taxWithDebt,
+      pct: taxQueried === 0 ? 0 : (taxWithDebt / taxQueried) * 100,
+    },
+    {
+      key: 'fineDebt',
+      label: 'Deuda de multas',
+      queried: fineQueried,
+      withDebt: fineWithDebt,
+      pct: fineQueried === 0 ? 0 : (fineWithDebt / fineQueried) * 100,
+    },
+  ]
+
+  return { rows }
 }
 
 // ── Preguntas: recurrencia de escaneo ───────────────────────────────────────

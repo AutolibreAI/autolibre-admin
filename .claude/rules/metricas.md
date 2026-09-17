@@ -1,11 +1,12 @@
 # Métricas (`/metricas`, antes `/graficos`)
 
 Alcance: `src/routes/_authed/metricas.tsx`, `src/components/PulseCards.tsx`,
-`src/lib/ops.ts` (`ADOPTION_FEATURES`, `UsageAdoption`, `ScanRecurrence`,
-`ProposalStats`, `UnsolvedTasks`, `CANT_MEASURE_YET`), `src/server/ops.repo.ts`
-(`usageAdoption`, `scanRecurrence`, `assistantProposalStats`, `unsolvedTasks`, y
-las de siempre `adoptionSeries` / `vehicleDistribution`), `src/fn/ops.ts`
-(`getUsageAdoption`, `getScanRecurrence`, `getAssistantProposalStats`,
+`src/lib/ops.ts` (`ADOPTION_FEATURES`, `UsageAdoption`, `VehicleDebtAdoption`,
+`ScanRecurrence`, `ProposalStats`, `UnsolvedTasks`, `CANT_MEASURE_YET`),
+`src/server/ops.repo.ts` (`usageAdoption`, `vehicleDebtAdoption`,
+`scanRecurrence`, `assistantProposalStats`, `unsolvedTasks`, y las de siempre
+`adoptionSeries` / `vehicleDistribution`), `src/fn/ops.ts` (`getUsageAdoption`,
+`getVehicleDebtAdoption`, `getScanRecurrence`, `getAssistantProposalStats`,
 `getUnsolvedTasks`).
 
 ## El rename fue sólo un prefijo
@@ -103,12 +104,47 @@ La pregunta es acumulativa ("¿alguna vez usó X?"), igual que la matriz de
 usa nada". Los gráficos de crecimiento de la misma pantalla SÍ tienen unidad
 temporal — es otra pregunta (velocidad, no estado).
 
-## La sección `Preguntas` — cuatro bloques de datos + uno de huecos
+## Bloque 1b — Deuda de patente y de multas, por VEHÍCULO
+
+Agregado el 2026-09-17. Contesta, en absoluto y en %: de los autos a los que
+se les llegó a **consultar** cada deuda, ¿a cuántos les dio positivo? A
+diferencia de la tabla de adopción, el grano es el vehículo (no el usuario) y
+el denominador de cada `%` es `queried` (los consultados), **no** el padrón
+entero — un auto nunca consultado no es "sin deuda", es "no sabemos", y
+meterlo en el denominador diluiría el número con silencio. `vehicleDebtAdoption()`
+en `ops.repo.ts` trae las dos filas en una sola sentencia.
+
+- **Patente** (`vehicle_tax_debts`): el universo NO es "toda fila de esa
+  tabla" — es los vehículos con una consulta **completada** del módulo
+  `tax_debt` en `vehicle_data_queries` (`status = 'completed'`). Sólo una
+  consulta terminada confirma o descarta la deuda; `queued`/`processing`/
+  `failed` todavía no dicen nada. `vehicle_tax_debts` sólo tiene fila cuando
+  SÍ hay deuda —verificado el 2026-09-17 contra producción: toda fila con
+  `cleared_at IS NULL` y saldo > 0 es subconjunto exacto de los vehículos con
+  consulta completada (0 filas de deuda por fuera)— así que "consultado y sin
+  fila en `vehicle_tax_debts`" se lee como "consultado, sin deuda". Mismo
+  criterio null-vs-0 que `fine_debt_amount` en `listUserVehicleSummaries`
+  (`users.repo.ts`).
+- **Multas** (`fines`): el universo es `vehicle_fine_syncs` (1:1 por
+  `vehicle_id`, la ÚLTIMA sincronización) — el mismo corte que ya usan
+  `/leads/multas` y la columna de multas de `/usuarios`. `status = 'pending'`
+  es lo adeudado (`paid` saldada, `appealed` en disputa), igual que en
+  `fines.repo.ts`. Si este predicado diverge del de `fines.repo.ts` /
+  `users.repo.ts`, el panel dice dos montos distintos del mismo auto — misma
+  clase de acoplamiento que `INTERNAL_PREDICATE`.
+
+Al 2026-09-17 contra producción: patente 18/46 consultados (39,1%), multas
+82/114 consultados (71,9%). Sin `SortHeader` ni search param, mismo criterio
+que la tabla de adopción — son dos filas fijas, no una lista para reordenar.
+
+## La sección `Preguntas` — cinco bloques de datos + uno de huecos
 
 El 2026-09-10 el encabezado "Adopción por función" pasó a ser la sección
 `Preguntas`, que contesta (o dice por qué no se puede contestar) un pliego de
-nueve preguntas de producto. La tabla de adopción es el bloque 1; los otros
-tres bloques de datos tienen su propia server function y su propia consulta.
+nueve preguntas de producto — más la deuda por vehículo del bloque 1b, que se
+sumó después y no es parte de ese pliego original. La tabla de adopción es el
+bloque 1; los demás bloques de datos tienen su propia server function y su
+propia consulta.
 
 ### Cada bloque comparte el snapshot de su propia consulta, no entre bloques
 
@@ -198,11 +234,12 @@ se parece. La pregunta 4 queda en "no se puede medir" (bloque 5).
 
 ## Ni una escritura
 
-`usageAdoption`, `scanRecurrence`, `assistantProposalStats` y `unsolvedTasks`
-sólo cuentan. Todo lo que leen lo escribe el backend o el usuario en la app. La
-única escritura del módulo `ops` sigue siendo `ops.excluded_email_domains` desde
-`/operacion` (ver `ops-metrics.md`). Si aparece un `UPDATE`/`INSERT` disparado
-desde `/metricas`, está mal.
+`usageAdoption`, `vehicleDebtAdoption`, `scanRecurrence`,
+`assistantProposalStats` y `unsolvedTasks` sólo cuentan. Todo lo que leen lo
+escribe el backend o el usuario en la app. La única escritura del módulo `ops`
+sigue siendo `ops.excluded_email_domains` desde `/operacion` (ver
+`ops-metrics.md`). Si aparece un `UPDATE`/`INSERT` disparado desde
+`/metricas`, está mal.
 
 ## Cómo verificar un cambio acá
 
@@ -212,7 +249,7 @@ el build) y después `& ".\node_modules\.bin\tsc.CMD" --noEmit`. Más el borde
 server-only:
 
 ```bash
-grep -rl "usageAdoption\|scanRecurrence\|assistantProposalStats\|unsolvedTasks\|INTERNAL_PREDICATE\|POSTGRES_DATABASE_URL" .output/public
+grep -rl "usageAdoption\|vehicleDebtAdoption\|scanRecurrence\|assistantProposalStats\|unsolvedTasks\|INTERNAL_PREDICATE\|POSTGRES_DATABASE_URL" .output/public
 ```
 
 Cero resultados. Y el cuadre de cada bloque: correr las mismas subconsultas con

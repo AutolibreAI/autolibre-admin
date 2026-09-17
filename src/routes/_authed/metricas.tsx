@@ -13,6 +13,7 @@ import {
   type ScanRecurrence,
   type UnsolvedTasks,
   type UsageAdoption,
+  type VehicleDebtAdoption,
   type VehicleDistScope,
 } from '~/lib/ops'
 import {
@@ -22,6 +23,7 @@ import {
   getScanRecurrence,
   getUnsolvedTasks,
   getUsageAdoption,
+  getVehicleDebtAdoption,
   getVehicleDistribution,
 } from '~/fn/ops'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
@@ -66,26 +68,28 @@ export const Route = createFileRoute('/_authed/metricas')({
   loaderDeps: ({ search }) => search,
 
   /**
-   * Siete llamadas en paralelo contra el pool: el pulso del negocio (las 4
-   * cards, compartidas con Inicio), los cuatro bloques con datos de la sección
-   * `Preguntas` (adopción por función, recurrencia de escaneo, propuestas del
-   * chat, tareas sin solución), la serie de crecimiento y la distribución de
-   * autos por usuario. Cada `data` se valida por su propio schema del lado del
-   * server function, así que pasarles la búsqueda entera es inocuo (las claves
-   * de más se descartan).
+   * Ocho llamadas en paralelo contra el pool: el pulso del negocio (las 4
+   * cards, compartidas con Inicio), los cinco bloques con datos de la sección
+   * `Preguntas` (adopción por función, deuda de patente y multas por vehículo,
+   * recurrencia de escaneo, propuestas del chat, tareas sin solución), la serie
+   * de crecimiento y la distribución de autos por usuario. Cada `data` se
+   * valida por su propio schema del lado del server function, así que pasarles
+   * la búsqueda entera es inocuo (las claves de más se descartan).
    */
   loader: async ({ deps, abortController }) => {
     const signal = abortController.signal
-    const [pulse, usage, recurrence, proposals, unsolved, series, distribution] = await Promise.all([
-      getOpsPulse({ signal }),
-      getUsageAdoption({ signal }),
-      getScanRecurrence({ signal }),
-      getAssistantProposalStats({ signal }),
-      getUnsolvedTasks({ signal }),
-      getAdoptionSeries({ data: deps, signal }),
-      getVehicleDistribution({ data: deps, signal }),
-    ])
-    return { pulse, usage, recurrence, proposals, unsolved, series, distribution }
+    const [pulse, usage, debts, recurrence, proposals, unsolved, series, distribution] =
+      await Promise.all([
+        getOpsPulse({ signal }),
+        getUsageAdoption({ signal }),
+        getVehicleDebtAdoption({ signal }),
+        getScanRecurrence({ signal }),
+        getAssistantProposalStats({ signal }),
+        getUnsolvedTasks({ signal }),
+        getAdoptionSeries({ data: deps, signal }),
+        getVehicleDistribution({ data: deps, signal }),
+      ])
+    return { pulse, usage, debts, recurrence, proposals, unsolved, series, distribution }
   },
 
   head: () => ({ meta: [{ title: 'Métricas — AutoLibre' }] }),
@@ -98,10 +102,12 @@ export const Route = createFileRoute('/_authed/metricas')({
  * De arriba abajo:
  *  1. Las 4 cards del pulso (idénticas a Inicio): usuarios, vehículos, partners,
  *     leads. Comparten `PulseRow` — si se ven distintas, una está mal.
- *  2. `Preguntas`: los cinco bloques que contestan (o dicen por qué no se puede
- *     contestar) un pliego de nueve preguntas de producto. Adopción por función,
- *     recurrencia de escaneo, qué produce el chat, tareas sin solución, y un
- *     bloque ámbar con lo que todavía no se puede medir.
+ *  2. `Preguntas`: los bloques que contestan (o dicen por qué no se puede
+ *     contestar) preguntas de producto. Adopción por función, deuda de patente
+ *     y multas por vehículo (grano distinto: es el auto, no el usuario, y el %
+ *     es sobre los consultados), recurrencia de escaneo, qué produce el chat,
+ *     tareas sin solución, y un bloque ámbar con lo que todavía no se puede
+ *     medir.
  *  3. Crecimiento: altas de `users`/`vehicles` por período + la distribución de
  *     autos por usuario. Es lo que Inicio no muestra: la curva, no el snapshot.
  *
@@ -109,7 +115,7 @@ export const Route = createFileRoute('/_authed/metricas')({
  * en Inicio.
  */
 function MetricasPage() {
-  const { pulse, usage, recurrence, proposals, unsolved, series, distribution } =
+  const { pulse, usage, debts, recurrence, proposals, unsolved, series, distribution } =
     Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -139,6 +145,7 @@ function MetricasPage() {
         </p>
 
         <AdoptionTable data={usage} />
+        <VehicleDebtTable data={debts} />
         <ScanRecurrenceTable data={recurrence} />
         <ProposalStatsBlock data={proposals} />
         <UnsolvedTasksTable data={unsolved} />
@@ -360,6 +367,59 @@ function AdoptionTable({ data }: { data: UsageAdoption }) {
           </Table>
         </div>
       )}
+    </section>
+  )
+}
+
+/**
+ * Bloque 1b — Deuda de patente y de multas, por VEHÍCULO (no por usuario).
+ *
+ * A diferencia de `AdoptionTable`, el % de cada fila NO es sobre el padrón —
+ * es sobre los autos a los que SE LES LLEGÓ A CONSULTAR esa deuda
+ * (`row.queried`). Uno nunca consultado no es "sin deuda", es "no sabemos", y
+ * contarlo en el denominador diluiría el número con silencio. Con `queried`
+ * en 0 se muestra "—" en vez de "0 (0,0%)", que se leería como "consultado y
+ * sin deuda".
+ */
+function VehicleDebtTable({ data }: { data: VehicleDebtAdoption }) {
+  return (
+    <section className="mt-8">
+      <h3 className="mb-1 font-heading text-sm font-semibold">
+        Deuda de patente y de multas
+      </h3>
+      <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+        Grano = vehículo, no usuario. El % es sobre los autos a los que se les
+        consultó esa deuda, no sobre el padrón entero.
+      </p>
+
+      <div className="overflow-x-auto rounded-lg border border-border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Deuda</TableHead>
+              <TableHead className="text-right">Consultados</TableHead>
+              <TableHead className="text-right">Con deuda</TableHead>
+              <TableHead className="text-right">%</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.rows.map((row) => (
+              <TableRow key={row.key}>
+                <TableCell className="text-sm">{row.label}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatInt(row.queried)}
+                </TableCell>
+                <TableCell className="text-right font-medium tabular-nums">
+                  {row.queried === 0 ? '—' : formatInt(row.withDebt)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {row.queried === 0 ? '—' : `${row.pct.toFixed(1)}%`}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </section>
   )
 }

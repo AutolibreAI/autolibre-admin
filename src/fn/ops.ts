@@ -21,6 +21,7 @@ import {
   unsolvedTasks,
   upsertExcludedDomain,
   usageAdoption,
+  vehicleDebtAdoption,
   vehicleDistribution,
 } from '~/server/ops.repo'
 import { requestSignal } from '~/server/request'
@@ -36,6 +37,7 @@ import type {
   ScanRecurrence,
   UnsolvedTasks,
   UsageAdoption,
+  VehicleDebtAdoption,
   VehicleDistribution,
 } from '~/lib/ops'
 
@@ -87,6 +89,16 @@ export const getOpsPulse = createServerFn({ method: 'GET' })
 export const getUsageAdoption = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
   .handler(async (): Promise<UsageAdoption> => usageAdoption({ signal: requestSignal() }))
+
+/**
+ * Deuda de patente y de multas por vehículo (`/metricas`). Mismo
+ * `adminMiddleware`: publica cuántos autos reales tienen deuda.
+ */
+export const getVehicleDebtAdoption = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<VehicleDebtAdoption> =>
+    vehicleDebtAdoption({ signal: requestSignal() }),
+  )
 
 /**
  * Las dos series de crecimiento (`/metricas`). Mismo `adminMiddleware` que el
