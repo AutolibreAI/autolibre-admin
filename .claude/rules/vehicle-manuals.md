@@ -1,9 +1,15 @@
 # Manuales de vehículos (`/vehiculos/catalogo`, `/vehiculos/catalogo/:id`)
 
 > Las URLs eran `/catalogo` y `/catalogo/:id`. El 2026-09-06 la sección pasó a
-> llamarse **Vehículos** y el catálogo es una de sus tres pestañas. Todo lo de
-> este documento sigue valiendo tal cual — sólo cambió el prefijo de la ruta.
-> → `.claude/rules/vehicles.md` para las otras dos pestañas.
+> llamarse **Vehículos** y el catálogo era una de sus tres pestañas. El
+> 2026-09-17 esa pestaña se fusionó con "Flota" (`/vehiculos/metricas`, que ya
+> no existe): son la misma consulta con dos universos distintos, ver
+> `.claude/plans/vehiculos-catalogo-flota.md`. Vehículos quedó con dos
+> pestañas. Todo lo de este documento sobre el manual, la subida y la ficha
+> sigue valiendo tal cual — lo que cambió es el listado de arriba de la ficha,
+> ver "Cuándo el cero se muestra" más abajo.
+> → `.claude/rules/vehicles.md` para la otra pestaña (Listado) y para el
+> universo/color nuevos de Catálogo.
 
 Alcance: `src/lib/manuals.ts`, `src/server/backend.ts`, `src/server/catalog.repo.ts`,
 `src/fn/manuals.ts`, `src/components/ManualUploader.tsx`,
@@ -346,11 +352,17 @@ problema que la convención quiere evitar.
 ## Cuándo el cero se muestra
 
 Coherente con `users.md` y opuesto a Inicio: **la lista de manuales muestra el vacío con texto que
-lo explica**, no desaparece. Es el estado de los 83 catálogos al 2026-09-04, así que es la pantalla
-que más se va a ver — y "todavía no hay manual" es distinto de que parezca que algo no cargó.
+lo explica**, no desaparece. Es el estado de la enorme mayoría del catálogo (un solo manual cargado
+contra 210 modelos al 2026-09-17), así que es la celda que más se va a ver — y "todavía no hay
+manual" es distinto de que parezca que algo no cargó.
 
 En el listado, el chip **"Sin manual (N)"** usa `tone="warn"` y no `brand`: acota a filas
-problemáticas, y pintarlo de verde diría "seleccionado y todo bien", que es lo contrario.
+problemáticas, y pintarlo de verde diría "seleccionado y todo bien", que es lo contrario. Desde la
+fusión con Flota (2026-09-17) ese chip **compone con "Con autos"**: activar los dos a la vez —"Con
+autos" + "Sin manual"— es la lista de trabajo real, 179 modelos al relevar. El color de la celda
+"Manuales" ya no depende sólo de si hay manual: depende también de si el modelo tiene algún auto
+cargado — el detalle completo está en `.claude/rules/vehicles.md`, "El color de 'Manuales' depende de
+DOS columnas, no de una".
 
 ## Qué NO se implementó, y por qué
 

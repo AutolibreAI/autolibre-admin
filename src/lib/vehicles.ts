@@ -153,17 +153,42 @@ export const FLEET_SORT_KEYS = [
   'withFines',
   'fineDebt',
   'scanned',
+  'manuals',
   'model',
   'type',
 ] as const
 export type FleetSortKey = (typeof FLEET_SORT_KEYS)[number]
 
+/**
+ * Search params de `/vehiculos/catalogo` — el catálogo entero y su flota,
+ * unificados el 2026-09-17 (antes eran dos pantallas: el listado del catálogo
+ * y `/vehiculos/metricas`, "Flota"). Ver `.claude/plans/vehiculos-catalogo-flota.md`.
+ */
 export const fleetSearchSchema = z.object({
+  /** Busca en marca, modelo y versión. */
   q: z.string().trim().max(80).optional(),
   /** Auto / moto. Ausente = ambos. `vehicleType` y no `type` — ver `vehicleSearchSchema`. */
   vehicleType: z.enum(VEHICLE_TYPES).optional(),
-  sort: z.enum(FLEET_SORT_KEYS).catch('vehicles').default('vehicles'),
-  dir: z.enum(['asc', 'desc']).catch('desc').default('desc'),
+  /** Modelos con ≥1 auto cargado. Era el `where` implícito de la vieja Flota. */
+  onlyWithVehicles: z.coerce.boolean().catch(false).default(false),
+  /**
+   * Modelos SIN ningún auto — hoy el mismo conjunto que `onlyWithoutSpecs`
+   * (ver el comentario de `fleetMetrics` en `vehicles.repo.ts`), pero es una
+   * pregunta distinta y se mantiene aparte a propósito.
+   */
+  onlyWithoutVehicles: z.coerce.boolean().catch(false).default(false),
+  /** Modelos sin ninguna variante de powertrain — no se les puede colgar un auto. */
+  onlyWithoutSpecs: z.coerce.boolean().catch(false).default(false),
+  /** El filtro que motivó la pantalla original: modelos sin manual. */
+  onlyWithoutManual: z.coerce.boolean().catch(false).default(false),
+  /**
+   * `.catch('model')`: un `?sort=banana` de un favorito viejo cae al default.
+   * Es el de la pantalla de entrada (antes Catálogo), no el `vehicles desc`
+   * de la vieja Flota — con 166 de 210 modelos empatados en 1 auto, ordenar
+   * por flota da un orden arbitrario a partir de la fila 15.
+   */
+  sort: z.enum(FLEET_SORT_KEYS).catch('model').default('model'),
+  dir: z.enum(['asc', 'desc']).catch('asc').default('asc'),
 })
 export type FleetSearch = z.infer<typeof fleetSearchSchema>
 
@@ -198,10 +223,19 @@ export interface FleetMetricRow {
 
   /** Manuales cargados para este catálogo. */
   manualCount: number
+
+  /** Variantes de powertrain (`vehicle_catalog_specs`). Cero ⇒ no se le puede colgar un auto. */
+  specCount: number
 }
 
 export interface FleetSummary {
+  /** Vehículos cargados, archivados incluidos. */
   totalVehicles: number
+  /** Subconjunto de `totalVehicles` que está archivado. */
+  archivedVehicles: number
+  /** Todos los modelos del catálogo, tengan o no un auto cargado. */
   totalModels: number
+  /** Subconjunto de `totalModels` con ≥1 auto — antes era el total de la vieja Flota. */
+  modelsWithVehicles: number
   usersWithVehicle: number
 }

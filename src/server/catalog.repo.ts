@@ -1,15 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
-import type {
-  CatalogDetail,
-  CatalogListItem,
-  CatalogManual,
-  CatalogSearch,
-  CatalogSortKey,
-  CatalogSpec,
-  VehicleType,
-} from '~/lib/manuals'
+import type { CatalogDetail, CatalogManual, CatalogSpec, VehicleType } from '~/lib/manuals'
 
 /**
  * Catálogo de vehículos — SOLO LECTURA.
@@ -41,129 +33,6 @@ const toIso = (value: unknown): string | null =>
       : String(value)
 
 const toIsoRequired = (value: unknown): string => toIso(value) ?? ''
-
-// ── Listado ──────────────────────────────────────────────────────────────────
-
-interface CatalogListRow {
-  id: string
-  brand: string
-  model: string
-  year: number | string
-  trim: string
-  vehicle_type: VehicleType
-  manual_count: number | string
-  spec_count: number | string
-  vehicle_count: number | string
-}
-
-/**
- * Mapa cerrado `CatalogSortKey → expresión SQL`. Los dos valores del `ORDER BY`
- * salen de un enum de zod y de este `Record` — nunca de texto suelto. Mismo
- * patrón que `listUsers` y `listVehicles`.
- *
- * `manual_count` / `spec_count` / `vehicle_count` son alias del SELECT y
- * Postgres deja ordenar por ellos en el nivel superior sin envoltorio (a
- * diferencia de un `WHERE`, que sí lo necesitaría). Los filtros de esta
- * consulta van todos sobre columnas de `c`, así que no hace falta.
- */
-const CATALOG_SORT_COLUMNS: Record<CatalogSortKey, string> = {
-  model: 'model_sort',
-  type: 'c.vehicle_type',
-  manuals: 'manual_count',
-  specs: 'spec_count',
-  vehicles: 'vehicle_count',
-}
-
-/**
- * El listado del catálogo.
- *
- * ── LA TRAMPA DE ESTA CONSULTA: `vehicles` NO apunta al catálogo ────────────
- *
- * Apunta al SPEC. `vehicles.vehicle_catalog_spec_id` es NOT NULL con FK a
- * `vehicle_catalog_specs`, y recién ese tiene `vehicle_catalog_id`. La versión
- * obvia —`where v.vehicle_catalog_id = c.id`— ni siquiera compila, pero la
- * versión sutilmente equivocada (contar specs y llamarlo vehículos) da un
- * número plausible y MÁS CHICO que el real. Un número plausible y equivocado no
- * lo cachás nunca.
- *
- * ── Subconsultas escalares, no JOINs ────────────────────────────────────────
- *
- * Tres contadores sobre tres tablas distintas: con `left join` + `group by` el
- * primero se multiplica por las filas del segundo. Es el fan-out, y su modo de
- * falla es el peor: da un número más grande, no un error. Mismo criterio que
- * `listUsers` en `users.repo.ts`.
- */
-export async function listCatalogs(
-  search: CatalogSearch,
-  opts: { signal?: AbortSignal } = {},
-): Promise<Array<CatalogListItem>> {
-  void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
-
-  const params: Array<unknown> = []
-  const where: Array<string> = []
-
-  if (search.q) {
-    params.push(`%${search.q}%`)
-    // Se busca sobre las tres columnas de texto juntas para que "corolla xei"
-    // encuentre algo. Concatenar con espacios y no con `||` pelado: sin el
-    // separador, "fordka" matchearía "Ford" + "Ka".
-    where.push(`(c.brand || ' ' || c.model || ' ' || c.trim) ILIKE $${params.length}`)
-  }
-
-  if (search.onlyWithoutManual) {
-    where.push(
-      `NOT EXISTS (SELECT 1 FROM vehicle_catalog_manuals m WHERE m.catalog_id = c.id)`,
-    )
-  }
-
-  if (search.vehicleType) {
-    params.push(search.vehicleType)
-    where.push(`c.vehicle_type = $${params.length}::vehicle_type`)
-  }
-
-  const sortColumn = CATALOG_SORT_COLUMNS[search.sort]
-
-  const rows = await sql<CatalogListRow>(
-    `SELECT c.id,
-            c.brand,
-            c.model,
-            c.year,
-            c.trim,
-            c.vehicle_type,
-            lower(c.brand || ' ' || c.model || ' ' || c.trim) AS model_sort,
-            (SELECT count(*)::int
-               FROM vehicle_catalog_manuals m
-              WHERE m.catalog_id = c.id)             AS manual_count,
-            (SELECT count(*)::int
-               FROM vehicle_catalog_specs s
-              WHERE s.vehicle_catalog_id = c.id)     AS spec_count,
-            -- Dos saltos, no uno. Ver el comentario de arriba.
-            (SELECT count(*)::int
-               FROM vehicles v
-               JOIN vehicle_catalog_specs s ON s.id = v.vehicle_catalog_spec_id
-              WHERE s.vehicle_catalog_id = c.id)     AS vehicle_count
-       FROM vehicle_catalogs c
-      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      -- El desempate reproduce el orden histórico (marca+modelo, y el año
-      -- DESCENDENTE dentro del modelo: los autos nuevos son los que todavía no
-      -- tienen manual). Con sort='model' asc, eso ES el orden.
-      ORDER BY ${sortColumn} ${search.dir} NULLS LAST, model_sort ASC, c.year DESC
-      LIMIT 500`,
-    params,
-  )
-
-  return rows.map((row) => ({
-    id: row.id,
-    brand: row.brand,
-    model: row.model,
-    year: toInt(row.year),
-    trim: row.trim,
-    vehicleType: row.vehicle_type,
-    manualCount: toInt(row.manual_count),
-    specCount: toInt(row.spec_count),
-    vehicleCount: toInt(row.vehicle_count),
-  }))
-}
 
 // ── Ficha ────────────────────────────────────────────────────────────────────
 

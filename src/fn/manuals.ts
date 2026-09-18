@@ -4,10 +4,9 @@ import {
   MANUAL_MIME_TYPE,
   MAX_MANUAL_FILE_SIZE_BYTES,
   MAX_MANUAL_FILE_SIZE_MB,
-  catalogSearchSchema,
   manualUploadFieldsSchema,
 } from '~/lib/manuals'
-import { findCatalog, listCatalogs } from '~/server/catalog.repo'
+import { findCatalog } from '~/server/catalog.repo'
 import {
   confirmUpload,
   fileSignedUrl,
@@ -16,7 +15,7 @@ import {
 } from '~/server/backend'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { CatalogDetail, CatalogListItem } from '~/lib/manuals'
+import type { CatalogDetail } from '~/lib/manuals'
 
 /**
  * Todo pasa por `adminMiddleware`, las lecturas incluidas.
@@ -28,14 +27,11 @@ import type { CatalogDetail, CatalogListItem } from '~/lib/manuals'
  * bucket y `getManualDownloadUrl` una de lectura — la simetría es lo que hace
  * que nadie tenga que decidir caso por caso cuál de estas funciones era la
  * delicada.
+ *
+ * El listado del catálogo (`listVehicleCatalogs`) se borró el 2026-09-17: vive
+ * ahora en `fleetMetricsFn` de `~/fn/vehicles`, que `/vehiculos/catalogo`
+ * unificó con la vieja Flota.
  */
-
-export const listVehicleCatalogs = createServerFn({ method: 'GET' })
-  .middleware([adminMiddleware])
-  .validator(catalogSearchSchema)
-  .handler(async ({ data }): Promise<Array<CatalogListItem>> =>
-    listCatalogs(data, { signal: requestSignal() }),
-  )
 
 export const getVehicleCatalog = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])

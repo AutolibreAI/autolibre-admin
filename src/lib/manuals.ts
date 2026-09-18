@@ -102,21 +102,6 @@ export { VEHICLE_TYPES, VEHICLE_TYPE_LABELS, vehicleTypeLabel, type VehicleType 
 
 // ── Contratos de lectura ─────────────────────────────────────────────────────
 
-export interface CatalogListItem {
-  id: string
-  brand: string
-  model: string
-  year: number
-  trim: string
-  vehicleType: VehicleType
-  /** Cuántos manuales tiene. Cero es el estado normal hoy — y es el que se busca. */
-  manualCount: number
-  /** Cuántas variantes de powertrain. Contexto, no acción. */
-  specCount: number
-  /** Cuántos vehículos de usuarios apuntan a este catálogo: a cuánta gente le sirve el manual. */
-  vehicleCount: number
-}
-
 export interface CatalogSpec {
   id: string
   engine: string | null
@@ -181,39 +166,12 @@ export function catalogTitle(c: {
 }
 
 // ── Search params ────────────────────────────────────────────────────────────
-
-/**
- * El `ORDER BY` del listado. Cada clave mapea a una expresión SQL en
- * `CATALOG_SORT_COLUMNS` de `catalog.repo.ts` — nunca texto suelto en el
- * `ORDER BY`, mismo patrón que `listUsers`.
- */
-export const CATALOG_SORT_KEYS = ['model', 'type', 'manuals', 'specs', 'vehicles'] as const
-export type CatalogSortKey = (typeof CATALOG_SORT_KEYS)[number]
-
-export const catalogSearchSchema = z.object({
-  /** Busca en marca, modelo y versión. */
-  q: z.string().trim().max(120).optional(),
-  /**
-   * El filtro que motiva la pantalla: los catálogos arrancaron con CERO
-   * manuales. Este chip es la lista de trabajo pendiente.
-   */
-  onlyWithoutManual: z.coerce.boolean().catch(false).default(false),
-  /**
-   * Auto / moto. Ausente = ambos. Se llama `vehicleType` y no `type` porque
-   * `/chats` ya usa `type` con otro enum y TanStack unifica los nombres de
-   * search params entre rutas — ver `vehicleSearchSchema` en `~/lib/vehicles`.
-   */
-  vehicleType: z.enum(VEHICLE_TYPES).optional(),
-  /**
-   * `.catch('model')`: un `?sort=banana` de un favorito viejo cae al default —
-   * que reproduce el orden histórico (marca, modelo, año desc). Los demás
-   * ordenamientos llevan ese mismo criterio como desempate.
-   */
-  sort: z.enum(CATALOG_SORT_KEYS).catch('model').default('model'),
-  dir: z.enum(['asc', 'desc']).catch('asc').default('asc'),
-})
-
-export type CatalogSearch = z.infer<typeof catalogSearchSchema>
+//
+// `catalogSearchSchema` / `CATALOG_SORT_KEYS` vivían acá y se borraron el
+// 2026-09-17 al unificar el listado del catálogo con la vieja Flota
+// (`/vehiculos/metricas`) en una sola pantalla. El schema que sobrevive es
+// `fleetSearchSchema` en `~/lib/vehicles` — ver
+// `.claude/plans/vehiculos-catalogo-flota.md`.
 
 // ── Borde de escritura ───────────────────────────────────────────────────────
 

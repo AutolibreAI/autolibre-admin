@@ -202,8 +202,9 @@ export async function compatibilityMatrix(
      * Se busca sobre la etiqueta ARMADA —marca, modelo, versión y año— para que
      * "corolla xei" y "vento 2007" encuentren algo. `concat_ws` ignora los
      * NULL, así que un catálogo sin `trim` no rompe la búsqueda ni matchea de
-     * más. Mismo criterio de separador que `listCatalogs`: sin él "fordka"
-     * matchearía "Ford" + "Ka".
+     * más. Mismo criterio de separador que `fleetMetrics` en
+     * `vehicles.repo.ts` (su `model_sort` concatena marca+modelo+trim igual):
+     * sin él "fordka" matchearía "Ford" + "Ka".
      */
     rowFilter = `where concat_ws(' ', vc.brand, vc.model, vc.trim, vc.year::text) ilike $${params.length}`
   }

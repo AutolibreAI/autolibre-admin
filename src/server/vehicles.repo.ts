@@ -259,6 +259,7 @@ interface FleetRow {
   fine_debt_total: number | string
   scanned_ok: number | string
   manual_count: number | string
+  spec_count: number | string
 }
 
 const FLEET_SORT_COLUMNS: Record<FleetSortKey, string> = {
@@ -268,20 +269,37 @@ const FLEET_SORT_COLUMNS: Record<FleetSortKey, string> = {
   withFines: 'with_fines',
   fineDebt: 'fine_debt_total',
   scanned: 'scanned_ok',
+  manuals: 'manual_count',
   model: 'model_sort',
   type: 'vehicle_type',
 }
 
 /**
- * La flota agrupada por MODELO del catálogo, no por spec.
+ * El catálogo entero, con su flota. Un modelo por fila — grano `vehicle_catalogs`,
+ * no el spec.
  *
  * Es la misma decisión que `/escaneres` (`scanner-compatibility.md`): bajar al
  * spec parte el mismo auto en dos filas cuando dos specs difieren sólo en un
- * campo que el proveedor no devolvió. El grano es `vehicle_catalogs`.
+ * campo que el proveedor no devolvió.
  *
- * El `join lateral` cuenta todo lo del modelo en una pasada; `where
- * vs.vehicle_count > 0` deja fuera los catálogos que nadie cargó — no son
- * flota.
+ * ── El universo es el SUPERCONJUNTO: todos los modelos, con o sin auto ──────
+ *
+ * Hasta el 2026-09-17 esta consulta filtraba `vehicle_count > 0` ("no son
+ * flota") y sólo alimentaba `/vehiculos/metricas`, separada del listado del
+ * catálogo. Se sacó al unificar las dos pantallas: al 2026-09-17 hay 30
+ * modelos —de 210— sin UN SOLO vehículo, y esconderlos por default es el
+ * error que hace que alguien busque un modelo, no lo vea y concluya que no
+ * existe. Los 30 entran con sus contadores en cero: el `join lateral … on
+ * true` es un agregado sin `GROUP BY`, así que sigue devolviendo exactamente
+ * una fila aunque el modelo no tenga autos, sin reescribir nada del `lateral`.
+ *
+ * Y esos 30 no son un resto histórico: `vehicles` apunta al SPEC, no al
+ * catálogo (`vehicle-manuals.md`, trampa 3), así que un catálogo sin ninguna
+ * variante cargada no puede tener autos, ni hoy ni nunca, hasta que alguien le
+ * cree el spec. Verificado el 2026-09-17: el conjunto "0 variantes" y el
+ * conjunto "0 autos" son EXACTAMENTE el mismo — de ahí los filtros
+ * `onlyWithoutVehicles` / `onlyWithoutSpecs` de abajo, que hoy seleccionan lo
+ * mismo pero son preguntas distintas y se tratan como tales.
  */
 export async function fleetMetrics(
   search: FleetSearch,
@@ -290,7 +308,7 @@ export async function fleetMetrics(
   void opts.signal
 
   const params: Array<unknown> = []
-  const outerWhere: Array<string> = ['vehicle_count > 0']
+  const outerWhere: Array<string> = []
 
   if (search.vehicleType) {
     params.push(search.vehicleType)
@@ -301,6 +319,14 @@ export async function fleetMetrics(
     params.push(`%${search.q}%`)
     outerWhere.push(`model_sort ILIKE $${params.length}`)
   }
+
+  if (search.onlyWithVehicles) outerWhere.push('vehicle_count > 0')
+  if (search.onlyWithoutVehicles) outerWhere.push('vehicle_count = 0')
+  if (search.onlyWithoutSpecs) outerWhere.push('spec_count = 0')
+  // `manual_count = 0`, ya calculado en el SELECT — reemplaza el `NOT EXISTS`
+  // que usaba `listCatalogs` (borrado al unificar esta pantalla con el
+  // listado del catálogo).
+  if (search.onlyWithoutManual) outerWhere.push('manual_count = 0')
 
   const sortColumn = FLEET_SORT_COLUMNS[search.sort]
 
@@ -313,7 +339,8 @@ export async function fleetMetrics(
         lower(c.brand || ' ' || c.model || ' ' || c.trim) as model_sort,
         vs.vehicle_count, vs.archived_count, vs.user_count, vs.avg_odometer,
         vs.with_vtv, vs.with_insurance, vs.with_fines, vs.fine_debt_total, vs.scanned_ok,
-        (select count(*)::int from vehicle_catalog_manuals m where m.catalog_id = c.id) as manual_count
+        (select count(*)::int from vehicle_catalog_manuals m where m.catalog_id = c.id) as manual_count,
+        (select count(*)::int from vehicle_catalog_specs s where s.vehicle_catalog_id = c.id) as spec_count
       from vehicle_catalogs c
       join lateral (
         select
@@ -339,8 +366,9 @@ export async function fleetMetrics(
         where s.vehicle_catalog_id = c.id
       ) vs on true
     ) t
-    where ${outerWhere.join(' and ')}
+    ${outerWhere.length ? `where ${outerWhere.join(' and ')}` : ''}
     order by ${sortColumn} ${search.dir} nulls last, model_sort
+    limit 500
     `,
     params,
   )
@@ -363,13 +391,14 @@ export async function fleetMetrics(
       fineDebtTotal: toInt(r.fine_debt_total),
       scannedOk: toInt(r.scanned_ok),
       manualCount: toInt(r.manual_count),
+      specCount: toInt(r.spec_count),
     }),
   )
 }
 
 /**
- * Los tres números de arriba de la pestaña de métricas. Una sentencia, un
- * snapshot — mismo criterio que el censo de usuarios.
+ * Los números de arriba de la pantalla. Una sentencia, un snapshot — mismo
+ * criterio que el censo de usuarios.
  */
 export async function fleetSummary(
   opts: { signal?: AbortSignal } = {},
@@ -378,20 +407,26 @@ export async function fleetSummary(
 
   const row = await sqlOne<{
     total_vehicles: number
+    archived_vehicles: number
     total_models: number
+    models_with_vehicles: number
     users_with_vehicle: number
   }>(
     `select
        (select count(*)::int from vehicles) as total_vehicles,
+       (select count(*)::int from vehicles where archived) as archived_vehicles,
+       (select count(*)::int from vehicle_catalogs) as total_models,
        (select count(distinct s.vehicle_catalog_id)::int
           from vehicles v
-          join vehicle_catalog_specs s on s.id = v.vehicle_catalog_spec_id) as total_models,
+          join vehicle_catalog_specs s on s.id = v.vehicle_catalog_spec_id) as models_with_vehicles,
        (select count(distinct user_id)::int from vehicles) as users_with_vehicle`,
   )
 
   return {
     totalVehicles: toInt(row?.total_vehicles),
+    archivedVehicles: toInt(row?.archived_vehicles),
     totalModels: toInt(row?.total_models),
+    modelsWithVehicles: toInt(row?.models_with_vehicles),
     usersWithVehicle: toInt(row?.users_with_vehicle),
   }
 }

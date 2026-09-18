@@ -1,22 +1,24 @@
 import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
 
 /**
- * `/vehiculos` — el bloque de `vehicle-management`, en tres pestañas.
+ * `/vehiculos` — el bloque de `vehicle-management`, en dos pestañas.
  *
- * Antes se llamaba `/catalogo` y era una sola pantalla. Ahora la sección se
- * llama Vehículos y el catálogo es una de sus tres pestañas:
+ * Antes se llamaba `/catalogo` y era una sola pantalla. Después tuvo tres
+ * pestañas (Catálogo · Listado · Flota); Catálogo y Flota se fusionaron el
+ * 2026-09-17 (`.claude/plans/vehiculos-catalogo-flota.md`), porque eran la
+ * misma consulta con dos universos distintos y el universo que cada una
+ * escondía era justo el dato que la otra necesitaba:
  *
- *  - **Catálogo** — los modelos (`vehicle_catalogs`) y sus manuales. Lo que
- *    estaba en `/catalogo`, movido tal cual a `/vehiculos/catalogo`. Sigue
- *    siendo la ÚNICA pantalla del panel cuyas escrituras no son SQL (sube PDFs
- *    por HTTP al backend hex). → `.claude/rules/vehicle-manuals.md`
+ *  - **Catálogo** — los modelos (`vehicle_catalogs`), su flota y sus manuales.
+ *    Sigue siendo la ÚNICA pantalla del panel cuyas escrituras no son SQL
+ *    (sube PDFs por HTTP al backend hex). → `.claude/rules/vehicle-manuals.md`
  *  - **Listado** — cada `vehicles` cargado en el sistema, uno por fila, sin
  *    deduplicar. Con lo que cuelga de cada auto: VTV, seguro, multas, deuda,
  *    tareas, escaneos.
- *  - **Flota** — los `vehicles` agrupados por modelo del catálogo: cuántos autos
- *    de cada uno, y las métricas que eso habilita. La ruta sigue siendo
- *    `/vehiculos/metricas`; sólo la etiqueta es "Flota", para no chocar con el
- *    ítem de nav de primer nivel "Métricas".
+ *
+ * `/vehiculos/metricas` ("Flota") ya no existe y no deja redirect — mismo
+ * criterio que `/records`/`/analytics`/`/settings` (2026-08-30): nadie linkeaba
+ * a esa pestaña desde afuera.
  *
  * `/escaneres` NO es una pestaña de acá aunque comparta el eje (los modelos del
  * catálogo): es un hecho acumulado (qué hardware enganchó con qué auto), no un
@@ -38,7 +40,6 @@ interface Tab {
 const TABS: ReadonlyArray<Tab> = [
   { to: '/vehiculos/catalogo', label: 'Catálogo' },
   { to: '/vehiculos/listado', label: 'Listado' },
-  { to: '/vehiculos/metricas', label: 'Flota' },
 ]
 
 function VehiculosLayout() {

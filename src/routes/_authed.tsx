@@ -142,12 +142,12 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * de los vehículos. Las cuatro de arriba cubren el recorrido taller ↔ usuario;
    * ésta cubre el auto.
    *
-   * Tiene tres pestañas (Catálogo · Listado · Flota; la ruta de Flota sigue
-   * siendo `/vehiculos/metricas`). El Catálogo —que era
-   * `/catalogo`, ahora `/vehiculos/catalogo`— es la ÚNICA pantalla del panel
-   * cuyas escrituras no son SQL: sube PDFs por HTTP contra el backend hex,
-   * porque el archivo va a DigitalOcean Spaces y ninguna cantidad de SQL lo
-   * pone ahí. → `.claude/rules/vehicle-manuals.md`
+   * Tiene dos pestañas (Catálogo · Listado; la tercera, "Flota", se fusionó
+   * con Catálogo el 2026-09-17). El Catálogo —que era `/catalogo`, ahora
+   * `/vehiculos/catalogo`— es la ÚNICA pantalla del panel cuyas escrituras no
+   * son SQL: sube PDFs por HTTP contra el backend hex, porque el archivo va a
+   * DigitalOcean Spaces y ninguna cantidad de SQL lo pone ahí.
+   * → `.claude/rules/vehicle-manuals.md`
    */
   { to: "/vehiculos", label: "Vehículos", icon: Car },
   /**

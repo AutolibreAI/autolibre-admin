@@ -885,7 +885,8 @@ export async function getPartnerServices(
      * Con un join, cada fila de `partner_links` multiplicaría la fila del
      * partner y habría que agrupar por sus quince columnas. Es el fan-out, y su
      * modo de falla es el de siempre acá: no rompe, devuelve un número más
-     * grande. Mismo criterio que las subconsultas escalares de `listCatalogs`.
+     * grande. Mismo criterio que las subconsultas escalares de `fleetMetrics`
+     * en `vehicles.repo.ts`.
      *
      * El `order by` no es cosmético: sin él Postgres puede devolver los links
      * en cualquier orden entre dos requests, y la lista de "otros" del
