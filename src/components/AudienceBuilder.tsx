@@ -59,22 +59,41 @@ import { cn } from '~/lib/utils'
  * **quien manda ve a quién le manda antes de apretar Enviar**. Una audiencia que
  * se resuelve del lado del servidor en el momento del envío le manda un push a
  * un grupo que nadie miró.
+ *
+ * ── El modo `schedule`, para `.claude/plans/notificaciones-automaticas.md` ──
+ *
+ * Una regla recurrente no puede resolver a destinatarios explícitos: la
+ * audiencia de "dentro de dos días a las 19" todavía no existe. En ese modo no
+ * hay botón "Usar N como destinatarios" — el componente expone `conditions` al
+ * padre por `onConditionsChange` cada vez que cambia, para que el formulario
+ * de la regla lo guarde tal cual, y la vista previa se muestra igual pero
+ * rotulada como "así es HOY" (`.claude/plans/…`, §9).
  */
 export function AudienceBuilder({
   disabled,
+  mode = 'send',
+  initialConditions,
   onUse,
+  onConditionsChange,
 }: {
   disabled: boolean
-  onUse: (recipients: AudiencePreview['recipients'], conditions: Array<AudienceCondition>) => void
+  mode?: 'send' | 'schedule'
+  initialConditions?: Array<AudienceCondition>
+  /** Requerido en modo `send`; ignorado en modo `schedule`. */
+  onUse?: (recipients: AudiencePreview['recipients'], conditions: Array<AudienceCondition>) => void
+  /** Se llama con la lista completa cada vez que cambia. Sólo en modo `schedule`. */
+  onConditionsChange?: (conditions: Array<AudienceCondition>) => void
 }) {
   /**
    * El default no es vacío: "vehículos cargados = 0" es la condición que motivó
    * toda esta pantalla, y arrancar con una fila armada muestra cómo se usa el
    * armador sin un párrafo de instrucciones.
    */
-  const [conditions, setConditions] = useState<Array<AudienceCondition>>([
-    { field: 'vehicles', op: 'eq', value: 0 },
-  ])
+  const [conditions, setConditions] = useState<Array<AudienceCondition>>(
+    initialConditions && initialConditions.length > 0
+      ? initialConditions
+      : [{ field: 'vehicles', op: 'eq', value: 0 }],
+  )
   const [preview, setPreview] = useState<AudiencePreview | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -128,6 +147,16 @@ export function AudienceBuilder({
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- la huella cubre a `conditions`
   }, [fingerprint, ready])
+
+  /**
+   * Modo `schedule`: el padre necesita la lista completa para guardarla, no
+   * sólo para previsualizarla — a diferencia del modo `send`, acá no hay un
+   * botón "Usar N" que la entregue una sola vez al final.
+   */
+  useEffect(() => {
+    onConditionsChange?.(conditions)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- la huella cubre a `conditions`
+  }, [fingerprint])
 
   function updateCondition(index: number, next: AudienceCondition) {
     setConditions((prev) => prev.map((c, i) => (i === index ? next : c)))
@@ -218,6 +247,13 @@ export function AudienceBuilder({
               ) : null}
             </div>
 
+            {mode === 'schedule' ? (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Así es HOY. Cada corrida de la regla recalcula la audiencia en su propio momento —
+                este número es sólo para orientarte mientras la armás.
+              </p>
+            ) : null}
+
             {preview && preview.matched > 0 ? (
               <p className="text-xs leading-relaxed text-muted-foreground">
                 {preview.recipients
@@ -247,17 +283,19 @@ export function AudienceBuilder({
               </p>
             ) : null}
 
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={disabled || loading || !preview || preview.recipients.length === 0}
-              onClick={() => {
-                if (preview) onUse(preview.recipients, conditions)
-              }}
-            >
-              Usar {formatInt(preview?.recipients.length ?? 0)} como destinatarios
-            </Button>
+            {mode === 'send' ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={disabled || loading || !preview || preview.recipients.length === 0}
+                onClick={() => {
+                  if (preview) onUse?.(preview.recipients, conditions)
+                }}
+              >
+                Usar {formatInt(preview?.recipients.length ?? 0)} como destinatarios
+              </Button>
+            ) : null}
           </div>
         )}
       </div>

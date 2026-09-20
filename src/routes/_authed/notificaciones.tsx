@@ -1,7 +1,7 @@
 import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
 
 /**
- * `/notificaciones` — la sección, en dos pestañas.
+ * `/notificaciones` — la sección, en tres pestañas.
  *
  *  - **Historial** (`/notificaciones`, la de siempre) — una fila por
  *    notificación: de qué le avisamos a quién y si le llegó. Es donde cae
@@ -9,6 +9,11 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  *    NO redirige a ningún lado. → `.claude/rules/notifications.md`
  *  - **Envíos** (`/notificaciones/envios`) — los envíos ad-hoc agrupados, con lo
  *    que pasó después de cada uno. → `~/lib/campaigns`
+ *  - **Reglas** (`/notificaciones/reglas`) — envíos automáticos recurrentes:
+ *    se crean, se editan, se pausan/reaniman y se borran, pero TODAVÍA no
+ *    mandan nada — el motor que las dispara es una fase aparte, bloqueada por
+ *    una decisión de autenticación que sigue abierta.
+ *    → `.claude/plans/notificaciones-automaticas.md`
  *
  * ── Por qué el índice no redirige, a diferencia de `/leads` y `/vehiculos` ───
  *
@@ -32,6 +37,7 @@ const TABS = [
    */
   { to: '/notificaciones', label: 'Historial', exact: true },
   { to: '/notificaciones/envios', label: 'Envíos', exact: false },
+  { to: '/notificaciones/reglas', label: 'Reglas', exact: false },
 ] as const
 
 function NotificationsLayout() {
