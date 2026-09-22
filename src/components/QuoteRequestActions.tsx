@@ -97,10 +97,20 @@ export function QuoteRequestActions({
   quoteRequestId,
   status,
   closeReasonCode,
+  loadedProposals,
 }: {
   quoteRequestId: string
   status: string
   closeReasonCode: string | null
+  /**
+   * Cuántos presupuestos hay cargados en `quote_request_proposals` (migración
+   * 015). Sólo SIEMBRA el campo de «Marcar respondido» — la cantidad que
+   * termina en `proposals_count` es la que el operador confirme, porque son
+   * dos cosas distintas: uno es lo que se cargó en el panel, el otro es lo que
+   * se le pasó a la persona. Casi siempre coinciden; cuando no, gana lo que el
+   * operador escriba, y `<QuoteResponses/>` avisa de la diferencia.
+   */
+  loadedProposals: number
 }) {
   const { busy, flash, run } = useQuoteAction()
 
@@ -135,7 +145,12 @@ export function QuoteRequestActions({
             {status === 'received' ? (
               <ContactedForm quoteRequestId={quoteRequestId} busy={busy} run={run} />
             ) : status === 'contacted' ? (
-              <AnsweredForm quoteRequestId={quoteRequestId} busy={busy} run={run} />
+              <AnsweredForm
+                quoteRequestId={quoteRequestId}
+                busy={busy}
+                run={run}
+                loadedProposals={loadedProposals}
+              />
             ) : (
               <div>
                 <FormTitle>Respondido</FormTitle>
@@ -192,9 +207,23 @@ function ContactedForm({ quoteRequestId, busy, run }: { quoteRequestId: string; 
 
 // ── contacted → answered ─────────────────────────────────────────────────────
 
-function AnsweredForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy: boolean; run: RunFn }) {
+function AnsweredForm({
+  quoteRequestId,
+  busy,
+  run,
+  loadedProposals,
+}: {
+  quoteRequestId: string
+  busy: boolean
+  run: RunFn
+  loadedProposals: number
+}) {
   const countId = useId()
-  const [count, setCount] = useState('')
+  // Siembra con lo que haya cargado en la tarjeta de Presupuestos, pero SÓLO
+  // como valor inicial: el operador lo puede corregir, y lo que viaja es lo
+  // que quede escrito. Con cero cargados arranca vacío en vez de en "0" —
+  // mandar un cero que nadie escribió diría "llamamos y no conseguimos nada".
+  const [count, setCount] = useState(loadedProposals > 0 ? String(loadedProposals) : '')
   const [auditNote, setAuditNote] = useState('')
 
   // Sólo dígitos: `Number('')` es 0, y un campo vacío mandado como cero diría
@@ -241,7 +270,12 @@ function AnsweredForm({ quoteRequestId, busy, run }: { quoteRequestId: string; b
           placeholder="0"
           className="w-28 text-xs tabular-nums"
         />
-        <p className="text-xs text-muted-foreground">Cero es válido: llamamos y no conseguimos nada.</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Cero es válido: llamamos y no conseguimos nada.
+          {loadedProposals > 0
+            ? ` Viene sembrado con los ${loadedProposals} presupuestos cargados arriba; corregilo si le pasaste otra cantidad.`
+            : ''}
+        </p>
       </div>
       <AuditNoteField value={auditNote} onChange={setAuditNote} />
       <Button type="submit" size="sm" disabled={busy || !valid} className="gap-1.5">

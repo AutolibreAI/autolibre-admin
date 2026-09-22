@@ -14,9 +14,16 @@ import {
   type QuoteRequestDetail,
 } from '~/lib/quote-requests'
 import { getQuoteRequestFn } from '~/fn/quote-requests'
-import { getServiceCatalog, listPartnerCandidatesFn, listPartnerZonesFn } from '~/fn/partners'
+import { listQuoteResponsesFn } from '~/fn/quote-responses'
+import {
+  getServiceCatalog,
+  listPartnerCandidatesFn,
+  listPartnerOptionsFn,
+  listPartnerZonesFn,
+} from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerCandidates } from '~/components/PartnerCandidates'
+import { QuoteResponses } from '~/components/QuoteResponses'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
@@ -79,11 +86,24 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     })
     if (!result) throw notFound()
     if (!('detail' in result))
-      return { result, catalog: [], zones: [], candidates: [], effectiveCategorySlug: null }
+      return {
+        result,
+        catalog: [],
+        zones: [],
+        candidates: [],
+        effectiveCategorySlug: null,
+        responses: { available: false as const },
+        partnerOptions: [],
+      }
 
-    const [catalog, zones] = await Promise.all([
+    // Los presupuestos y el directorio van en el MISMO `Promise.all` que el
+    // catálogo: son independientes entre sí y esperar uno detrás de otro sólo
+    // sumaría round trips a una ficha que ya hace cuatro.
+    const [catalog, zones, responses, partnerOptions] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
+      listQuoteResponsesFn({ data: params, signal }),
+      listPartnerOptionsFn({ signal }),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
@@ -101,7 +121,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         })
       : []
 
-    return { result, catalog, zones, candidates, effectiveCategorySlug }
+    return { result, catalog, zones, candidates, effectiveCategorySlug, responses, partnerOptions }
   },
 
   head: ({ loaderData }) => ({
@@ -119,7 +139,8 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
 })
 
 function QuoteRequestScreen() {
-  const { result, catalog, zones, candidates, effectiveCategorySlug } = Route.useLoaderData()
+  const { result, catalog, zones, candidates, effectiveCategorySlug, responses, partnerOptions } =
+    Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -147,6 +168,7 @@ function QuoteRequestScreen() {
   }
 
   const d = result.detail
+  const responseRows = responses.available ? responses.rows : []
 
   return (
     <>
@@ -158,7 +180,7 @@ function QuoteRequestScreen() {
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 
-      <QuoteTemplates detail={d} />
+      <QuoteTemplates detail={d} responses={responseRows} />
 
       <Card className="mb-4">
         <CardContent className="pt-6">
@@ -203,12 +225,29 @@ function QuoteRequestScreen() {
         </CardContent>
       </Card>
 
+      {/*
+        Los presupuestos van ANTES de las acciones porque ése es el orden real
+        del trabajo: el operador llama a los talleres, carga lo que consiguió,
+        y recién ahí marca el pedido como respondido — que es el botón de la
+        tarjeta de abajo, y el único que escribe `proposals_count`.
+      */}
+      <QuoteResponses
+        key={`responses-${d.id}`}
+        quoteRequestId={d.id}
+        available={responses.available}
+        responses={responseRows}
+        partners={partnerOptions}
+        proposalsCount={d.proposalsCount}
+        status={d.status}
+      />
+
       {/* `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar. */}
       <QuoteRequestActions
         key={d.id}
         quoteRequestId={d.id}
         status={d.status}
         closeReasonCode={d.closeReasonCode}
+        loadedProposals={responseRows.length}
       />
 
       <PartnerCandidates

@@ -6,6 +6,7 @@ import {
   type EditApplicationInput,
   type ListPartnerCandidatesInput,
   type PartnerCandidate,
+  type PartnerOption,
 } from '~/lib/partners'
 import { normalizeForMatch } from '~/lib/catalog'
 import type {
@@ -714,6 +715,40 @@ export async function listPartnerZones(
       ORDER BY 1`,
   )
   return rows.map((r) => r.zone)
+}
+
+/**
+ * Los partners ACTIVOS, para el selector de taller al cargar un presupuesto
+ * (`.claude/rules/leads.md`, sección Presupuestos).
+ *
+ * Sólo `active`, y acá sí es lo correcto aunque `ops.add_quote_request_proposal`
+ * acepte un partner pausado: el SP valida REPRESENTABILIDAD (que la fila
+ * exista) y este selector es una decisión de producto sobre qué ofrecer. Un
+ * presupuesto viejo de un taller que después se pausó se sigue leyendo y
+ * editando bien — el `LEFT JOIN` de `quote-responses.repo.ts` trae su nombre y
+ * su estado igual, y la ficha avisa. Lo que no se ofrece es EMPEZAR a derivarle
+ * trabajo nuevo.
+ *
+ * El orden es el mismo del marketplace (`idx_partners_active_tier_name`):
+ * aliados primero, después alfabético.
+ */
+export async function listPartnerOptions(
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<PartnerOption>> {
+  void opts.signal
+
+  const rows = await sql<{ id: string; name: string; coverage_zone: string; tier: string }>(
+    `SELECT p.id, p.name, btrim(coalesce(p.coverage_zone, '')) AS coverage_zone, p.tier::text AS tier
+       FROM partners p
+      WHERE p.status = 'active'
+      ORDER BY (p.tier = 'founding') DESC, p.name ASC`,
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    coverageZone: r.coverage_zone,
+    tier: r.tier,
+  }))
 }
 
 // ── Tablero de cobertura ────────────────────────────────────────────────────

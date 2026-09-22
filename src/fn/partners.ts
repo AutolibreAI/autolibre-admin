@@ -23,6 +23,7 @@ import {
   getPartnerServices,
   listApplications,
   listPartnerCandidates,
+  listPartnerOptions,
   listPartners,
   listPartnerZones,
   loadCatalog,
@@ -43,6 +44,7 @@ import type {
   ApplicationDetail,
   ApplicationListItem,
   PartnerCandidate,
+  PartnerOption,
   PipelineHealth,
 } from '~/lib/partners'
 import type {
@@ -265,6 +267,15 @@ export const setPartnerLinksFn = createServerFn({ method: 'POST' })
   )
 
 // ── Derivación: zonas y candidatos (`.claude/plans/partners-derivacion.md`) ──
+
+/**
+ * Los partners activos, en su forma chica, para el selector de taller de
+ * `<QuoteResponses/>`. Devuelve nombre y zona de talleres reales, así que
+ * `adminMiddleware` como todo el resto del marketplace.
+ */
+export const listPartnerOptionsFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<Array<PartnerOption>> => listPartnerOptions({ signal: requestSignal() }))
 
 /** Las zonas que hoy declaran los partners, para el chip de `/partners/listado`. */
 export const listPartnerZonesFn = createServerFn({ method: 'GET' })

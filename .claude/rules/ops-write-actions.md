@@ -700,6 +700,9 @@ Alcance añadido: `migrations/013_ops_rubro_de_pedido.sql` y su `.test.sql`,
 `listPartnerZones` de `src/server/partners.repo.ts`. Nace de
 `.claude/plans/partners-derivacion.md`, que tiene el detalle completo (Fase 0
 a Fase 2); esto es el resumen que hay que mantener sincronizado con el código.
+La 015 suma `migrations/015_ops_respuestas_de_talleres.sql` y su `.test.sql`,
+`src/lib/quote-responses.ts`, `src/server/quote-responses.repo.ts`,
+`src/fn/quote-responses.ts` y `src/components/QuoteResponses.tsx`.
 
 ## Una tabla nueva de `ops`, no una columna en `quote_requests`
 
@@ -765,3 +768,194 @@ inexistente/NULL, la reclasificación (misma fila, `created_at` intacto,
 `updated_at` avanza), el log con `before`/`after` en las dos escrituras, la
 ausencia de FK a `quote_requests`, y la integración con parámetros nombrados.
 **Repetir ese patrón para cualquier SP nuevo.**
+
+---
+
+# Migración 015 — lo que contestó cada taller
+
+Alcance añadido: `migrations/015_ops_respuestas_de_talleres.sql`, su
+`.test.sql`, la tabla `ops.quote_request_response`, `ops._lock_quote_response`,
+`ops._normalize_quote_response`, `ops.add_quote_request_response`,
+`ops.update_quote_request_response`, `ops.delete_quote_request_response`,
+`ops.reorder_quote_request_responses`, `src/server/quote-responses.repo.ts`,
+`src/fn/quote-responses.ts`, `src/lib/quote-responses.ts` y
+`src/components/QuoteResponses.tsx`. La UI y el mensaje de WhatsApp están en
+`leads.md`, sección Presupuestos.
+
+## Es una tabla de `ops` AUNQUE el backend tenga una parecida
+
+`public.quote_request_proposals` existe —relevada en producción el 2026-09-22:
+0 filas— y esta migración deliberadamente **no** la usa. Una primera versión sí
+la usaba; se descartó el mismo día, al mirar un mensaje real del operador.
+
+| Lo que el caso real necesita | La tabla del backend |
+|---|---|
+| Una respuesta **sin precio** (diagnóstico, "traelo y vemos") | `amount_min` NOT NULL + `CHECK (amount_min > 0)` — estricto: **ni 0 entra** |
+| Dirección y teléfono de un taller **de afuera del directorio** | sólo `partner_id` o `provider_name` |
+
+En el mensaje que motivó el cambio, los TRES talleres contestaron sin precio y
+uno no estaba en el directorio.
+
+**Que exista una tabla parecida no la vuelve la tabla del dominio de esto.**
+`proposal` describe *una oferta con precio*; lo que el panel maneja es *la
+respuesta de un taller*, de la cual el precio es un atributo a veces ausente.
+Por eso el nombre también es distinto (`response`), y eso NO viola la regla
+dura 7: el vocabulario del backend se respeta llamando `proposal` a lo que el
+backend llama así, no bautizando igual a dos cosas distintas. Dos tablas casi
+homónimas con significados distintos es el peor de los mundos.
+
+**Y nada lee la del backend hoy**: 0 filas, y todo lo que la persona recibe se
+lo manda el operador por WhatsApp a mano. Así que no hay dos verdades que
+sincronizar — hay una, y es la nuestra. Ése es el hecho que hace correcta la
+decisión, y el que hay que volver a chequear si cambia.
+
+### El camino de vuelta, escrito para que no se pierda
+
+El `INSERT … SELECT` del backfill está en la cabecera de la migración. Las
+columnas se eligieron con los mismos nombres y tipos que el backend ya usa
+justamente para que ese día sea un `INSERT`, no una traducción. Se retira
+cuando el backend acepte precio nulo y sume el contacto del taller de afuera.
+
+## Los guardrails, con dos notas
+
+Los mismos 8 que 007–013. Dos aplican distinto y conviene saber por qué:
+
+- **Guardrail 6** (ninguna FK cruza a `public`) acá **sí aplica y se cumple**:
+  `quote_request_id`, `partner_id` y `actor_id` son UUID pelados. El caso 04 de
+  la suite lo verifica contando `contype = 'f'` sobre la tabla. Consecuencia
+  buscada: si el backend borra un partner, la respuesta que ese taller dio
+  sigue existiendo — con el nombre resuelto a NULL y el `coalesce` del SELECT
+  poniendo un texto, nunca una fila que desaparece.
+- **Guardrail 8** (`updated_at` lo pone el trigger) se invierte: en `ops` no
+  hay trigger, así que **lo escribe la función**. Es lo contrario de
+  `partners`/`leads`, donde el SP no lo toca justamente porque el trigger
+  existe. El caso 05 de la suite verifica que no haya trigger, para que el día
+  que alguien agregue uno se entere de que ahora hay duplicación.
+- **Guardrail 7** (`FOR UPDATE`): el alta no lockea nada (no hay fila previa,
+  igual que la 012); editar y borrar lockean la fila; reordenar lockea TODAS
+  las del pedido antes de leer el `before`.
+
+El alta valida que el pedido exista con un `EXISTS` sobre `quote_requests` —
+mismo patrón que la 013— porque sin FK no hay nada que lo garantice.
+
+## El precio tiene tres estados, y por eso el CHECK es `>= 0`
+
+`NULL` = no pasó precio · `0` = sin cargo · `> 0` = el precio. El backend usa
+`> 0` estricto; acá es `>= 0` **a propósito**, porque "diagnóstico sin cargo"
+es literalmente lo que contestó uno de los talleres del mensaje real, y `NULL`
+ya está tomado por "no dijo nada". Las dos puntas van juntas o ninguna
+(`chk_ops_qrr_amounts_paired`): "de 80.000 a NULL" no es un rango.
+
+## Las validaciones viven en UN helper, no en cuatro funciones
+
+`ops._normalize_quote_response` valida y normaliza todo lo que comparten el
+alta y la edición. No es ahorro de líneas: **un `IF` que sólo esté en una de
+las dos es un dato que entra por el otro camino, y no hay nada que lo delate.**
+Por eso el caso 57 de la suite prueba una validación del alta a través de la
+EDICIÓN.
+
+| Sentinela | Cuándo |
+|---|---|
+| `PROVIDER_REQUIRED` / `PROVIDER_AMBIGUOUS` | los dos lados de `num_nonnulls(partner_id, provider_name) = 1`, traducidos por separado: "no elegiste taller" y "elegiste dos cosas" son errores distintos para quien opera |
+| `PROVIDER_CONTACT_NOT_EDITABLE` | dirección o teléfono tipeados sobre un partner. Los suyos salen de `partners`; una copia acá sería una segunda verdad que envejece sola |
+| `PARTNER_NOT_FOUND` | el partner no existe. **Que exista, no que esté `active`**: un taller pausado igual pudo contestar ayer |
+| `DETAIL_REQUIRED` | el párrafo que lee la persona, en blanco |
+| `AMOUNT_INCOMPLETE` · `INVALID_AMOUNT` · `INVALID_AMOUNT_RANGE` · `AMOUNT_TOO_LARGE` | una sola punta, negativo, `min > max`, o no entra en `numeric(12,2)` |
+| `INVALID_CURRENCY` | fuera de `ARS` / `USD` |
+| `INVALID_VALID_UNTIL` / `VALID_UNTIL_IN_PAST` | formato malo, o anterior a la fecha de carga |
+| `QUOTE_REQUEST_NOT_FOUND` / `QUOTE_RESPONSE_NOT_FOUND` | el pedido o la respuesta no existen |
+| `REORDER_EMPTY` · `REORDER_DUPLICATE_IDS` · `REORDER_MISMATCH` | la lista de reorden no es exactamente el conjunto del pedido |
+
+Varias duplican lo que un CHECK rechazaría igual, por el mismo motivo que las
+coordenadas de la 007: un 23514 con el nombre del constraint no le dice nada a
+quien está cargando un precio.
+
+## La moneda es un CHECK nuestro, no el enum de `public`
+
+`quote_request_proposal_currency` es un tipo del backend. Usarlo ataría esta
+tabla a su deploy — misma razón por la que los SP de la 011 toman `text`. El
+catálogo es un `CHECK (currency IN ('ARS','USD'))`, con los mismos valores a
+propósito para que el backfill sea un cast directo.
+
+## La vigencia se compara contra `created_at`, no contra hoy
+
+`_normalize_quote_response` recibe la fecha de referencia por parámetro
+(`p_created_on`): hoy al dar de alta, el `created_at` de la fila al editar. Con
+`now()` adentro no se podría corregirle el texto a una respuesta de la semana
+pasada sin además moverle la vigencia al futuro.
+
+## La edición es reemplazo COMPLETO; el pedido y la posición no se tocan
+
+Lo que llega es lo que queda guardado, y un opcional que no viene se BORRA —
+**incluido el precio**, que así se puede quitar si se cargó por error. Misma
+decisión que el formulario de `set_partner_contact`.
+
+`quote_request_id` no es parámetro: una respuesta pertenece al pedido en el que
+se cargó (si se cargó en el equivocado, se borra y se carga en el que va, y
+quedan las dos cosas en el log). `position` tampoco: tiene su propia función.
+
+## El orden es editorial, y se reordena con la lista COMPLETA
+
+`ops.reorder_quote_request_responses` recibe todos los ids en el orden deseado,
+no un "mové éste una posición". Con un movimiento relativo, dos operadores
+reordenando a la vez dejan un orden que ninguno de los dos pidió; con la lista
+entera, el último que guarda gana y el resultado es el que vio en pantalla. El
+SP rechaza una lista incompleta, con duplicados o con ids de otro pedido —
+sin ese chequeo, un id de más se ignoraría en silencio y los que faltan
+quedarían con su posición vieja, mezclados.
+
+**Una sola entrada en `ops.action_log` para todo el reordenamiento**: es UN
+acto de edición, igual que el perfil de un partner en la 008. Su `target_id` es
+el PEDIDO y no una respuesta, porque lo que cambió es el conjunto.
+
+El `DELETE` **no renumera**: los huecos no molestan porque el orden se lee por
+`position ASC` y no por su valor absoluto. Renumerar tocaría filas que nadie
+pidió tocar, y cada una dejaría su entrada en el log.
+
+## Lo que la 015 deliberadamente NO hace
+
+- **No toca `quote_requests.proposals_count`.** La escribe
+  `ops.mark_quote_request_answered` (011), que la exige para pasar a
+  `answered`. Sincronizarla con un `count(*)` sería mover el estado del pedido
+  de costado, sin pasar por su guarda de estado. El panel muestra los dos
+  números y avisa en ámbar si no coinciden.
+- **No exige que el pedido esté abierto.** Una respuesta que llegó tarde es un
+  hecho real, y un presupuesto no es un estado.
+- **No adjunta el PDF.** `quote_request_files` (`purpose = 'budget'`) necesita
+  el archivo en DigitalOcean Spaces, y ninguna cantidad de SQL sube un archivo
+  a un bucket. Feature aparte.
+- **No marca "el elegido".** No hay columna, y `quote_requests.outcome` ya dice
+  si contrató, sin decir a quién. Agregarlo es una decisión aparte.
+
+## Se probó como 007–013 — pero la suite NO se corrió
+
+`migrations/015_ops_respuestas_de_talleres.test.sql`: `BEGIN … ROLLBACK`, con su
+propio actor, su propio partner (creado `paused` a propósito) y tres pedidos de
+fixture (uno abierto, uno cerrado, uno vacío para los casos de reorden). Cubre
+los guardrails de forma —incluidos "sin FK a `public`" y "sin trigger"—, los
+tres estados del precio, los dos tipos de taller, las quince sentinelas, que no
+se escriba `proposals_count`, el reemplazo completo de la edición (con el precio
+volviendo a NULL), que `created_at` no se pise y `updated_at` sí avance, la baja
+con su log, las cinco formas de reordenar mal, y la integración con `PREPARE`
+sin tipos.
+
+**⚠ Al 2026-09-22 la suite está escrita y NO corrida, y la 015 no está aplicada
+en ninguna base.** El `.env` de esta máquina apunta a PRODUCCIÓN (verificado
+antes de tocar nada: `current_database = autolibre`, `current_user = doadmin`,
+puerto 25060 detrás del pooler `:25061`) y el Postgres de DEV (`localhost:5435`)
+está comentado. Correr un `--allow-write` contra producción no se hace sin
+pedirlo, ni siquiera dentro de una transacción que termina en `ROLLBACK`.
+
+Orden para ponerla en pie, y no se saltea ninguno:
+
+1. levantar DEV y apuntar `POSTGRES_DATABASE_URL` ahí;
+2. correr la suite **en rojo primero**, sin la migración, para verificar que las
+   aserciones fallan por lo que tienen que fallar;
+3. `pnpm db:migrate` en DEV y correr la suite en verde;
+4. recién entonces producción, **por el puerto DIRECTO `:25060`** — nunca por el
+   pooler, por el `pg_advisory_lock` de sesión del runner.
+
+Hasta que ese paso 3 no esté hecho, la tarjeta de Presupuestos de la ficha se
+muestra con el cartel de "falta aplicar la migración 015" y no deja cargar nada
+— `quoteResponsesAvailable()` lo detecta con `to_regclass`, y cada escritura lo
+re-chequea en su handler.

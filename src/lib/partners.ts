@@ -246,6 +246,23 @@ export const listPartnerCandidatesSchema = z
   })
 export type ListPartnerCandidatesInput = z.infer<typeof listPartnerCandidatesSchema>
 
+/**
+ * Un partner en su forma más chica: nombre + zona, para un selector.
+ *
+ * Existe aparte de `PartnerCandidate` porque contesta otra pregunta. El
+ * candidato es "¿a quién le mando ESTE pedido?" y por eso trae distancia,
+ * servicios del rubro, WhatsApp y horarios. Éste es "¿cuál de todos los
+ * talleres me pasó este presupuesto?": el operador ya sabe cuál es, sólo
+ * necesita encontrarlo en una lista. Cargar el objeto grande para una lista de
+ * 48 opciones sería traer distancia y servicios que nadie mira.
+ */
+export interface PartnerOption {
+  id: string
+  name: string
+  coverageZone: string
+  tier: string
+}
+
 export interface PartnerCandidate {
   id: string
   name: string

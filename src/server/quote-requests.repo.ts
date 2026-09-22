@@ -513,6 +513,8 @@ interface DetailRow extends ListRow {
   /** Sólo con `location_source = 'device'`. Un `typed` no trae GPS. */
   location_latitude: string | number | null
   location_longitude: string | number | null
+  /** `MARCA MODELO`, sin versión ni año. Para el mensaje, no para la tarjeta. */
+  catalog_short_label: string | null
 }
 
 interface RubroRow {
@@ -545,7 +547,15 @@ export async function findQuoteRequestDetail(
             qr.raw_submission,
             qr.location_address,
             qr.location_latitude,
-            qr.location_longitude
+            qr.location_longitude,
+            -- Sólo marca y modelo, para nombrar el auto en el mensaje que se
+            -- le manda a la persona ("para el Nissan Note"). El catalog_label
+            -- de arriba trae además versión y año, que en una tarjeta del
+            -- panel son precisión y en un WhatsApp son ruido. Va SÓLO en el
+            -- detalle: el listado no lo muestra, y este repo no lee columnas
+            -- que ninguna pantalla usa.
+            -- (Sin backticks: adentro de un template de SQL cierran el string.)
+            nullif(concat_ws(' ', vc.brand, vc.model), '') as catalog_short_label
      ${FROM_JOINS}
      left join users vu on vu.id = v.user_id
      where qr.id = $2`,
@@ -577,6 +587,7 @@ export async function findQuoteRequestDetail(
     locationAddress: r.location_address,
     locationLatitude: toNum(r.location_latitude),
     locationLongitude: toNum(r.location_longitude),
+    catalogShortLabel: r.catalog_short_label,
     rubroCategorySlug: rubro?.category_slug ?? null,
     rubroServiceSlug: rubro?.service_slug ?? null,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para

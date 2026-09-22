@@ -13,10 +13,20 @@ import { canonicalWhatsAppDigits } from '~/lib/partners'
  * Vive bajo `/leads` como línea de captación del panel, igual que `Insurance`
  * y `Fine`. Si aparece un `QuoteLead` o un `advanceQuoteLead`, está mal.
  *
- * Tampoco hay presupuestos por taller: el MVP del backend sacó las tablas
- * `quotes` / `quote_messages`. Lo que el operador consiguió vive en dos lugares
- * pobres a propósito: `proposals_count` (cuántas propuestas le devolvió) y el
- * texto libre de `internal_notes`. → `.claude/rules/leads.md`
+ * Este comentario decía que no había presupuestos por taller, porque el MVP
+ * del backend había sacado `quotes` / `quote_messages`. **Dejó de ser cierto
+ * el 2026-09-22**: ahora se cargan desde la ficha, en
+ * `ops.quote_request_response` (`~/lib/quote-responses`, migración 015).
+ *
+ * En `ops` y NO en `public.quote_request_proposals` —que existe, con 0 filas—
+ * porque esa tabla no admite una respuesta sin precio (`CHECK amount_min > 0`,
+ * estricto) ni el contacto de un taller de afuera del directorio, y las dos
+ * cosas son la mitad de los casos reales. → `.claude/rules/leads.md`
+ *
+ * Acá quedan los dos lugares pobres de antes, que siguen existiendo y
+ * significando otra cosa: `proposals_count` (cuántas propuestas se le pasaron
+ * a la persona, que NO se sincroniza con la cantidad de filas) y el texto
+ * libre de `internal_notes`.
  *
  * ── Qué consulta reemplaza ──────────────────────────────────────────────────
  *
@@ -561,6 +571,13 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    */
   locationLatitude: number | null
   locationLongitude: number | null
+  /**
+   * `MARCA MODELO` del catálogo, sin versión ni año — para nombrar el auto en
+   * el mensaje que se le manda a la persona. `catalogLabel` (con versión y
+   * año) sigue siendo el de la tarjeta del panel: ahí es precisión, en un
+   * WhatsApp es ruido. `null` sin vehículo vinculado o sin catálogo.
+   */
+  catalogShortLabel: string | null
   /**
    * Rubro con el que el operador clasificó este pedido, vía
    * `ops.set_quote_request_rubro` (migración 013). `null` = todavía no se

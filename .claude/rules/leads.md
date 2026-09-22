@@ -13,7 +13,11 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `src/components/QuoteTemplates.tsx`, `src/components/QuoteRequestComposer.tsx`,
 `migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`),
 `src/components/PartnerCandidates.tsx`, `migrations/013_ops_rubro_de_pedido.sql`
-(+ su `.test.sql`), `scripts/geocode-partners.mjs`. La card de Inicio/Métricas:
+(+ su `.test.sql`), `scripts/geocode-partners.mjs`. Presupuestos:
+`src/lib/quote-responses.ts`, `src/server/quote-responses.repo.ts`,
+`src/fn/quote-responses.ts`, `src/components/QuoteResponses.tsx`,
+`migrations/015_ops_respuestas_de_talleres.sql` (+ su `.test.sql`),
+`listPartnerOptions` de `src/server/partners.repo.ts`. La card de Inicio/Métricas:
 `src/components/PulseCards.tsx`, `OpsPulse` en `src/lib/ops.ts`, `getOpsPulse`
 en `src/fn/ops.ts`.
 
@@ -293,12 +297,67 @@ un `QuoteRequest` es la persona pidiendo "¿cuánto sale esto?" y el operador
 saliendo a buscar talleres. El código dice `QuoteRequest` / `quote-requests`,
 nunca `Lead` (regla dura 7).
 
-### Una sola tabla, sin presupuestos por taller
+### ⚠ "Una sola tabla, sin presupuestos por taller" — CORREGIDO el 2026-09-22
 
-El MVP del backend **sacó** `quotes` y `quote_messages`. No hay una fila por
-oferta ni por partner: lo que el operador consiguió vive en `proposals_count`
-(obligatorio al pasar a `answered`) y en el texto libre de `internal_notes`. Si
-alguien arma "ofertas" parseando las notas, está inventando dominio.
+Esta sección decía: *"El MVP del backend **sacó** `quotes` y `quote_messages`.
+No hay una fila por oferta ni por partner: lo que el operador consiguió vive en
+`proposals_count` y en el texto libre de `internal_notes`."*
+
+**Eso dejó de ser cierto**, y hay que decirlo fuerte porque esa premisa está
+citada en tres lugares más del repo (el comentario de cabecera de
+`~/lib/quote-requests`, el de `~/lib/quote-templates` y la sección "la
+escritura que se decidió NO hacer" de la migración 013). Relevado contra
+PRODUCCIÓN (`current_database = autolibre`, `current_user = doadmin`, puerto
+25060):
+
+```
+public.quote_request_proposals   EXISTE
+public.quote_request_files       EXISTE  (purpose: problem_photo | budget)
+enum quote_request_proposal_currency = ARS | USD
+```
+
+El backend volvió a poner el aggregate entre el 2026-09-15 (fecha del último
+`grep`, que dio negativo) y el 2026-09-22, con otro nombre —**`proposal`**, el
+mismo sustantivo de `quote_requests.proposals_count`— y con más forma que la
+idea vieja: rango de precio en vez de precio, moneda, vigencia, nota interna
+por presupuesto.
+
+**La regla de fondo no cambió, cambió de qué lado cae el caso.** Lo que sigue
+prohibido es exactamente lo mismo: si alguien arma "ofertas" parseando
+`internal_notes`, está inventando dominio. Lo que ahora SÍ se puede es leerlas
+de una tabla.
+
+### …pero esa tabla NO es la del backend, y también hay que decirlo fuerte
+
+Una primera versión de esta feature escribió `public.quote_request_proposals`.
+**Se descartó el mismo día**, al mirar un mensaje real del operador. La tabla
+del backend no puede representar la mitad de los casos:
+
+| Lo que el mensaje real necesita | `quote_request_proposals` |
+|---|---|
+| Una respuesta **sin precio** (un diagnóstico, "traelo y lo vemos") | `amount_min` es NOT NULL con `CHECK (amount_min > 0)` — **estricto**, así que ni siquiera admite 0 |
+| Dirección y teléfono de un taller que **no está en el directorio** | sólo tiene `partner_id` o `provider_name` |
+
+En el mensaje que motivó el cambio, los TRES talleres contestaron sin precio y
+uno no estaba en el directorio. No es un caso de borde: es el caso.
+
+Así que lo que el panel escribe es **`ops.quote_request_response`**, nuestra
+(migración 015). Que la tabla del backend exista no la vuelve la tabla del
+dominio de esto: describe *una oferta con precio*, y lo que el operador maneja
+es *la respuesta de un taller*, de la cual el precio es un atributo a veces
+ausente. Y al 2026-09-22 **nada lee `quote_request_proposals`** —0 filas en
+producción, todo se lo manda el operador por WhatsApp a mano— así que no hay
+dos verdades que sincronizar.
+
+El camino de vuelta está escrito, con el `INSERT … SELECT` y todo, en la
+cabecera de la migración: el día que el backend acepte precio nulo y sume el
+contacto del taller de afuera, el subconjunto con precio se backfillea y esto
+se retira.
+
+Lo que sigue sin tabla, y por eso sigue siendo nota interna, es la
+**derivación** ("a qué taller le mandé este pedido") — ver `PartnerCandidates`.
+Un presupuesto es lo que el taller contestó; una derivación es que se lo
+mandamos. No son lo mismo y sólo una tiene dónde vivir.
 
 ### El guard de disponibilidad, y por qué no es opcional
 
@@ -716,6 +775,204 @@ coordenadas) es un script one-off (`scripts/geocode-partners.mjs`), corrido a
 mano, fuera del panel — no una dependencia de runtime. Sin ella el panel de
 candidatos funciona igual, sólo que con menos partners ubicados (lo dice en
 pantalla si son menos de la mitad).
+
+### Presupuestos (`<QuoteResponses/>`) — desde el 2026-09-22
+
+Alcance: `src/lib/quote-responses.ts`, `src/server/quote-responses.repo.ts`,
+`src/fn/quote-responses.ts`, `src/components/QuoteResponses.tsx`, la migración
+015 (`ops-write-actions.md`) y `listPartnerOptions` de `partners.repo.ts`.
+
+Contesta *"¿qué me contestó cada taller para este pedido?"*. El operador llama
+o escribe, carga lo que le dijeron, y con eso arma UN mensaje de WhatsApp para
+que la persona elija y **coordine el turno directamente con el taller**.
+
+Reemplaza los dos lugares pobres donde eso vivía: una línea de `internal_notes`
+("Taller X: $180.000, turno el jueves") y el número suelto de `proposals_count`.
+Vive en la FICHA, no en el listado — mismo criterio que `QuoteTemplates` y
+`PartnerCandidates`.
+
+#### `response` en el código, "presupuesto" en la UI
+
+Regla dura 7 no obliga a llamar igual a dos cosas distintas: obliga a lo
+contrario. `proposal` es el sustantivo del backend para una oferta CON precio
+(`quote_requests.proposals_count`), y una fila de acá puede no tenerlo. La UI
+dice "Presupuestos" porque es la palabra del equipo — misma divergencia
+deliberada que `tier` ↔ "Aliado" y `service_categories` ↔ "Rubro".
+
+Si aparece un `QuoteProposal` en `ops`, está mal: dos tablas casi homónimas con
+significados distintos es el peor de los mundos. Y **no confundir con
+`assistant_proposals`**, que son las propuestas del chat de IA
+(`metricas.md`, bloque 3).
+
+#### El precio tiene TRES estados, y los tres dicen cosas distintas
+
+| Valor | Significa | En el mensaje |
+|---|---|---|
+| `NULL` | el taller no pasó precio (un diagnóstico, "traelo y vemos") | **no hay renglón 💵** |
+| `0` | sin cargo / bonificado | `💵 Sin cargo` |
+| `> 0` | el precio, cerrado (`min = max`) o rango | `💵 $ 45.000 a $ 60.000` |
+
+Ésta es la razón de ser de la tabla propia: el CHECK del backend es
+`amount_min > 0` y NOT NULL, así que los dos primeros estados **no existen**
+ahí. "Diagnóstico sin cargo" es literalmente lo que contestó uno de los
+talleres del mensaje que motivó todo esto.
+
+Un renglón "precio: a confirmar" se lee como un error nuestro; uno que no está,
+no. Por eso `formatQuoteAmount` devuelve `null` y el renglón desaparece, en vez
+de un "—".
+
+El monto se tipea en castellano rioplatense (`parseAmount`): el punto es
+separador de miles y la coma es decimal, al revés que `Number()`, que leería
+`180.000` como ciento ochenta.
+
+#### Un presupuesto es de UN taller, y el taller es de una de dos clases
+
+`chk_ops_qrr_provider_identified` es `num_nonnulls(partner_id, provider_name) = 1`
+— el mismo invariante que el backend eligió para su tabla, copiado a propósito
+para que el backfill futuro no tenga que limpiar nada.
+
+- **Del directorio**: se guarda el `partner_id` y **nada más**. Dirección,
+  teléfono y horarios se leen de `partners` al mostrar, así que siguen al
+  directorio si los corrigen. `chk_ops_qrr_contact_only_for_outsiders` rechaza
+  una copia tipeada: una segunda verdad que envejece sola es peor que un join.
+- **De afuera**: nombre, dirección y teléfono tipeados. **Esto es lo que no
+  tenía dónde vivir**, y sin ello el mensaje no puede decirle a la persona
+  adónde ir.
+
+El selector ofrece sólo partners `active` (`listPartnerOptions`), aunque el SP
+acepte uno pausado: **el SP valida representabilidad, el selector es decisión de
+producto.** Un presupuesto viejo de un taller que después se pausó se sigue
+leyendo y editando bien, y la fila lo avisa en ámbar.
+
+#### El buscador de taller filtra en el CLIENTE
+
+50 partners activos al 2026-09-22, y ya vienen enteros en el loader. Filtrar
+sobre un array de 50 es instantáneo y no tiene estados de carga, de error ni de
+carrera — a diferencia del picker de destinatarios de `BroadcastComposer`, que
+SÍ va al servidor con debounce porque su universo son miles de usuarios. El día
+que el directorio tenga cientos, esto pasa a ser un `searchPartnersFn` con la
+misma forma que aquél.
+
+Usa `normalizeForMatch` de `~/lib/catalog` (saca acentos y puntuación), así que
+"perez" encuentra "Pérez" y "cars service" encuentra "H&G Cars Service".
+
+**Tipear NO vincula.** Escribir "Autech" deja un taller de AFUERA llamado
+Autech aunque Autech esté en el directorio: `partner_id` sólo se setea
+eligiendo de la lista. Adivinar el id por nombre es lo que
+`partner-approval.md` ya desaconseja con `nameCollisions` —dos partners se
+pueden llamar igual—, así que en vez de adivinar el campo dice en qué modo está
+y, si el texto coincide exacto con un partner, ofrece vincularlo en un click.
+
+#### El orden es EDITORIAL, no por precio
+
+`position`, con flechas ↑↓ en cada fila. En el mensaje real el primero era el
+que daba diagnóstico sin cargo y en el día, no el más barato — y ninguno de los
+tres tenía precio, así que ordenar por importe habría dado un orden arbitrario.
+
+Reordenar manda la lista COMPLETA de ids al SP, no un "mové éste uno arriba":
+con un movimiento relativo, dos pestañas reordenando a la vez dejan un orden
+que ninguna pidió. El SP rechaza una lista incompleta, con duplicados o con
+ajenos.
+
+#### Una vencida NO entra en el mensaje
+
+`splitQuoteResponsesForMessage` (en `~/lib/quote-templates`) parte la lista en
+`included` / `expired`. Mandar un precio caducado es peor que mandar uno menos.
+
+**Se dice en pantalla, en los dos lados** (la tarjeta y el compositor del
+mensaje): un renglón que desaparece sin explicación es un bug desde el lado del
+operador. `expired` lo calcula Postgres —la ficha es SSR completo y comparar
+contra el reloj del navegador daría un mismatch de hidratación por fila, mismo
+patrón que `age_minutes` en `/actividad`— y `null` (sin vigencia declarada) no
+es `false` (vigente): la UI los distingue.
+
+`valid_until` es un `date`, así que se mapea con un `toPlainDay` propio y no
+con `toISOString().slice(0,10)` — `pg` lo entrega a medianoche LOCAL del
+proceso y esa conversión devuelve el día ANTERIOR al este de UTC (la trampa que
+`ai-costs.md` documenta para la serie diaria).
+
+#### `proposals_count` y la cantidad de filas son DOS números, y no se sincronizan
+
+`quote_requests.proposals_count` es del recorrido del pedido: lo escribe
+`ops.mark_quote_request_answered` (011), que además lo exige para pasar a
+`answered`. La 015 **no lo toca** — sincronizarlo con un `count(*)` sería mover
+el estado del pedido de costado, sin pasar por su guarda de estado.
+
+- `<QuoteResponses/>` avisa en **ámbar** cuando no coinciden. Es el síntoma de
+  "cargué los presupuestos y me olvidé de marcarlo respondido".
+- `<QuoteRequestActions/>` SIEMBRA el campo de «Marcar respondido» con la
+  cantidad cargada, como valor inicial y nada más. Con cero cargados arranca
+  VACÍO, no en "0" — mandar un cero que nadie escribió diría "llamamos y no
+  conseguimos nada".
+
+#### Se puede cargar en un pedido cerrado, y es a propósito
+
+El SP no exige que el pedido esté abierto: una respuesta que llegó tarde es un
+hecho real, y un presupuesto no es un estado. La ficha avisa en ámbar. El SP
+valida representabilidad; la regla de negocio vive donde cambiar de opinión no
+cuesta una migración.
+
+#### Lo que NO entra todavía: el PDF
+
+`quote_request_files` existe en el backend, con `purpose = 'budget'`. Adjuntar
+el PDF necesita que el archivo llegue a DigitalOcean Spaces, y **ninguna
+cantidad de SQL sube un archivo a un bucket** (`vehicle-manuals.md`). Es una
+feature aparte, con el flujo de subida directa en cuatro llamadas. Decidido
+fuera de alcance el 2026-09-22.
+
+### El mensaje de WhatsApp (`<QuoteTemplates/>`, plantilla «Presupuestos»)
+
+La forma sale de un mensaje que el operador mandó de VERDAD, no de una idea de
+cómo debería ser. Eso decidió cuatro cosas que de otro modo se habrían elegido
+al revés:
+
+1. **UN mensaje, con todo lo necesario para avanzar** — dirección y teléfono
+   del taller incluidos. El turno lo coordina la persona con el taller, no
+   nosotros. Se evaluó partirlo en dos ("elegí" y después "coordiná") y se
+   descartó: ese segundo paso no existe.
+2. **Numerado**, para que la respuesta pueda ser "el 2".
+3. **Cada renglón existe sólo si hay dato.** 📍 dirección · 📞 teléfono ·
+   🕘 horarios (sólo del directorio) · 💵 precio · 📅 vigencia · el párrafo.
+4. **La recomendación final es un `[corchete]`.** "Si querés avanzar rápido, X
+   te da el diagnóstico sin costo" es juicio del operador sobre ese caso;
+   ninguna plantilla la puede escribir sin inventar.
+
+Cuatro detalles del armado que se descubrieron CORRIENDO el render
+(`tmp/probe-mensaje.mjs`), no leyéndolo:
+
+- **`{{intro}}` es el párrafo entero, no `{{cantidad}}` suelto.** Con un solo
+  taller, "el detalle de cada uno para que elijas" no se sostiene (no hay entre
+  qué elegir); con cero, "respuesta de cero talleres" se lee como un bug
+  nuestro. Son tres redacciones en `introSentence()`.
+- **El nombre del auto se destaca en Title Case** (`NISSAN NOTE` → `Nissan
+  Note`), con los tokens de hasta 3 caracteres intactos (VW, BMW, KIA, 208).
+  Es presentación y no toca el dato; sin eso el mensaje grita. Se usa
+  `catalogShortLabel` (marca + modelo) y no `catalogLabel`: versión y año son
+  precisión en una tarjeta y ruido en un WhatsApp.
+- **El "por …" cita la descripción CRUDA del pedido.** El operador suele
+  parafrasearla y queda mejor, pero parafrasear no lo puede hacer el panel sin
+  inventar: se cita textual y se reescribe en el cuadro, que es editable.
+- **Las fechas van con `formatDate`**, el mismo formateador del resto del
+  panel, no el `YYYY-MM-DD` crudo.
+
+**El botón manda lo EDITADO**, no el render original: si mandara el original,
+el operador editaría el cuadro y se preguntaría por qué llegó otra cosa.
+
+El link sale con el MISMO criterio de teléfono que todo el repo
+(`canonicalWhatsAppDigits`: `549` + 10 dígitos, sin adivinar la característica).
+Sin botón hay **dos** causas y se explican por separado —el teléfono del pedido
+no es canónico, o el mensaje pasa `WHATSAPP_TEXT_MAX`— porque una se arregla
+corrigiendo el teléfono y la otra acortando el texto: un solo "no se puede"
+mandaría a buscar mal.
+
+`WHATSAPP_TEXT_MAX` (3.500) no es un límite de WhatsApp —un mensaje admite
+decenas de miles— sino del largo de URL que tolera el navegador al abrir el
+link, que no está especificado en ningún lado. Con cuatro talleres el mensaje
+ronda los 900 caracteres.
+
+`responses` baja como PROP desde el loader de la ficha, que ya las trae para la
+tarjeta: pedirlas de nuevo sería otro snapshot, y el texto que se manda podría
+no ser la lista que se ve dos tarjetas más abajo.
 
 ## Cómo verificar un cambio acá
 
