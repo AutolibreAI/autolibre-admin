@@ -1,6 +1,8 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { quoteResponsesAvailable } from './quote-responses.repo'
+import { METRICS_TZ, type GrowthUnit } from '~/lib/ops'
 import {
   QUOTE_UNCONTACTED_AFTER_HOURS,
   type AddQuoteRequestInternalNoteInput,
@@ -13,6 +15,8 @@ import {
   type QuoteRequestListItem,
   type QuoteRequestPulse,
   type QuoteRequestSearch,
+  type QuoteRequestSeries,
+  type QuoteRequestSeriesBucket,
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
   type QuoteSortKey,
@@ -146,6 +150,17 @@ export async function quoteRequestsAvailability(
 const uncontactedPredicate = (alias: string, param: string) =>
   `(${alias}status <> 'closed' and ${alias}contacted_at is null
     and ${alias}created_at < now() - make_interval(hours => ${param}::int))`
+
+/**
+ * "No es un duplicado" — compartido entre `quoteRequestPulse()` y
+ * `quoteRequestSeries()`. Verificado el 2026-09-17 contra producción: 15 de 17
+ * pedidos son duplicados que el operador marcó a mano. Si esta condición
+ * divergiera entre la card de Inicio y la serie de `/metricas`, "pedidos de
+ * esta semana" contaría distinto en las dos pantallas. Sin alias — las dos
+ * consultas que la usan tienen una sola tabla en scope en el punto donde se
+ * filtra.
+ */
+const NOT_DUPLICATE_PREDICATE = `close_reason_code is distinct from 'duplicate'`
 
 /**
  * ── LEFT en las cuatro patas ───────────────────────────────────────────────
@@ -481,7 +496,7 @@ export async function quoteRequestPulse(
   const row = await sqlOne<{ total: number | string; duplicates: number | string }>(`
     select
       count(*)::int as total,
-      count(*) filter (where close_reason_code = 'duplicate')::int as duplicates
+      count(*) filter (where not (${NOT_DUPLICATE_PREDICATE}))::int as duplicates
     from quote_requests
   `)
 
@@ -490,6 +505,216 @@ export async function quoteRequestPulse(
     total: toInt(row?.total),
     duplicates: toInt(row?.duplicates),
   }
+}
+
+// ── Serie temporal (sección Pedidos de /metricas) ───────────────────────────
+
+/**
+ * `GrowthUnit → unidad de Postgres`. Mismo mapa que `PG_UNIT` de `ops.repo.ts`
+ * — se repite acá en vez de importarlo porque es privado de ese archivo, y es
+ * una tabla estática de tres líneas sin riesgo de divergencia (a diferencia de
+ * un predicado de negocio como `INTERNAL_PREDICATE`, que sí se comparte).
+ */
+const PG_UNIT: Record<GrowthUnit, string> = {
+  dia: 'day',
+  semana: 'week',
+  mes: 'month',
+  anio: 'year',
+}
+
+interface SeriesRow {
+  bucket: string
+  received: number | string
+  received_total: number | string
+  proposals_total: number | string
+  with_proposal: number | string
+  network_total: number | string
+  outside_total: number | string
+  pending_contact: number | string
+  pending_answer: number | string
+  median_hours_to_contact: number | string | null
+  median_hours_to_answer: number | string | null
+}
+
+/**
+ * Las cuatro series de la sección Pedidos, en una sola sentencia cuando la 015
+ * está aplicada — así los cuatro bloques comparten snapshot y se leen juntos
+ * (mismo argumento que el `UNION ALL` único de `queueHealth` en `ops.repo.ts`).
+ *
+ * ── El universo, en las cuatro series ───────────────────────────────────────
+ *
+ * `NOT_DUPLICATE_PREDICATE` saca los duplicados — mismo corte que la card de
+ * Inicio. Los cancelados por el usuario SÍ cuentan como recibidos (llegaron),
+ * pero SALEN de `pendingContact`/`pendingAnswer`: un pedido que la persona
+ * canceló antes de que el operador actúe no es un pendiente, está resuelto.
+ *
+ * ── El período es el de creación del PEDIDO, no el de la respuesta ─────────
+ *
+ * Así "los pedidos de esta semana" es el mismo conjunto en las cuatro series,
+ * aunque una propuesta se haya cargado semanas después.
+ *
+ * ── `min(v.created_at)` no aplica acá, pero el mismo criterio de fan-out sí ─
+ *
+ * `ops.quote_request_response` es 1\:N por pedido — un `JOIN` directo
+ * multiplicaría `received` por la cantidad de propuestas. Por eso `resp` se
+ * agrega ANTES de unirse a `base`, uno por `quote_request_id`.
+ *
+ * ── Guard en dos niveles ─────────────────────────────────────────────────────
+ *
+ * Sin `quote_requests` (`!available`), no hay nada que graficar. Con
+ * `quote_requests` pero sin la 015 aplicada (`!responsesAvailable`), esta
+ * función corre una segunda forma de la consulta que NO referencia
+ * `ops.quote_request_response` — no se puede meter esa tabla en la misma
+ * sentencia y esperar que Postgres la ignore si no existe: igual explota al
+ * planificarse, mismo motivo que documenta `quoteRequestsAvailability()`.
+ */
+export async function quoteRequestSeries(
+  unit: GrowthUnit,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestSeries> {
+  const availability = await quoteRequestsAvailability(opts)
+  if (!availability.available) {
+    return { available: false, responsesAvailable: false, unit, buckets: [] }
+  }
+
+  const responsesAvailable = await quoteResponsesAvailable(opts)
+
+  const baseCte = `
+    base as (
+      select
+        qr.id,
+        date_trunc($1, qr.created_at at time zone $2) as bucket,
+        qr.close_reason_code::text as close_reason_code,
+        (qr.contacted_at is null) as no_contact,
+        (qr.answered_at is null) as no_answer,
+        extract(epoch from (qr.contacted_at - qr.created_at)) / 3600.0 as hours_to_contact,
+        extract(epoch from (qr.answered_at - qr.created_at)) / 3600.0 as hours_to_answer
+      from quote_requests qr
+      where ${NOT_DUPLICATE_PREDICATE}
+    )
+  `
+
+  const rows = responsesAvailable
+    ? await sql<SeriesRow>(
+        `
+        with ${baseCte},
+        resp as (
+          select
+            r.quote_request_id,
+            count(*)::int as proposals,
+            count(*) filter (where r.partner_id is not null)::int as network,
+            count(*) filter (where r.partner_id is null)::int as outside
+          from ops.quote_request_response r
+          group by r.quote_request_id
+        ),
+        per_request as (
+          select b.*, coalesce(rp.proposals, 0) as proposals,
+            coalesce(rp.network, 0) as network, coalesce(rp.outside, 0) as outside
+          from base b
+          left join resp rp on rp.quote_request_id = b.id
+        ),
+        counts as (
+          select
+            bucket,
+            count(*)::int as received,
+            sum(proposals)::int as proposals_total,
+            count(*) filter (where proposals > 0)::int as with_proposal,
+            sum(network)::int as network_total,
+            sum(outside)::int as outside_total,
+            count(*) filter (where no_contact and close_reason_code is distinct from 'cancelled_by_user')::int as pending_contact,
+            count(*) filter (where no_answer and close_reason_code is distinct from 'cancelled_by_user')::int as pending_answer,
+            percentile_cont(0.5) within group (order by hours_to_contact) filter (where hours_to_contact is not null) as median_hours_to_contact,
+            percentile_cont(0.5) within group (order by hours_to_answer) filter (where hours_to_answer is not null) as median_hours_to_answer
+          from per_request
+          group by 1
+        ),
+        span as (select min(bucket) as lo, max(bucket) as hi from counts),
+        buckets as (
+          select generate_series(span.lo, span.hi, ('1 ' || $1)::interval) as bucket from span
+        )
+        select
+          to_char(b.bucket, 'YYYY-MM-DD') as bucket,
+          coalesce(c.received, 0) as received,
+          (sum(coalesce(c.received, 0)) over (order by b.bucket))::int as received_total,
+          coalesce(c.proposals_total, 0) as proposals_total,
+          coalesce(c.with_proposal, 0) as with_proposal,
+          coalesce(c.network_total, 0) as network_total,
+          coalesce(c.outside_total, 0) as outside_total,
+          coalesce(c.pending_contact, 0) as pending_contact,
+          coalesce(c.pending_answer, 0) as pending_answer,
+          c.median_hours_to_contact,
+          c.median_hours_to_answer
+        from buckets b
+        left join counts c using (bucket)
+        order by b.bucket
+        `,
+        [PG_UNIT[unit], METRICS_TZ],
+      )
+    : await sql<SeriesRow>(
+        `
+        with ${baseCte},
+        counts as (
+          select
+            bucket,
+            count(*)::int as received,
+            count(*) filter (where no_contact and close_reason_code is distinct from 'cancelled_by_user')::int as pending_contact,
+            count(*) filter (where no_answer and close_reason_code is distinct from 'cancelled_by_user')::int as pending_answer,
+            percentile_cont(0.5) within group (order by hours_to_contact) filter (where hours_to_contact is not null) as median_hours_to_contact,
+            percentile_cont(0.5) within group (order by hours_to_answer) filter (where hours_to_answer is not null) as median_hours_to_answer
+          from base
+          group by 1
+        ),
+        span as (select min(bucket) as lo, max(bucket) as hi from counts),
+        buckets as (
+          select generate_series(span.lo, span.hi, ('1 ' || $1)::interval) as bucket from span
+        )
+        select
+          to_char(b.bucket, 'YYYY-MM-DD') as bucket,
+          coalesce(c.received, 0) as received,
+          (sum(coalesce(c.received, 0)) over (order by b.bucket))::int as received_total,
+          0 as proposals_total,
+          0 as with_proposal,
+          0 as network_total,
+          0 as outside_total,
+          coalesce(c.pending_contact, 0) as pending_contact,
+          coalesce(c.pending_answer, 0) as pending_answer,
+          c.median_hours_to_contact,
+          c.median_hours_to_answer
+        from buckets b
+        left join counts c using (bucket)
+        order by b.bucket
+        `,
+        [PG_UNIT[unit], METRICS_TZ],
+      )
+
+  const buckets: Array<QuoteRequestSeriesBucket> = rows.map((r) => {
+    const received = toInt(r.received)
+    const proposalsTotal = toInt(r.proposals_total)
+    const networkTotal = toInt(r.network_total)
+    const pedidosConPropuesta = toInt(r.with_proposal)
+    return {
+      bucket: r.bucket,
+      received,
+      receivedTotal: toInt(r.received_total),
+      proposalsTotal,
+      pedidosConPropuesta,
+      // Sobre los pedidos a los que SE LES MANDÓ algo, no sobre `received`: la
+      // pregunta es "cuántas propuestas mandamos, en promedio, a quien le
+      // mandamos" — no diluir con los que todavía no tienen ninguna. `null`
+      // (no `0`) cuando nadie recibió propuesta en el bucket: el promedio no
+      // está definido, no es cero. Mismo criterio que `medianHoursToContact`.
+      avgProposalsPerRequest: pedidosConPropuesta === 0 ? null : proposalsTotal / pedidosConPropuesta,
+      medianHoursToContact: toNum(r.median_hours_to_contact),
+      medianHoursToAnswer: toNum(r.median_hours_to_answer),
+      pendingContact: toInt(r.pending_contact),
+      pendingAnswer: toInt(r.pending_answer),
+      proposalsNetwork: networkTotal,
+      proposalsOutside: toInt(r.outside_total),
+      pctNetwork: proposalsTotal === 0 ? null : (networkTotal / proposalsTotal) * 100,
+    }
+  })
+
+  return { available: true, responsesAvailable, unit, buckets }
 }
 
 // ── Detalle ─────────────────────────────────────────────────────────────────

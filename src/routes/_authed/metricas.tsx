@@ -9,6 +9,7 @@ import {
   growthSearchSchema,
   vehicleDistSearchSchema,
   type GrowthSearch,
+  type OnboardingSeries,
   type ProposalStats,
   type ScanRecurrence,
   type UnsolvedTasks,
@@ -16,9 +17,11 @@ import {
   type VehicleDebtAdoption,
   type VehicleDistScope,
 } from '~/lib/ops'
+import type { QuoteRequestSeries } from '~/lib/quote-requests'
 import {
   getAdoptionSeries,
   getAssistantProposalStats,
+  getOnboardingSeries,
   getOpsPulse,
   getScanRecurrence,
   getUnsolvedTasks,
@@ -26,6 +29,7 @@ import {
   getVehicleDebtAdoption,
   getVehicleDistribution,
 } from '~/fn/ops'
+import { getQuoteRequestSeriesFn } from '~/fn/quote-requests'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PulseRow } from '~/components/PulseCards'
 import { Chip, FilterGroup } from '~/components/Filters'
@@ -68,28 +72,52 @@ export const Route = createFileRoute('/_authed/metricas')({
   loaderDeps: ({ search }) => search,
 
   /**
-   * Ocho llamadas en paralelo contra el pool: el pulso del negocio (las 4
+   * Diez llamadas en paralelo contra el pool: el pulso del negocio (las 4
    * cards, compartidas con Inicio), los cinco bloques con datos de la sección
    * `Preguntas` (adopción por función, deuda de patente y multas por vehículo,
    * recurrencia de escaneo, propuestas del chat, tareas sin solución), la serie
-   * de crecimiento y la distribución de autos por usuario. Cada `data` se
-   * valida por su propio schema del lado del server function, así que pasarles
-   * la búsqueda entera es inocuo (las claves de más se descartan).
+   * de crecimiento, la de onboarding (altas con vehículo), la distribución de
+   * autos por usuario y la serie de Pedidos. Cada `data` se valida por su
+   * propio schema del lado del server function, así que pasarles la búsqueda
+   * entera es inocuo (las claves de más se descartan).
    */
   loader: async ({ deps, abortController }) => {
     const signal = abortController.signal
-    const [pulse, usage, debts, recurrence, proposals, unsolved, series, distribution] =
-      await Promise.all([
-        getOpsPulse({ signal }),
-        getUsageAdoption({ signal }),
-        getVehicleDebtAdoption({ signal }),
-        getScanRecurrence({ signal }),
-        getAssistantProposalStats({ signal }),
-        getUnsolvedTasks({ signal }),
-        getAdoptionSeries({ data: deps, signal }),
-        getVehicleDistribution({ data: deps, signal }),
-      ])
-    return { pulse, usage, debts, recurrence, proposals, unsolved, series, distribution }
+    const [
+      pulse,
+      usage,
+      debts,
+      recurrence,
+      proposals,
+      unsolved,
+      series,
+      onboarding,
+      distribution,
+      quoteSeries,
+    ] = await Promise.all([
+      getOpsPulse({ signal }),
+      getUsageAdoption({ signal }),
+      getVehicleDebtAdoption({ signal }),
+      getScanRecurrence({ signal }),
+      getAssistantProposalStats({ signal }),
+      getUnsolvedTasks({ signal }),
+      getAdoptionSeries({ data: deps, signal }),
+      getOnboardingSeries({ data: deps, signal }),
+      getVehicleDistribution({ data: deps, signal }),
+      getQuoteRequestSeriesFn({ data: deps, signal }),
+    ])
+    return {
+      pulse,
+      usage,
+      debts,
+      recurrence,
+      proposals,
+      unsolved,
+      series,
+      onboarding,
+      distribution,
+      quoteSeries,
+    }
   },
 
   head: () => ({ meta: [{ title: 'Métricas — AutoLibre' }] }),
@@ -115,8 +143,18 @@ export const Route = createFileRoute('/_authed/metricas')({
  * en Inicio.
  */
 function MetricasPage() {
-  const { pulse, usage, debts, recurrence, proposals, unsolved, series, distribution } =
-    Route.useLoaderData()
+  const {
+    pulse,
+    usage,
+    debts,
+    recurrence,
+    proposals,
+    unsolved,
+    series,
+    onboarding,
+    distribution,
+    quoteSeries,
+  } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -166,17 +204,33 @@ function MetricasPage() {
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <GrowthChart points={series.users} unit={series.unit} label="Usuarios" />
-          <GrowthChart points={series.vehicles} unit={series.unit} label="Vehículos" />
+          <GrowthChart
+            buckets={series.users.map((p) => p.bucket)}
+            unit={series.unit}
+            label="Usuarios"
+            bars={[{ values: series.users.map((p) => p.added), color: 'var(--color-brand)', label: `altas por ${series.unit}` }]}
+          />
+          <GrowthChart
+            buckets={series.vehicles.map((p) => p.bucket)}
+            unit={series.unit}
+            label="Vehículos"
+            bars={[{ values: series.vehicles.map((p) => p.added), color: 'var(--color-brand)', label: `altas por ${series.unit}` }]}
+          />
         </div>
 
+        <OnboardingChart data={onboarding} />
+
         <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-          Las barras son las altas de cada período; la línea es el acumulado. El
-          total de vehículos cuenta los registros históricos (activos + archivados),
-          así que no coincide con "Vehículos activos" de arriba. Se excluyen las
-          cuentas internas de test.
+          Las barras son las altas de cada período; la línea (default) es el
+          acumulado. El total de vehículos cuenta los registros históricos
+          (activos + archivados), así que no coincide con "Vehículos activos" de
+          arriba. Se excluyen las cuentas internas de test. Los períodos agrupan
+          en hora de Buenos Aires, no UTC — un alta de las 22 h local cae en su
+          propio día, no en el siguiente.
         </p>
       </section>
+
+      <QuoteRequestsSection data={quoteSeries} unit={series.unit} />
 
       <section className="mt-8">
         <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
@@ -707,5 +761,190 @@ function CantMeasureYetBlock() {
         </ul>
       </div>
     </section>
+  )
+}
+
+/**
+ * Onboarding — altas con vehículo cargado dentro de los primeros
+ * `ONBOARDING_VEHICLE_WINDOW_MIN` minutos, contra las altas brutas del mismo
+ * período. Barra apilada: "sin auto en el proceso" (resto) + "con auto en el
+ * proceso" (subset); línea = % con vehículo, sobre una escala fija a 100.
+ */
+function OnboardingChart({ data }: { data: OnboardingSeries }) {
+  const buckets = data.points.map((p) => p.bucket)
+  return (
+    <div className="mt-4">
+      <GrowthChart
+        buckets={buckets}
+        unit={data.unit}
+        label="Altas con vehículo en el mismo proceso"
+        bars={[
+          {
+            values: data.points.map((p) => Math.max(p.signups - p.withVehicle, 0)),
+            color: 'var(--color-brand-muted)',
+            label: 'sin auto en el alta',
+          },
+          {
+            values: data.points.map((p) => p.withVehicle),
+            color: 'var(--color-brand)',
+            label: 'con auto en el alta',
+          },
+        ]}
+        lines={[
+          {
+            values: data.points.map((p) => p.pctWithVehicle),
+            color: 'var(--color-action)',
+            label: '% con vehículo',
+            format: (v) => `${v.toFixed(1)}%`,
+          },
+        ]}
+        lineMax={100}
+      />
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        "Con auto en el alta" = el primer vehículo del usuario se cargó dentro de
+        los primeros 10 minutos desde su registro (mediana real: 1,5 min). El
+        denominador de cada barra es la misma serie de altas que el gráfico de
+        Usuarios de arriba.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Pedidos — las cuatro series sobre el mismo universo (cohorte por creación,
+ * sin duplicados): recibidos, propuestas por pedido, cuánto tardamos y red vs
+ * afuera. Cuelga de `quoteSeries`, que ya resuelve los dos niveles de guard
+ * (`available` / `responsesAvailable`) — acá sólo se lee el resultado.
+ */
+function QuoteRequestsSection({ data, unit }: { data: QuoteRequestSeries; unit: GrowthSearch['unit'] }) {
+  if (!data.available) {
+    return (
+      <section className="mt-8">
+        <h2 className="mb-3 font-heading text-base font-semibold">Pedidos</h2>
+        <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+          El flujo de pedidos de presupuesto todavía no está desplegado en esta
+          base — no hay nada que graficar.
+        </p>
+      </section>
+    )
+  }
+
+  const buckets = data.buckets.map((b) => b.bucket)
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-1 font-heading text-base font-semibold">Pedidos</h2>
+      <p className="mb-4 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+        Las cuatro series excluyen los duplicados (mismo corte que "Pedidos
+        totales" de arriba) y agrupan por cuándo se CREÓ el pedido, no por
+        cuándo se contestó — así "los pedidos de esta semana" es el mismo
+        conjunto en las cuatro. Con volumen bajo, conviene leerlas en Semana: en
+        vista diaria una mediana es casi siempre un solo pedido.
+      </p>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <GrowthChart
+          buckets={buckets}
+          unit={unit}
+          label="Pedidos recibidos"
+          bars={[{ values: data.buckets.map((b) => b.received), color: 'var(--color-brand)', label: `recibidos por ${unit}` }]}
+        />
+
+        {data.responsesAvailable ? (
+          <GrowthChart
+            buckets={buckets}
+            unit={unit}
+            label="Propuestas por pedido"
+            bars={[{ values: data.buckets.map((b) => b.proposalsTotal), color: 'var(--color-brand)', label: `propuestas por ${unit}` }]}
+            lines={[
+              {
+                values: data.buckets.map((b) => b.avgProposalsPerRequest),
+                color: 'var(--color-action)',
+                label: 'promedio por pedido',
+                format: (v) => v.toFixed(2),
+              },
+            ]}
+          />
+        ) : (
+          <MissingResponsesNote label="Propuestas por pedido" />
+        )}
+
+        <div>
+          <GrowthChart
+            buckets={buckets}
+            unit={unit}
+            label="Cuánto tardamos"
+            bars={[
+              {
+                values: data.buckets.map((b) => b.pendingContact),
+                color: 'var(--color-status-red)',
+                label: 'sin contactar',
+              },
+              {
+                values: data.buckets.map((b) => Math.max(b.pendingAnswer - b.pendingContact, 0)),
+                color: 'var(--color-status-yellow)',
+                label: 'contactados, sin responder',
+              },
+            ]}
+            lines={[
+              {
+                values: data.buckets.map((b) => b.medianHoursToContact),
+                color: 'var(--color-action)',
+                label: 'mediana hasta contactado',
+                format: (v) => `${v.toFixed(1)} h`,
+              },
+              {
+                values: data.buckets.map((b) => b.medianHoursToAnswer),
+                color: 'var(--color-brand)',
+                label: 'mediana hasta respondido',
+                format: (v) => `${v.toFixed(1)} h`,
+              },
+            ]}
+          />
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            "Hasta respondido" mide hasta que el operador marca respondido
+            (`answered_at`), no hasta que se manda el mensaje por WhatsApp — abrir
+            el link no escribe nada. Los pendientes NO entran a la mediana; los
+            cancelados por el usuario antes de responder no cuentan como
+            pendientes.
+          </p>
+        </div>
+
+        {data.responsesAvailable ? (
+          <GrowthChart
+            buckets={buckets}
+            unit={unit}
+            label="Propuestas: red vs. afuera"
+            bars={[
+              { values: data.buckets.map((b) => b.proposalsNetwork), color: 'var(--color-brand)', label: 'del directorio' },
+              { values: data.buckets.map((b) => b.proposalsOutside), color: 'var(--color-status-violet)', label: 'de afuera' },
+            ]}
+            lines={[
+              {
+                values: data.buckets.map((b) => b.pctNetwork),
+                color: 'var(--color-action)',
+                label: '% del directorio',
+                format: (v) => `${v.toFixed(1)}%`,
+              },
+            ]}
+            lineMax={100}
+          />
+        ) : (
+          <MissingResponsesNote label="Propuestas: red vs. afuera" />
+        )}
+      </div>
+    </section>
+  )
+}
+
+function MissingResponsesNote({ label }: { label: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <h2 className="text-sm font-semibold">{label}</h2>
+      <p className="mt-3 text-sm text-muted-foreground">
+        Falta aplicar la migración 015 (`ops.quote_request_response`) en esta
+        base — sin ella no hay de dónde leer qué contestó cada taller.
+      </p>
+    </div>
   )
 }

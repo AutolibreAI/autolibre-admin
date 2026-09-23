@@ -15,6 +15,7 @@ import {
   failureReasons,
   leadFunnel,
   marketplaceHealth,
+  onboardingSeries,
   queueHealth,
   removeExcludedDomain,
   scanRecurrence,
@@ -32,6 +33,7 @@ import type {
   ExcludedDomain,
   FailureReason,
   GrowthSeries,
+  OnboardingSeries,
   OpsPulse,
   ProposalStats,
   QueueHealth,
@@ -115,6 +117,18 @@ export const getAdoptionSeries = createServerFn({ method: 'GET' })
   .validator(growthSearchSchema)
   .handler(async ({ data }): Promise<GrowthSeries> =>
     adoptionSeries(data.unit, { signal: requestSignal() }),
+  )
+
+/**
+ * Altas con vehículo en el mismo proceso, por período (`/metricas`). Mismo
+ * `adminMiddleware` que `getAdoptionSeries`: comparte la misma serie de altas
+ * de usuarios.
+ */
+export const getOnboardingSeries = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(growthSearchSchema)
+  .handler(async ({ data }): Promise<OnboardingSeries> =>
+    onboardingSeries(data.unit, { signal: requestSignal() }),
   )
 
 /**

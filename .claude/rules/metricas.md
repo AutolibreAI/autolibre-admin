@@ -1,13 +1,20 @@
 # Métricas (`/metricas`, antes `/graficos`)
 
 Alcance: `src/routes/_authed/metricas.tsx`, `src/components/PulseCards.tsx`,
-`src/lib/ops.ts` (`ADOPTION_FEATURES`, `UsageAdoption`, `VehicleDebtAdoption`,
-`ScanRecurrence`, `ProposalStats`, `UnsolvedTasks`, `CANT_MEASURE_YET`),
-`src/server/ops.repo.ts` (`usageAdoption`, `vehicleDebtAdoption`,
-`scanRecurrence`, `assistantProposalStats`, `unsolvedTasks`, y las de siempre
-`adoptionSeries` / `vehicleDistribution`), `src/fn/ops.ts` (`getUsageAdoption`,
-`getVehicleDebtAdoption`, `getScanRecurrence`, `getAssistantProposalStats`,
-`getUnsolvedTasks`).
+`src/components/GrowthChart.tsx`, `src/lib/ops.ts` (`ADOPTION_FEATURES`,
+`UsageAdoption`, `VehicleDebtAdoption`, `ScanRecurrence`, `ProposalStats`,
+`UnsolvedTasks`, `CANT_MEASURE_YET`, `METRICS_TZ`,
+`ONBOARDING_VEHICLE_WINDOW_MIN`, `OnboardingSeries`), `src/server/ops.repo.ts`
+(`usageAdoption`, `vehicleDebtAdoption`, `scanRecurrence`,
+`assistantProposalStats`, `unsolvedTasks`, `onboardingSeries`, y las de
+siempre `adoptionSeries` / `vehicleDistribution`), `src/fn/ops.ts`
+(`getUsageAdoption`, `getVehicleDebtAdoption`, `getScanRecurrence`,
+`getAssistantProposalStats`, `getUnsolvedTasks`, `getOnboardingSeries`). La
+sección Pedidos vive en `src/lib/quote-requests.ts` (`QuoteRequestSeries`),
+`src/server/quote-requests.repo.ts` (`quoteRequestSeries`,
+`NOT_DUPLICATE_PREDICATE`) y `src/fn/quote-requests.ts`
+(`getQuoteRequestSeriesFn`) — documentado acá porque la pantalla es
+`/metricas`, no `/leads`; `leads.md` sólo tiene el predicado compartido.
 
 ## El rename fue sólo un prefijo
 
@@ -232,14 +239,159 @@ NO construirlo: el match por nombre exacto es heurística
 taller?" con "dónde fue a hacer el service" es cambiar la pregunta por otra que
 se parece. La pregunta 4 queda en "no se puede medir" (bloque 5).
 
+## Crecimiento agrupa en hora de Buenos Aires — decidido el 2026-09-23
+
+**Es la sección de este archivo que MÁS diverge del resto del panel.** Todo lo
+demás (`ai_usage_daily` de `/ai-costos`, `age_minutes` de `/actividad`, los
+`created_at` que se muestran crudos) sigue en UTC. Sólo `growthSeries()`
+(Usuarios y Vehículos), `onboardingSeries()` y `quoteRequestSeries()` agrupan
+en `METRICS_TZ` (`America/Argentina/Buenos_Aires`, constante en `~/lib/ops`).
+
+El motivo: con UTC, un alta o un pedido de las 21–24 h de Buenos Aires caía
+agrupado en el día siguiente — silencioso, sin ningún error que lo delate.
+
+**Por qué las tres, y no sólo la nueva.** El denominador de "Altas con
+vehículo" (abajo) es la MISMA serie de altas que el gráfico de Usuarios de al
+lado — si uno agrupara en Buenos Aires y el otro en UTC, el "de N altas" del %
+no cuadraría con la barra de al lado en el mismo día. Así que `growthSeries()`
+se movió también, aunque ya existía.
+
+El patrón para agrupar en zona local sin correr el bucket: `date_trunc($1, ts
+at time zone $2)` — convierte el `timestamptz` a la hora de PARED de esa zona
+(un `timestamp` sin zona) y trunca ESO, sin una segunda conversión. El bucket
+sale con `to_char(…, 'YYYY-MM-DD')` directo desde ese `timestamp` — **nunca**
+volver a pasarlo por `timestamptz` en el camino (JS, otra consulta): esa
+conversión sí correría el día 3 horas, la misma trampa que documenta
+`ai-costs.md` para la serie diaria de costos.
+
+## Altas con vehículo en el mismo proceso
+
+`onboardingSeries(unit)` en `ops.repo.ts`. Contesta algo que nadie medía: de
+los usuarios reales que se registraron en un período, ¿cuántos cargaron su
+primer auto EN EL MISMO PROCESO, no días después?
+
+- **La ventana es `ONBOARDING_VEHICLE_WINDOW_MIN = 10` minutos**, un corte
+  relevado (no elegido para que el número quede lindo): mediana real 1,5 min
+  entre el alta y el primer `vehicles.created_at`, ningún auto anterior al
+  usuario, y la curva se aplana después de los 10 min (124 de 143 con auto
+  entran a los ≤30 min). Entra por `make_interval(mins => $n)`, nunca
+  interpolada (`ops-metrics.md`, trampa 7).
+- **El período es el del ALTA del usuario**, no el del auto — la pregunta es
+  "de los que se registraron acá, ¿cuántos cargaron rápido?", no "cuántos autos
+  se cargaron acá" (eso ya lo contesta el gráfico de Vehículos).
+- `min(v.created_at)` es subconsulta ESCALAR por usuario, no `JOIN` +
+  `group by` — mismo motivo que `users.md` (trampa 2): un `JOIN` multiplicaría
+  la fila del usuario por cada auto.
+- El primer auto cuenta aunque después se haya archivado — mismo criterio que
+  `adoptionSeries` (fue un registro real en su momento).
+- La barra es apilada (sin auto / con auto en el alta), la línea es el % con
+  auto, con escala fija a 100 (`lineMax` de `GrowthChart`).
+
+## Pedidos
+
+Cuatro series sobre `quote_requests` + `ops.quote_request_response`, todas con
+el mismo `unit` de Crecimiento (sin search param nuevo). `quoteRequestSeries(unit)`
+vive en `quote-requests.repo.ts`, no acá — pero la pantalla es `/metricas`, así
+que la regla vive acá.
+
+### El universo: sin duplicados, cohorte por creación
+
+`NOT_DUPLICATE_PREDICATE` (`close_reason_code is distinct from 'duplicate'`)
+es una constante COMPARTIDA con `quoteRequestPulse()` — la misma que hace que
+la card "Pedidos totales" de `PulseRow` no cuente los duplicados
+(`.claude/rules/leads.md`). Si diverge, "pedidos de esta semana" dice un
+número en la card de Inicio y otro en el gráfico de acá abajo, del mismo
+conjunto de filas.
+
+Los cancelados por el usuario SÍ cuentan como recibidos (llegaron) pero SALEN
+de `pendingContact`/`pendingAnswer`: un pedido que la persona canceló antes de
+que el operador actúe está resuelto, no pendiente.
+
+**El filtro corre en `base`, así que alcanza a las CUATRO series, no sólo a
+2a.** `resp` (las filas de `ops.quote_request_response`) se agrega aparte y
+recién se une a `base` por `quote_request_id` — una respuesta de un pedido
+duplicado simplemente no tiene con qué unirse, porque ese `id` nunca entró a
+`base`. No hace falta (ni existe) un segundo filtro sobre `resp`: 2b y 2d
+excluyen duplicados por construcción, no por un `WHERE` adicional que alguien
+podría olvidar.
+
+**El período es el de creación del PEDIDO, no el de la respuesta.** Así "los
+pedidos de esta semana" es el mismo conjunto en las cuatro series, aunque una
+propuesta se haya cargado semanas después — la agregación de
+`ops.quote_request_response` se hace ANTES del join a `base`, por
+`quote_request_id`, para no repetir el mismo motivo de fan-out que
+`onboardingSeries`.
+
+### 2b y 2d salen de `ops.quote_request_response`, NO de `proposals_count`
+
+Relevado el 2026-09-23: para un mismo pedido, `proposals_count` (lo que el
+operador tipeó a mano al marcar respondido) y la cantidad de filas en
+`ops.quote_request_response` (lo que cargó taller por taller) **no
+coinciden** — son dos números que ya no se sincronizan
+(`.claude/rules/leads.md`, sección 015: "`proposals_count` y la cantidad de
+filas son DOS números"). Se eligió la tabla de `ops` porque es la única que
+permite separar red de afuera (2d), y porque es el detalle real, no el conteo
+tipeado aparte.
+
+### El promedio de propuestas es sobre los pedidos ENVIADOS, no sobre todos los recibidos
+
+**Corregido el 2026-09-23, antes de aplicarse a ningún dato real.** La primera
+versión de `avgProposalsPerRequest` dividía `proposalsTotal / received` — el
+promedio sobre TODOS los pedidos del bucket, contando como cero a los que
+todavía no tienen ninguna propuesta cargada. Es la pregunta equivocada: lo que
+el equipo quiere ver es *cuántas propuestas les estamos mandando a los
+clientes*, y eso es un promedio sobre a quién le mandamos algo, no sobre todo
+lo que entró (un pedido que llegó ayer y todavía no se trabajó no debería
+arrastrar el promedio hacia abajo).
+
+`avgProposalsPerRequest = proposalsTotal / pedidosConPropuesta`, y **`null`**
+(no `0`) cuando `pedidosConPropuesta` es 0 — el promedio no está definido, no
+es cero. Mismo criterio que `medianHoursToContact`/`medianHoursToAnswer`:
+`GrowthChart` ya sabe cortar la línea en un `null` en vez de caer a cero.
+
+### El guard tiene DOS niveles, y el segundo cambia la FORMA de la consulta
+
+`available` (¿existe `quote_requests`?) y `responsesAvailable` (¿está aplicada
+la 015?) son chequeos independientes. Sin `quote_requests`, no hay nada que
+graficar. Con `quote_requests` pero sin la 015, **2a y 2c se calculan
+igual** (no dependen de `ops.quote_request_response`) y **2b/2d muestran un
+aviso** — la pantalla NO explota ni esconde las dos series que sí puede
+calcular.
+
+Por eso `quoteRequestSeries()` tiene DOS formas de la consulta, no una con un
+`LEFT JOIN` condicional: no se puede referenciar
+`ops.quote_request_response` en la sentencia y esperar que Postgres la ignore
+si la tabla no existe — explota al planificarse, mismo motivo que
+`quoteRequestsAvailability()` ya documenta para `quote_requests`.
+
+### `pendingContact`/`pendingAnswer` se apilan RESTANDO, no se grafican sueltos
+
+La barra de "Cuánto tardamos" apila `pendingContact` ("sin contactar") +
+`max(pendingAnswer - pendingContact, 0)` ("contactados, sin responder"). Sin
+la resta, un pedido sin contactar se contaría dos veces (aparece en las dos
+métricas). El `max(…, 0)` es un cinturón: si algún día un pedido queda
+`answered_at IS NULL` con `contacted_at` también nulo pero excluido de una y no
+de la otra por un cambio de predicado, la resta no debería dar negativa, pero
+tampoco debe romper el gráfico si pasa.
+
+### El "tiempo hasta respondido" es APROXIMADO, y la pantalla lo dice
+
+No existe un timestamp de "se mandó el mensaje": abrir el link de WhatsApp
+(`leads.md`, plantilla «Presupuestos») no escribe nada. Lo que se mide es hasta
+`answered_at` — que sella `ops.mark_quote_request_answered` (011) cuando el
+OPERADOR marca respondido, no cuando la persona lo recibe. La pantalla dice
+"hasta marcado respondido", nunca "hasta enviado". Medir el envío real es
+trabajo aparte: un evento en `ops` al tocar el botón de WhatsApp — y ni así
+sería "envió", sería "abrió WhatsApp".
+
 ## Ni una escritura
 
 `usageAdoption`, `vehicleDebtAdoption`, `scanRecurrence`,
-`assistantProposalStats` y `unsolvedTasks` sólo cuentan. Todo lo que leen lo
-escribe el backend o el usuario en la app. La única escritura del módulo `ops`
-sigue siendo `ops.excluded_email_domains` desde `/operacion` (ver
-`ops-metrics.md`). Si aparece un `UPDATE`/`INSERT` disparado desde
-`/metricas`, está mal.
+`assistantProposalStats`, `unsolvedTasks`, `onboardingSeries` y
+`quoteRequestSeries` sólo cuentan. Todo lo que leen lo escribe el backend o el
+usuario en la app. La única escritura del módulo `ops` sigue siendo
+`ops.excluded_email_domains` desde `/operacion` (ver `ops-metrics.md`). Si
+aparece un `UPDATE`/`INSERT` disparado desde `/metricas`, está mal.
 
 ## Cómo verificar un cambio acá
 
@@ -249,11 +401,15 @@ el build) y después `& ".\node_modules\.bin\tsc.CMD" --noEmit`. Más el borde
 server-only:
 
 ```bash
-grep -rl "usageAdoption\|vehicleDebtAdoption\|scanRecurrence\|assistantProposalStats\|unsolvedTasks\|INTERNAL_PREDICATE\|POSTGRES_DATABASE_URL" .output/public
+grep -rl "usageAdoption\|vehicleDebtAdoption\|scanRecurrence\|assistantProposalStats\|unsolvedTasks\|onboardingSeries\|quoteRequestSeries\|INTERNAL_PREDICATE\|POSTGRES_DATABASE_URL" .output/public
 ```
 
 Cero resultados. Y el cuadre de cada bloque: correr las mismas subconsultas con
 `node .claude/skills/db-connect/query.mjs` y comparar contra lo que muestra la
-pantalla. Ojo con los backticks: un comentario `--` dentro del template literal
-de SQL con un `` `nombre` `` cierra el string y rompe el build con un error de
-parser opaco (`Expected ',' or ')'`) — los comentarios de SQL van sin backticks.
+pantalla. Para `onboardingSeries`/`quoteRequestSeries` conviene cargar el
+módulo real con vite (mismo patrón que `tmp/probe.mjs` de `activity-feed.md`)
+y sumar los buckets: `sum(signups)` = usuarios reales, `sum(received)` =
+`count(*)` de `quote_requests` sin duplicados. Ojo con los backticks: un
+comentario `--` dentro del template literal de SQL con un `` `nombre` `` cierra
+el string y rompe el build con un error de parser opaco (`Expected ',' or
+')'`) — los comentarios de SQL van sin backticks.

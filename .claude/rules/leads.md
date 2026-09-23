@@ -289,6 +289,15 @@ inexistente explota al planificarse, un `to_regclass` en la misma sentencia no
 lo evita. Con `available: false` la card muestra "—" y el hint lo dice, en vez
 de romper Inicio por una tabla que otra base todavía no migró.
 
+**El corte de duplicados es una constante COMPARTIDA** —
+`NOT_DUPLICATE_PREDICATE` en `quote-requests.repo.ts`
+(`close_reason_code is distinct from 'duplicate'`)— entre `quoteRequestPulse()`
+y `quoteRequestSeries()` (la sección Pedidos de `/metricas`,
+`.claude/rules/metricas.md`, desde el 2026-09-23). Si divergiera, "pedidos de
+esta semana" contaría distinto en la card de Inicio y en el gráfico de
+`/metricas`, del mismo conjunto de filas — misma clase de acoplamiento que
+`INTERNAL_PREDICATE` entre `ops.repo.ts` y `ops.v_ai_usage`.
+
 ### `QuoteRequest` ≠ `Lead`
 
 El aggregate es `QuoteRequest` (bounded context `quotes/`, tabla

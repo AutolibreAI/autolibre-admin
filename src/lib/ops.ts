@@ -112,6 +112,18 @@ export const growthSearchSchema = z.object({
 export type GrowthSearch = z.infer<typeof growthSearchSchema>
 
 /**
+ * Zona horaria de TODA la sección Crecimiento — decidido el 2026-09-23. Con
+ * UTC, un pedido o un alta de las 21–24 h de Buenos Aires caía agrupado en el
+ * día siguiente. Entra por PARÁMETRO en cada consulta (`… at time zone $n`),
+ * nunca interpolada — mismo criterio que los umbrales de `ops-metrics.md`.
+ *
+ * Alcance: `growthSeries()` (Usuarios y Vehículos), `onboardingSeries()` y
+ * `quoteRequestSeries()`. El resto del panel (`ai_usage_daily` de
+ * `/ai-costos`, etc.) sigue en UTC — no es una constante global del repo.
+ */
+export const METRICS_TZ = 'America/Argentina/Buenos_Aires'
+
+/**
  * Un punto de la serie: un período con cuántas altas hubo en él (`added`) y
  * cuántas acumuladas hasta el final del período (`total`).
  *
@@ -130,6 +142,33 @@ export interface GrowthSeries {
   unit: GrowthUnit
   users: Array<GrowthPoint>
   vehicles: Array<GrowthPoint>
+}
+
+// ── Altas con vehículo en el mismo proceso (sección Crecimiento) ───────────
+
+/**
+ * Cuántos usuarios reales cargaron su primer vehículo dentro de la ventana de
+ * onboarding, contra las altas brutas del mismo período.
+ *
+ * `ONBOARDING_VEHICLE_WINDOW_MIN = 10`: relevado el 2026-09-23 contra
+ * producción — mediana 1,5 min entre `users.created_at` y el primer
+ * `vehicles.created_at` del usuario, ningún auto anterior al usuario, y la
+ * curva se aplana después de los 10 min (124 de 143 con auto entran a los
+ * ≤30 min, 127 a la hora — el corte no es para que el número quede lindo).
+ */
+export const ONBOARDING_VEHICLE_WINDOW_MIN = 10
+
+export interface OnboardingPoint {
+  bucket: string
+  signups: number
+  withVehicle: number
+  /** `withVehicle` sobre `signups`. 0 si `signups` es 0. Derivado en JS. */
+  pctWithVehicle: number
+}
+
+export interface OnboardingSeries {
+  unit: GrowthUnit
+  points: Array<OnboardingPoint>
 }
 
 // ── Distribución de vehículos por usuario (tabla de /metricas) ───────────────
@@ -573,20 +612,20 @@ export interface CantMeasureItem {
  * pendiente que se ve aunque no se pueda hacer desde acá. Es lo que evita que se
  * vuelva a preguntar en tres meses.
  *
- * Las cuatro son del backend. Ninguna se "arregla" inventando un proxy — mismo
+ * Las tres son del backend. Ninguna se "arregla" inventando un proxy — mismo
  * criterio que la medición de tokens de IA (`ai-costs.md`) y los clicks de
  * WhatsApp a partners (`leads.md`).
+ *
+ * "Pedidos con/sin presupuesto y tiempo de entrega" SALIÓ de esta lista el
+ * 2026-09-23: la sección Pedidos de acá abajo lo mide, aunque aproximado (el
+ * "tiempo de entrega" es hasta `answered_at`, no hasta el envío real por
+ * WhatsApp — ver la nota de esa sección).
  */
 export const CANT_MEASURE_YET: ReadonlyArray<CantMeasureItem> = [
   {
     question: 'Recurrencia de las consultas de multas',
     why: '`vehicle_fine_syncs` es PK por `vehicle_id` y `fine_lookups` es UNIQUE por `plate`: cada consulta pisa la anterior, no queda historial.',
     needs: 'Que el backend escriba append-only cada lookup.',
-  },
-  {
-    question: 'Pedidos con/sin presupuesto y tiempo de entrega del presupuesto',
-    why: 'El flujo de pedidos ya existe en el backend (`quote_requests`, con `answered_at` y `proposals_count`), pero todavía no está desplegado en producción. `leads` tiene 0 filas y `lead_status` (`new/contacted/won/lost`) no tiene un estado de "presupuesto entregado".',
-    needs: 'Que `quote_requests` llegue a producción. El detalle por pedido ya se ve en /leads/pedidos.',
   },
   {
     question: 'Recurrencia de carga del odómetro',

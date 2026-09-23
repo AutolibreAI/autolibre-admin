@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { growthSearchSchema } from '~/lib/ops'
 import {
   QUOTE_REQUESTS_UNAVAILABLE,
   addQuoteRequestInternalNoteSchema,
@@ -18,6 +19,7 @@ import {
   listQuoteRequests,
   markQuoteRequestAnswered,
   markQuoteRequestContacted,
+  quoteRequestSeries,
   quoteRequestStatusSummary,
   quoteRequestsAvailability,
   setQuoteRequestRubro,
@@ -26,6 +28,7 @@ import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type {
   QuoteRequestDetailResult,
+  QuoteRequestSeries,
   QuoteRequestWriteResult,
   QuoteRequestsListResult,
 } from '~/lib/quote-requests'
@@ -67,6 +70,20 @@ export const listQuoteRequestsFn = createServerFn({ method: 'GET' })
     ])
     return { availability, rows, summary }
   })
+
+/**
+ * La sección Pedidos de `/metricas`: cuatro series sobre el mismo universo
+ * (cohorte por creación, sin duplicados). Mismo `adminMiddleware` que el resto
+ * — publica volumen y velocidad de una línea de captación real, no una métrica
+ * cualquiera. La disponibilidad va DENTRO del resultado (no como excepción):
+ * `quoteRequestSeries()` ya resuelve los dos niveles de guard.
+ */
+export const getQuoteRequestSeriesFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(growthSearchSchema)
+  .handler(async ({ data }): Promise<QuoteRequestSeries> =>
+    quoteRequestSeries(data.unit, { signal: requestSignal() }),
+  )
 
 export const getQuoteRequestFn = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])

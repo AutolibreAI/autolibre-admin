@@ -2,7 +2,14 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
-import { ADOPTION_FEATURES, OPS_WINDOW_HOURS, PROPOSAL_STATUSES, QUEUE_LABELS } from '~/lib/ops'
+import {
+  ADOPTION_FEATURES,
+  METRICS_TZ,
+  ONBOARDING_VEHICLE_WINDOW_MIN,
+  OPS_WINDOW_HOURS,
+  PROPOSAL_STATUSES,
+  QUEUE_LABELS,
+} from '~/lib/ops'
 import type {
   AdoptionFeatureRow,
   AdoptionPulse,
@@ -14,6 +21,8 @@ import type {
   GrowthUnit,
   LeadFunnel,
   MarketplaceHealth,
+  OnboardingPoint,
+  OnboardingSeries,
   OpsWindow,
   ProposalStats,
   ProposalStatus,
@@ -220,9 +229,15 @@ interface SeriesRow {
  * nadie". (`ai_usage_daily` no rellena y su chart lo tolera porque es consumo,
  * no crecimiento acumulado; acá no se tolera.)
  *
- * En UTC (`at time zone 'UTC'`) por el mismo motivo que `ai_usage_daily`: los
- * formatters del panel pinean UTC, y agrupar en otra zona haría que el último
- * bucket no cierre con el total.
+ * ── Zona horaria: `METRICS_TZ`, no UTC ──────────────────────────────────────
+ *
+ * Decidido el 2026-09-23: con UTC, un alta de las 21–24 h de Buenos Aires caía
+ * agrupada en el día siguiente. `${tsColumn} at time zone $2` convierte el
+ * `timestamptz` a la hora LOCAL (un `timestamp` sin zona, "hora de pared" en
+ * Buenos Aires); `date_trunc` sobre eso trunca esa hora de pared, sin una
+ * segunda conversión. El bucket resultante ya es el día local — por eso se
+ * imprime con `to_char` tal cual, sin volver a pasar por `timestamptz` (eso sí
+ * correría el día 3 horas, la trampa que documenta `ai-costs.md`).
  */
 async function growthSeries(
   tsColumn: string,
@@ -232,7 +247,7 @@ async function growthSeries(
   const rows = await sql<SeriesRow>(
     `
     with counts as (
-      select date_trunc($1, ${tsColumn} at time zone 'UTC') as bucket, count(*)::int as added
+      select date_trunc($1, ${tsColumn} at time zone $2) as bucket, count(*)::int as added
       ${fromWhere}
       group by 1
     ),
@@ -248,7 +263,7 @@ async function growthSeries(
     left join counts c using (bucket)
     order by b.bucket
     `,
-    [PG_UNIT[unit]],
+    [PG_UNIT[unit], METRICS_TZ],
   )
 
   return rows.map((r) => ({ bucket: r.bucket, added: toInt(r.added), total: toInt(r.total) }))
@@ -290,6 +305,100 @@ export async function adoptionSeries(
   ])
 
   return { unit, users, vehicles }
+}
+
+// ── Altas con vehículo en el mismo proceso ──────────────────────────────────
+
+interface OnboardingRow {
+  bucket: string
+  signups: number | string
+  with_vehicle: number | string
+}
+
+/**
+ * Reemplaza: nada — hoy nadie mide qué fracción de las altas carga un auto en
+ * el mismo proceso de onboarding, contra las que se registran y no vuelven a
+ * tocar la app.
+ *
+ * ── La ventana es un CORTE, no una condición de negocio ─────────────────────
+ *
+ * `ONBOARDING_VEHICLE_WINDOW_MIN` (`~/lib/ops`) entra por parámetro
+ * (`make_interval`), nunca interpolado — `ops-metrics.md`, trampa 7.
+ *
+ * ── `min(v.created_at)` es subconsulta ESCALAR, no `JOIN` + `group by` ──────
+ *
+ * Un `JOIN` a `vehicles` seguido de `group by u.id` multiplica la fila del
+ * usuario por cada auto que tenga — el mismo fan-out que `users.md` (trampa 2)
+ * documenta para `vehicle_count`. La subconsulta trae un solo valor por
+ * usuario sin ese riesgo.
+ *
+ * ── El período es el del ALTA del usuario, no el del auto ───────────────────
+ *
+ * Un usuario que se registró en el bucket A y cargó su primer auto en el
+ * bucket B (cruzando la medianoche local) sigue contando en A: la pregunta es
+ * "de los que se registraron en este período, ¿cuántos cargaron auto rápido?",
+ * no "cuántos autos se cargaron en este período" (eso ya lo contesta la serie
+ * de Vehículos).
+ *
+ * ── El denominador es la MISMA serie de altas que el gráfico de Usuarios ────
+ *
+ * `real_users` usa `INTERNAL_PREDICATE`, igual que `growthSeries('u.created_at', …)`
+ * de acá arriba. Si `signups` de este bucket no coincidiera con `added` del
+ * gráfico de Usuarios de al lado, el "de N altas" del % no cuadraría con la
+ * barra de al lado — por eso las dos comparten `METRICS_TZ` también.
+ */
+export async function onboardingSeries(
+  unit: GrowthUnit,
+  opts: { signal?: AbortSignal } = {},
+): Promise<OnboardingSeries> {
+  void opts.signal
+
+  const rows = await sql<OnboardingRow>(
+    `
+    with real_users as (
+      select u.id, u.created_at,
+        (select min(v.created_at) from vehicles v where v.user_id = u.id) as first_vehicle_at
+      from users u
+      where not ${INTERNAL_PREDICATE}
+    ),
+    counts as (
+      select
+        date_trunc($1, created_at at time zone $2) as bucket,
+        count(*)::int as signups,
+        count(*) filter (
+          where first_vehicle_at is not null
+            and first_vehicle_at - created_at <= make_interval(mins => $3::int)
+        )::int as with_vehicle
+      from real_users
+      group by 1
+    ),
+    span as (select min(bucket) as lo, max(bucket) as hi from counts),
+    buckets as (
+      select generate_series(span.lo, span.hi, ('1 ' || $1)::interval) as bucket from span
+    )
+    select
+      to_char(b.bucket, 'YYYY-MM-DD') as bucket,
+      coalesce(c.signups, 0) as signups,
+      coalesce(c.with_vehicle, 0) as with_vehicle
+    from buckets b
+    left join counts c using (bucket)
+    order by b.bucket
+    `,
+    [PG_UNIT[unit], METRICS_TZ, ONBOARDING_VEHICLE_WINDOW_MIN],
+  )
+
+  const points: Array<OnboardingPoint> = rows.map((r) => {
+    const signups = toInt(r.signups)
+    const withVehicle = toInt(r.with_vehicle)
+    return {
+      bucket: r.bucket,
+      signups,
+      withVehicle,
+      pctWithVehicle: signups === 0 ? 0 : (withVehicle / signups) * 100,
+    }
+  })
+
+  return { unit, points }
 }
 
 // ── Distribución de vehículos por usuario ───────────────────────────────────

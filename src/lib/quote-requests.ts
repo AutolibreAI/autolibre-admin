@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { canonicalWhatsAppDigits } from '~/lib/partners'
+import type { GrowthUnit } from '~/lib/ops'
 
 /**
  * Pedidos de presupuesto — `/leads/pedidos` y `/leads/pedidos/:id`.
@@ -647,3 +648,66 @@ export function formatMinutes(minutes: number | null): string {
   const restH = hours % 24
   return restH === 0 ? `${days} d` : `${days} d ${restH} h`
 }
+
+// ── Serie temporal (sección Pedidos de /metricas) ───────────────────────────
+
+/**
+ * Las cuatro series de la sección Pedidos, sobre un universo común: cohorte
+ * por `created_at` del pedido (no de la respuesta), `close_reason_code`
+ * distinto de `'duplicate'` — el mismo corte que `QuoteRequestPulse`, así que
+ * "pedidos de esta semana" es el mismo número acá y en la card de Inicio.
+ *
+ * ── Por qué disponibilidad en DOS niveles ───────────────────────────────────
+ *
+ * `available` espeja `quoteRequestsAvailability()` (sin `quote_requests` no
+ * hay nada que graficar). `responsesAvailable` espeja `quoteResponsesAvailable()`
+ * (la 015): con `quote_requests` desplegada pero la 015 sin aplicar, 2a y 2c
+ * se pueden calcular igual — sólo 2b y 2d dependen de
+ * `ops.quote_request_response`.
+ */
+export interface QuoteRequestSeriesBucket {
+  bucket: string
+
+  // 2a — recibidos
+  received: number
+  /** Acumulado hasta el final del bucket, igual que `GrowthPoint.total`. */
+  receivedTotal: number
+
+  // 2b — propuestas por pedido (sólo con `responsesAvailable`)
+  proposalsTotal: number
+  pedidosConPropuesta: number
+  /**
+   * `proposalsTotal / pedidosConPropuesta` — sobre los pedidos a los que se
+   * les MANDÓ algo, no sobre `received`. Contesta "cuántas propuestas
+   * mandamos, en promedio, a quien le mandamos", no "en promedio por pedido
+   * que entró" (eso diluiría el número con los que todavía no tienen
+   * ninguna). `null` cuando `pedidosConPropuesta` es 0: el promedio no está
+   * definido, no es cero.
+   */
+  avgProposalsPerRequest: number | null
+
+  // 2c — cuánto tardamos
+  /** Mediana en horas, alta → `contacted_at`. `null` sin ningún contactado en el bucket. */
+  medianHoursToContact: number | null
+  /** Mediana en horas, alta → `answered_at`. `null` sin ningún respondido en el bucket. */
+  medianHoursToAnswer: number | null
+  /** Sin contactar, excluidos los cancelados por el usuario (no son un pendiente). */
+  pendingContact: number
+  /** Sin responder, excluidos los cancelados por el usuario. */
+  pendingAnswer: number
+
+  // 2d — red vs afuera (sólo con `responsesAvailable`)
+  proposalsNetwork: number
+  proposalsOutside: number
+  /** `proposalsNetwork / proposalsTotal * 100`. `null` sin propuestas en el bucket. */
+  pctNetwork: number | null
+}
+
+export type QuoteRequestSeries =
+  | { available: false; responsesAvailable: false; unit: GrowthUnit; buckets: [] }
+  | {
+      available: true
+      responsesAvailable: boolean
+      unit: GrowthUnit
+      buckets: Array<QuoteRequestSeriesBucket>
+    }
