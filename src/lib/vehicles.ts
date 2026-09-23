@@ -239,3 +239,31 @@ export interface FleetSummary {
   modelsWithVehicles: number
   usersWithVehicle: number
 }
+
+/**
+ * El desplegable de `/vehiculos/catalogo`: "este modelo, ¿quién lo tiene?" —
+ * el espejo del toggle de `/usuarios` ("este usuario, ¿qué autos tiene?").
+ *
+ * Grano usuario × vehículo, como el listado de `/vehiculos/listado`: una
+ * persona con dos autos del mismo modelo son DOS filas, no una. `count(*)`
+ * de este array tiene que dar exactamente `vehicleCount` de la fila del
+ * catálogo — mismo corte (archivados incluidos).
+ */
+export interface CatalogUserRow {
+  vehicleId: string
+  userId: string
+  userEmail: string
+  userName: string | null
+  plate: string
+  alias: string | null
+  archived: boolean
+  odometerKm: number
+  scansOk: number
+  scansTotal: number
+  vtvExpiresAt: string | null
+  insuranceExpiresAt: string | null
+  /** `null` = multas nunca consultadas para este auto. Predicado `pending` compartido. */
+  fineDebtAmount: number | null
+  /** `lastSignalSql` de `~/lib/activity` — la MISMA señal que `/usuarios`. */
+  lastActivityAt: string | null
+}

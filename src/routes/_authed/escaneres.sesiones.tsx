@@ -17,7 +17,7 @@ import { listScanSessionsFn } from '~/fn/scan-sessions'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -77,25 +77,13 @@ function ScanSessions() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Usuario, patente, modelo, VIN, DTC o firmware"
-            defaultValue={search.q ?? ''}
-            className="w-72"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Usuario, patente, modelo, VIN, DTC o firmware"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+          className="w-full sm:w-72"
+        />
 
         <FilterGroup label="Estado">
           {SCAN_STATE_FILTERS.map((s) => (

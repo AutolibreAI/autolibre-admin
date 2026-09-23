@@ -222,7 +222,7 @@ function UserDetailScreen() {
       </Card>
 
       {/* ── 3. Qué tiene ──────────────────────────────────────────────────── */}
-      <Census census={user.census} />
+      <Census userId={user.id} census={user.census} />
 
       {/* ── 4. El detalle ─────────────────────────────────────────────────── */}
       <div className="mt-4 grid items-start gap-4 lg:grid-cols-5">
@@ -268,7 +268,7 @@ function UserDetailScreen() {
  * `user_id` en 24 de las 29 — repetirlo 24 veces es ruido que tapa a las 5 que
  * importan. Se muestra sólo cuando NO es el camino obvio.
  */
-function Census({ census }: { census: UserDetail['census'] }) {
+function Census({ userId, census }: { userId: string; census: UserDetail['census'] }) {
   const total = CENSUS_ENTRIES.reduce((sum, e) => sum + census[e.key], 0)
   const withData = CENSUS_ENTRIES.filter((e) => census[e.key] > 0).length
 
@@ -286,7 +286,7 @@ function Census({ census }: { census: UserDetail['census'] }) {
       <CardContent>
         <div className="grid gap-x-8 gap-y-6 sm:grid-cols-2 xl:grid-cols-3">
           {CENSUS_GROUPS.map((group) => (
-            <CensusGroupBlock key={group} group={group} census={census} />
+            <CensusGroupBlock key={group} group={group} census={census} userId={userId} />
           ))}
         </div>
 
@@ -304,9 +304,11 @@ function Census({ census }: { census: UserDetail['census'] }) {
 function CensusGroupBlock({
   group,
   census,
+  userId,
 }: {
   group: CensusGroup
   census: UserDetail['census']
+  userId: string
 }) {
   const entries = CENSUS_ENTRIES.filter((e) => e.group === group)
   const withData = entries.filter((e) => census[e.key] > 0).length
@@ -348,16 +350,32 @@ function CensusGroupBlock({
                 </div>
               </div>
 
-              <span
-                className={cn(
-                  'shrink-0 tabular-nums',
-                  empty
-                    ? 'text-sm text-muted-foreground/50'
-                    : 'text-sm font-semibold text-foreground',
-                )}
-              >
-                {formatInt(count)}
-              </span>
+              {/*
+                Sólo «feedback» linkea: es la única relación de las 29 que
+                tiene pantalla dueña hoy (`/feedback`). El resto se sigue
+                viendo sólo acá — agregarles link es un cambio aparte, pantalla
+                por pantalla.
+              */}
+              {entry.key === 'feedback' && count > 0 ? (
+                <Link
+                  to="/feedback"
+                  search={{ userId }}
+                  className="shrink-0 rounded text-sm font-semibold tabular-nums text-brand outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                >
+                  {formatInt(count)}
+                </Link>
+              ) : (
+                <span
+                  className={cn(
+                    'shrink-0 tabular-nums',
+                    empty
+                      ? 'text-sm text-muted-foreground/50'
+                      : 'text-sm font-semibold text-foreground',
+                  )}
+                >
+                  {formatInt(count)}
+                </span>
+              )}
             </li>
           )
         })}

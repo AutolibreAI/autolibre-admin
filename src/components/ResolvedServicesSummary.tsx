@@ -14,10 +14,21 @@ export function ResolvedServicesSummary({
   resolved,
   declaredCount,
   compact = false,
+  serviceOther,
+  howFound,
+  howFoundOther,
 }: {
   resolved: ResolvedServices
   declaredCount: number
   compact?: boolean
+  /**
+   * El campo "otros" del formulario, texto libre. Sólo se pasa (y se
+   * muestra) en la vista de LECTURA de la ficha de la solicitud — la lista
+   * usa `compact` y no lo necesita. `.claude/rules/partner-approval.md`.
+   */
+  serviceOther?: string | null
+  howFound?: string | null
+  howFoundOther?: string | null
 }) {
   const willBeInvisible = resolved.totalServices === 0
 
@@ -91,6 +102,27 @@ export function ResolvedServicesSummary({
         <p className="text-sm text-status-red">
           La solicitud no declaró ningún rubro.
         </p>
+      ) : null}
+
+      {serviceOther ? (
+        <div>
+          <p className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">
+            Otros (texto libre del formulario)
+          </p>
+          <p className="text-sm">{serviceOther}</p>
+        </div>
+      ) : null}
+
+      {howFound || howFoundOther ? (
+        <div>
+          <p className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">
+            Cómo nos conoció
+          </p>
+          <p className="text-sm">
+            {howFound ?? <span className="text-muted-foreground">—</span>}
+            {howFoundOther ? ` — otro: ${howFoundOther}` : ''}
+          </p>
+        </div>
       ) : null}
     </div>
   )

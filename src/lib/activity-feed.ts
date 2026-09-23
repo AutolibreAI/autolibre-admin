@@ -150,7 +150,6 @@ export const ACTIVITY_DETAIL_KINDS = [
   'consulta_datos',
   'dispositivo',
   'login',
-  'feedback',
 ] as const
 
 export type ActivityDetailKind = (typeof ACTIVITY_DETAIL_KINDS)[number]
@@ -199,7 +198,8 @@ export const ACTIVITY_TARGET_LABELS: Record<ActivityKind, string> = {
   consulta_datos: 'Ver el detalle',
   dispositivo: 'Ver el detalle',
   login: 'Ver el detalle',
-  feedback: 'Ver el detalle',
+  /** Desde el 2026-09-23, `/feedback` es la pantalla dueña — no una ficha acá. */
+  feedback: 'Ver el feedback',
 }
 
 // ── El resultado de un evento ────────────────────────────────────────────────

@@ -18,6 +18,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   Menu,
   MessageSquare,
   ScanLine,
@@ -189,6 +190,14 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    */
   { to: "/notificaciones", label: "Notificaciones", icon: Bell },
   /**
+   * `Feedback` cierra el bloque de dominio: espeja `feedback/`, su propio
+   * bounded context, y va después de `Notificaciones` porque las dos son
+   * "lo que mandamos ida y vuelta con la persona" — acá es lo que ELLA nos
+   * escribió. Antes sólo se veía como una fila más de `/actividad` y un
+   * contador en la ficha del usuario. → `.claude/rules/feedback.md`
+   */
+  { to: "/feedback", label: "Feedback", icon: Megaphone },
+  /**
    * Las dos últimas son excepciones DECLARADAS a la regla de arriba: no espejan
    * un bounded context del backend porque el backend no tiene uno. Son operación
    * del panel (`Métricas`, 2º, es la otra — analítica).
@@ -288,14 +297,21 @@ function AppShell() {
       {/* ── Sidebar (md+) ──────────────────────────────────────────────── */}
       <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-border bg-sidebar md:flex">
         <div className="flex min-h-0 flex-1 flex-col px-3 py-5">
-          <div className="px-2">
+          <div className="shrink-0 px-2">
             <Wordmark />
           </div>
-          <div className="mt-6">
+          {/*
+            `overflow-y-auto` acá, no en el `<aside>` entero: con 15 items el
+            nav ya no entra en `h-screen`, y sin esto el bug era justo el que
+            se vio — el nav se desbordaba y pisaba el footer de abajo en vez
+            de scrollear. El wordmark y el footer quedan fijos; sólo el nav
+            scrollea.
+          */}
+          <div className="mt-6 min-h-0 flex-1 overflow-y-auto">
             <NavLinks />
           </div>
         </div>
-        <div className="px-3 pb-5">
+        <div className="shrink-0 px-3 pb-5">
           <Separator className="mb-3" />
           <UserFooter name={user.name} email={user.email} />
         </div>

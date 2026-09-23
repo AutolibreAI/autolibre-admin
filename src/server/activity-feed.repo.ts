@@ -765,21 +765,6 @@ const DETAIL_QUERIES: Record<ActivityDetailKind, string> = {
     where le.id = $1
   `,
 
-  feedback: `
-    select fb.id as id, fb.submitted_at as occurred_at,
-      ${DETAIL_USER_COLS}, ${DETAIL_NO_VEHICLE_COLS},
-      null::text as outcome,
-      ${fields([
-        ['Mensaje', `nullif(btrim(fb.message), '')`],
-        ['Plataforma', 'fb.platform::text'],
-        ['Versión de la app', `nullif(btrim(fb.app_version), '')`],
-        ['Modelo del teléfono', `nullif(btrim(fb.device_model), '')`],
-        ['Sistema operativo', `nullif(btrim(fb.os_version), '')`],
-      ])} as fields
-    from feedback fb
-    join users u on u.id = fb.user_id
-    where fb.id = $1
-  `,
 }
 
 interface DetailRow {

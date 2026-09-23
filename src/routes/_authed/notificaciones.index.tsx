@@ -18,7 +18,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { BroadcastComposer } from '~/components/BroadcastComposer'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { Badge } from '~/components/ui/badge'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -160,25 +160,12 @@ function NotificationsList() {
       ) : null}
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Usuario, patente o texto"
-            defaultValue={search.q ?? ''}
-            className="w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Usuario, patente o texto"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         {facets.types.length > 0 ? (
           <FilterGroup label="Tipo">

@@ -30,11 +30,20 @@ import type { ReactNode } from 'react'
 export function ActivityLink({
   kind,
   id,
+  userId,
   className,
   children,
 }: {
   kind: ActivityKind
   id: string
+  /**
+   * Sólo la usa `feedback`, que linkea a `/feedback?userId=…` en vez de a una
+   * ficha propia (`/feedback` no tiene detalle por fila — un feedback no
+   * necesita más pantalla que la que ya lo muestra completo). Puede ser
+   * `null` (mismo caso que `login`, trampa 9 de `activity-feed.md`): ahí cae
+   * al listado sin filtrar en vez de romper.
+   */
+  userId?: string | null
   className?: string
   children: ReactNode
 }) {
@@ -81,6 +90,12 @@ export function ActivityLink({
           params={{ quoteRequestId: id }}
           className={className}
         >
+          {children}
+        </Link>
+      )
+    case 'feedback':
+      return (
+        <Link to="/feedback" search={userId ? { userId } : {}} className={className}>
           {children}
         </Link>
       )

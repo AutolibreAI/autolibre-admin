@@ -12,7 +12,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ScheduleComposer } from '~/components/ScheduleComposer'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { Badge } from '~/components/ui/badge'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -73,25 +73,13 @@ function SchedulesList() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-4">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="schedule-q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="schedule-q"
-            type="search"
-            placeholder="Nombre de la regla"
-            defaultValue={search.q ?? ''}
-            className="w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          id="schedule-q"
+          label="Buscar"
+          placeholder="Nombre de la regla"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         <FilterGroup label="Estado">
           {NOTIFICATION_SCHEDULE_STATE_FILTERS.map((state) => (

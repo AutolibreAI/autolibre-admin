@@ -238,14 +238,43 @@ function PartnerServicesEditor() {
             </CardContent>
           </Card>
 
-          {view.partner.declaredServices.length > 0 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Lo que declaró</CardTitle>
-              </CardHeader>
-              <CardContent>
+          <DeclaredCard partner={view.partner} />
+        </div>
+      </div>
+    </>
+  )
+}
+
+/**
+ * "Lo que declaró al registrarse" — de sólo lectura, al lado del editor de
+ * rubros para que el operador vea qué dijo el taller justo donde decide qué
+ * rubros cargarle.
+ *
+ * Siempre visible (no sólo `declaredServices.length > 0`): sin `applicationId`
+ * —36 de 52 partners al 2026-09-23, vinieron del `legacy_sheet`— no hay de
+ * dónde leer esto, y la tarjeta lo DICE en vez de desaparecer. Que no
+ * aparezca nada se lee como "no declaró nada", que es otra cosa.
+ */
+function DeclaredCard({ partner }: { partner: PartnerServicesView['partner'] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Lo que declaró al registrarse</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!partner.applicationId ? (
+          <p className="text-sm text-muted-foreground">
+            Vino de la planilla, no hay formulario.
+          </p>
+        ) : (
+          <>
+            {partner.declaredServices.length > 0 ? (
+              <div>
+                <p className="mb-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+                  Rubros declarados
+                </p>
                 <div className="flex flex-wrap gap-1.5">
-                  {view.partner.declaredServices.map((slug) => (
+                  {partner.declaredServices.map((slug) => (
                     <span
                       key={slug}
                       className="rounded-md border border-border bg-secondary px-2 py-0.5 font-mono text-xs"
@@ -254,17 +283,67 @@ function PartnerServicesEditor() {
                     </span>
                   ))}
                 </div>
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                  La carga automática mete TODOS los rubros de cada familia declarada, así
-                  que sobre-declara a propósito. Si hay alguno que el taller no hace, sacalo
-                  acá.
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No declaró rubros.</p>
+            )}
+
+            {partner.applicationServiceOther ? (
+              <div>
+                <p className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">
+                  Otros (texto libre del formulario)
                 </p>
-              </CardContent>
-            </Card>
-          ) : null}
-        </div>
-      </div>
-    </>
+                <p className="text-sm">{partner.applicationServiceOther}</p>
+              </div>
+            ) : null}
+
+            {partner.applicationDeclaredBrands.length > 0 ? (
+              <div>
+                <p className="mb-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+                  Marcas declaradas
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {partner.applicationDeclaredBrands.map((b) => (
+                    <span key={b} className="rounded-md border border-border bg-secondary px-2 py-0.5 text-xs">
+                      {b}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {partner.applicationDeclaredFuelTypes.length > 0 ? (
+              <div>
+                <p className="mb-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+                  Combustibles declarados
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {partner.applicationDeclaredFuelTypes.map((f) => (
+                    <span key={f} className="rounded-md border border-border bg-secondary px-2 py-0.5 text-xs">
+                      {f}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              La carga automática mete TODOS los rubros de cada familia declarada, así que
+              sobre-declara a propósito. Si hay alguno que el taller no hace, sacalo del
+              editor de al lado.
+            </p>
+
+            <Link
+              to="/solicitudes/$applicationId"
+              params={{ applicationId: partner.applicationId }}
+              className="inline-block text-xs font-medium text-brand hover:underline"
+            >
+              Ver la solicitud →
+            </Link>
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

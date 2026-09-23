@@ -231,6 +231,24 @@ export async function listApplications(
     rows.flatMap((r) => r.declared_services),
   )
 
+  /**
+   * `v_partner_application_queue` no trae `service_other`/`how_found_other`
+   * —es una vista del backend, y este repo no la migra— así que se completa
+   * con una segunda consulta chica sobre `partner_applications`, en vez de
+   * repetir el JOIN a `partners` que ya hace la vista.
+   */
+  const otherRows =
+    rows.length === 0
+      ? []
+      : await sql<{ id: string; declared_other: boolean }>(
+          `SELECT id,
+                  (coalesce(service_other, '') <> '' OR coalesce(how_found_other, '') <> '') AS declared_other
+             FROM partner_applications
+            WHERE id = ANY($1::uuid[])`,
+          [rows.map((r) => r.id)],
+        )
+  const declaredOtherById = new Map(otherRows.map((r) => [r.id, r.declared_other]))
+
   return rows.map((r) => {
     return {
       id: r.id,
@@ -243,6 +261,7 @@ export async function listApplications(
       followUpDate: r.follow_up_date,
       declaredServices: r.declared_services,
       howFound: r.how_found,
+      declaredOther: declaredOtherById.get(r.id) ?? false,
       createdAt: r.created_at,
       alreadyPublished: r.already_published,
       resolved: summarize(r.declared_services, expanded),
@@ -313,6 +332,7 @@ export async function findApplication(
     followUpDate: row.follow_up_date,
     declaredServices: row.declared_services,
     howFound: row.how_found,
+    declaredOther: Boolean(row.service_other?.trim()) || Boolean(row.how_found_other?.trim()),
     createdAt: row.created_at,
     alreadyPublished: row.already_published,
     resolved,
@@ -904,6 +924,9 @@ export async function getPartnerServices(
     description: string | null
     application_id: string | null
     declared_services: Array<string> | null
+    application_service_other: string | null
+    application_declared_brands: Array<string> | null
+    application_declared_fuel_types: Array<string> | null
     whatsapp: string | null
     email: string | null
     redirect_link: string | null
@@ -929,6 +952,9 @@ export async function getPartnerServices(
      */
     `SELECT p.id, p.name, p.status::text AS status, p.tier::text AS tier,
             p.coverage_zone, p.description, p.application_id, a.declared_services,
+            a.service_other AS application_service_other,
+            a.declared_brands AS application_declared_brands,
+            a.declared_fuel_types AS application_declared_fuel_types,
             p.whatsapp, p.email, p.redirect_link, p.hours, p.address,
             p.latitude, p.longitude,
             (SELECT coalesce(
@@ -1023,6 +1049,9 @@ export async function getPartnerServices(
       description: partner.description,
       applicationId: partner.application_id,
       declaredServices,
+      applicationServiceOther: partner.application_service_other,
+      applicationDeclaredBrands: partner.application_declared_brands ?? [],
+      applicationDeclaredFuelTypes: partner.application_declared_fuel_types ?? [],
       whatsapp: partner.whatsapp,
       email: partner.email,
       redirectLink: partner.redirect_link,

@@ -38,7 +38,7 @@ import { listAppActivity } from '~/fn/activity-feed'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { ActivityLink, OutcomeBadge } from '~/components/ActivityCells'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -120,25 +120,12 @@ function ActivityFeed() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Email, nombre, patente o detalle"
-            defaultValue={search.q ?? ''}
-            className="w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Email, nombre, patente o detalle"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         <FilterGroup label="Cuándo">
           {ACTIVITY_WINDOWS.map((w) => (
@@ -262,6 +249,7 @@ function EventRow({ event: e }: { event: ActivityEvent }) {
         <ActivityLink
           kind={e.kind}
           id={e.id}
+          userId={e.userId}
           className="group inline-flex items-start gap-2 rounded outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />

@@ -100,6 +100,11 @@ export interface ApplicationListItem {
   followUpDate: string | null
   declaredServices: Array<string>
   howFound: string | null
+  /**
+   * `true` si `service_other` o `how_found_other` tienen texto — para
+   * mostrarlo en el listado antes de abrir la ficha. `.claude/rules/partner-approval.md`.
+   */
+  declaredOther: boolean
   createdAt: string
   /** De la vista `v_partner_application_queue`. */
   alreadyPublished: boolean

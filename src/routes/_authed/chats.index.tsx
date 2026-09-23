@@ -16,7 +16,7 @@ import { listAppChatModels, listAppChats } from '~/fn/chats'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { Badge } from '~/components/ui/badge'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -108,25 +108,12 @@ function ChatsList() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="w-full space-y-1.5 sm:w-auto">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Usuario, patente o título"
-            defaultValue={search.q ?? ''}
-            className="w-full sm:w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Usuario, patente o título"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         <FilterGroup label="Tipo">
           {CHAT_TYPE_FILTERS.map((t) => (

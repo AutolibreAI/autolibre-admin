@@ -68,6 +68,15 @@ export interface PartnerServicesView {
     /** Lo que declaró en el formulario. Vacío para los de planilla o manuales. */
     declaredServices: Array<string>
     /**
+     * El resto de lo que declaró la solicitud de origen, crudo — para la
+     * tarjeta "Lo que declaró al registrarse" (`.claude/rules/partner-approval.md`).
+     * `null`/`[]` sin `applicationId` (36 de 52 partners al 2026-09-23,
+     * vinieron del `legacy_sheet` y no de un formulario).
+     */
+    applicationServiceOther: string | null
+    applicationDeclaredBrands: Array<string>
+    applicationDeclaredFuelTypes: Array<string>
+    /**
      * La ficha editable.
      *
      * Viven acá y no en `PartnerListItem` porque son de la pantalla de detalle:

@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
-import { Check, MapPin, MessageCircle, Save } from 'lucide-react'
+import { Check, MapPin, MessageCircle, Save, Send } from 'lucide-react'
 import { listPartnerCandidatesFn } from '~/fn/partners'
 import { addQuoteRequestInternalNoteFn, setQuoteRequestRubroFn } from '~/fn/quote-requests'
 import {
+  canonicalWhatsAppDigits,
   isRemoteModality,
   partnerWhatsAppUrl,
   type PartnerCandidate,
 } from '~/lib/partners'
-import { quotePublicCode, readableQuoteRequestError } from '~/lib/quote-requests'
+import { quotePublicCode, readableQuoteRequestError, type QuoteRequestDetail } from '~/lib/quote-requests'
+import { QUOTE_TEMPLATES, renderQuoteTemplate, whatsAppMessageUrl } from '~/lib/quote-templates'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
@@ -51,6 +53,12 @@ const MIN_LOCATED_SHARE = 0.5
 interface PartnerCandidatesProps {
   quoteRequestId: string
   publicNumber: number
+  /**
+   * El pedido entero, para armar el mensaje de "Pedir cotización" —
+   * `renderQuoteTemplate` con la plantilla `cotizacion_red` necesita el
+   * vehículo, la descripción y la localidad de ESTE pedido.
+   */
+  detail: QuoteRequestDetail
   /** El pedido tiene coordenadas (`location_source = 'device'`). */
   pedidoHasLocation: boolean
   catalog: Array<ServiceFamily>
@@ -64,9 +72,12 @@ interface PartnerCandidatesProps {
   onSelectCategory: (slug: string | undefined) => void
 }
 
+const COTIZACION_RED_TEMPLATE = QUOTE_TEMPLATES.find((t) => t.id === 'cotizacion_red')!
+
 export function PartnerCandidates({
   quoteRequestId,
   publicNumber,
+  detail,
   pedidoHasLocation,
   catalog,
   zones,
@@ -83,6 +94,11 @@ export function PartnerCandidates({
 
   const categories = catalog.map((f) => ({ slug: f.slug, name: f.name }))
   const dirty = selectedCategorySlug !== null && selectedCategorySlug !== savedCategorySlug
+
+  // Mismo texto para todos los candidatos — sólo cambia el destinatario. Se
+  // arma una vez acá, no por fila, y sin `responses`: la plantilla «red» no
+  // usa presupuestos, así que pedirlos de nuevo sería una consulta de más.
+  const quoteMessage = renderQuoteTemplate(COTIZACION_RED_TEMPLATE, detail)
 
   /**
    * Zona por CONTENCIÓN, igual que el filtro del listado y el tablero de
@@ -235,7 +251,13 @@ export function PartnerCandidates({
             ) : (
               <div className="space-y-2">
                 {local.map((c) => (
-                  <CandidateRow key={c.id} candidate={c} quoteRequestId={quoteRequestId} publicNumber={publicNumber} />
+                  <CandidateRow
+                    key={c.id}
+                    candidate={c}
+                    quoteRequestId={quoteRequestId}
+                    publicNumber={publicNumber}
+                    quoteMessage={quoteMessage}
+                  />
                 ))}
               </div>
             )}
@@ -246,7 +268,13 @@ export function PartnerCandidates({
                   A domicilio / a distancia — la distancia no aplica
                 </p>
                 {remote.map((c) => (
-                  <CandidateRow key={c.id} candidate={c} quoteRequestId={quoteRequestId} publicNumber={publicNumber} />
+                  <CandidateRow
+                    key={c.id}
+                    candidate={c}
+                    quoteRequestId={quoteRequestId}
+                    publicNumber={publicNumber}
+                    quoteMessage={quoteMessage}
+                  />
                 ))}
               </div>
             ) : null}
@@ -261,10 +289,13 @@ function CandidateRow({
   candidate: c,
   quoteRequestId,
   publicNumber,
+  quoteMessage,
 }: {
   candidate: PartnerCandidate
   quoteRequestId: string
   publicNumber: number
+  /** El texto de la plantilla «Pedir cotización — red», ya renderizado para este pedido. */
+  quoteMessage: string
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -272,6 +303,10 @@ function CandidateRow({
   const [error, setError] = useState<string | null>(null)
 
   const whatsAppUrl = c.whatsapp ? partnerWhatsAppUrl(c.whatsapp, c.name, quotePublicCode(publicNumber)) : null
+  // Mismo criterio de teléfono que el resto del repo: sin la forma canónica
+  // (`549` + 10 dígitos) no hay link — adivinar la característica le
+  // escribiría a otra persona.
+  const quoteUrl = whatsAppMessageUrl(canonicalWhatsAppDigits(c.whatsapp ?? ''), quoteMessage)
 
   async function registerReferral() {
     setBusy(true)
@@ -341,6 +376,24 @@ function CandidateRow({
           ) : null}
 
           <div className="flex items-center gap-1.5">
+            {/*
+              "Abrir el chat no escribe nada — ni nota interna, ni derivación.
+              Igual que el link a la persona hoy." Si se quiere que quede
+              registro de a quién se le pidió cotización, es la nota interna
+              de "Registrar derivación", a un click de acá.
+            */}
+            {quoteUrl ? (
+              <a
+                href={quoteUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-brand/30 bg-brand-soft px-2.5 text-xs text-brand hover:brightness-95"
+              >
+                <Send className="size-3.5" aria-hidden />
+                Pedir cotización
+              </a>
+            ) : null}
+
             {whatsAppUrl ? (
               <a
                 href={whatsAppUrl}

@@ -573,6 +573,15 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
   locationLatitude: number | null
   locationLongitude: number | null
   /**
+   * Localidad sola, sin calle ni altura — para las plantillas que van al
+   * TALLER (ver `~/lib/quote-templates`). Mandarle la dirección exacta a un
+   * tercero es la deuda de Ley 25.326 que `.claude/rules/leads.md` marca como
+   * bloqueante para este flujo; la localidad alcanza para que un taller sepa
+   * si le conviene tomar el trabajo. `null` en la misma situación que
+   * `locationAddress`.
+   */
+  locationLocality: string | null
+  /**
    * `MARCA MODELO` del catálogo, sin versión ni año — para nombrar el auto en
    * el mensaje que se le manda a la persona. `catalogLabel` (con versión y
    * año) sigue siendo el de la tarjeta del panel: ahí es precisión, en un

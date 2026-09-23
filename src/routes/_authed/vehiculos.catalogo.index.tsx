@@ -1,17 +1,21 @@
+import { useState } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import {
   VEHICLE_TYPES,
   VEHICLE_TYPE_LABELS,
   fleetSearchSchema,
   vehicleTypeLabel,
+  type CatalogUserRow,
   type FleetMetricRow,
   type FleetSummary,
 } from '~/lib/vehicles'
-import { fleetMetricsFn, fleetSummaryFn } from '~/fn/vehicles'
+import { fleetMetricsFn, fleetSummaryFn, getCatalogUsersFn } from '~/fn/vehicles'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
+import { ExpiryCell, FineDebtCell } from '~/components/VehicleCells'
 import {
   Table,
   TableBody,
@@ -20,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
-import { formatArs, formatInt } from '~/lib/format'
+import { formatArs, formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
 /**
@@ -80,6 +84,11 @@ export const Route = createFileRoute('/_authed/vehiculos/catalogo/')({
   component: CatalogList,
 })
 
+type CatalogUsersState =
+  | { status: 'loading' }
+  | { status: 'ok'; users: Array<CatalogUserRow> }
+  | { status: 'error' }
+
 function CatalogList() {
   const { rows, summary } = Route.useLoaderData()
   const search = Route.useSearch()
@@ -87,6 +96,35 @@ function CatalogList() {
 
   const setSearch = (next: Partial<typeof search>) =>
     navigate({ search: { ...search, ...next }, replace: true })
+
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const [usersByCatalog, setUsersByCatalog] = useState<Record<string, CatalogUsersState>>({})
+
+  /**
+   * Espejo de `toggleRow` en `usuarios.index.tsx`: pide el detalle SÓLO la
+   * primera vez que se abre una fila. 210 modelos × esta consulta en el
+   * loader sería pagar por lo que nadie abre — acá menos: el modelo con más
+   * usuarios tiene 3, así que no hace falta paginar el desplegable.
+   */
+  const toggleRow = (catalogId: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(catalogId)) next.delete(catalogId)
+      else next.add(catalogId)
+      return next
+    })
+
+    if (usersByCatalog[catalogId]) return
+
+    setUsersByCatalog((prev) => ({ ...prev, [catalogId]: { status: 'loading' } }))
+    getCatalogUsersFn({ data: { catalogId } })
+      .then((users) => {
+        setUsersByCatalog((prev) => ({ ...prev, [catalogId]: { status: 'ok', users } }))
+      })
+      .catch(() => {
+        setUsersByCatalog((prev) => ({ ...prev, [catalogId]: { status: 'error' } }))
+      })
+  }
 
   // Los conteos de los chips se calculan sobre lo YA CARGADO (post-filtro),
   // igual que hacía el listado viejo con "Sin manual (N)": son un resumen de
@@ -107,17 +145,11 @@ function CatalogList() {
       <SummaryTiles summary={summary} shown={rows.length} />
 
       <div className="mb-5 mt-5 space-y-4">
-        <Input
-          value={search.q ?? ''}
-          onChange={(e) => {
-            // El valor se lee sincrónicamente, ANTES de entrar al updater. Es
-            // la regla del repo: `e.currentTarget` es null durante el render.
-            const value = e.currentTarget.value
-            setSearch({ q: value || undefined })
-          }}
+        <SearchInput
           placeholder="Buscar por marca, modelo o versión…"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
           className="max-w-sm"
-          autoComplete="off"
         />
 
         <div className="flex flex-wrap gap-5">
@@ -200,6 +232,7 @@ function CatalogList() {
           <Table className="min-w-[1200px]">
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8" />
                 <SortHeader label="Modelo" sortKey="model" active={search.sort === 'model'} dir={search.dir} to="/vehiculos/catalogo" firstClick="asc" />
                 <SortHeader label="Tipo" sortKey="type" active={search.sort === 'type'} dir={search.dir} to="/vehiculos/catalogo" firstClick="asc" />
                 <SortHeader label="Vehículos" sortKey="vehicles" active={search.sort === 'vehicles'} dir={search.dir} to="/vehiculos/catalogo" align="right" firstClick="desc" />
@@ -215,7 +248,13 @@ function CatalogList() {
             </TableHeader>
             <TableBody>
               {rows.map((r) => (
-                <Row key={r.catalogId} r={r} />
+                <Row
+                  key={r.catalogId}
+                  r={r}
+                  expanded={expanded.has(r.catalogId)}
+                  onToggle={() => toggleRow(r.catalogId)}
+                  usersState={usersByCatalog[r.catalogId]}
+                />
               ))}
             </TableBody>
           </Table>
@@ -271,9 +310,42 @@ function SummaryTiles({ summary, shown }: { summary: FleetSummary; shown: number
   )
 }
 
-function Row({ r }: { r: FleetMetricRow }) {
+function Row({
+  r,
+  expanded,
+  onToggle,
+  usersState,
+}: {
+  r: FleetMetricRow
+  expanded: boolean
+  onToggle: () => void
+  usersState: CatalogUsersState | undefined
+}) {
   return (
+    <>
     <TableRow>
+      <TableCell className="pr-0">
+        {/*
+          Sin toggle cuando nadie tiene este modelo: desplegar una tabla vacía
+          no informa nada que "Vehículos: 0" no diga ya — mismo criterio que
+          `/usuarios` con `vehicleCount === 0`.
+        */}
+        {r.vehicleCount > 0 ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Ocultar usuarios' : 'Ver usuarios'}
+            className="flex size-6 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            {expanded ? (
+              <ChevronDown className="size-4" aria-hidden />
+            ) : (
+              <ChevronRight className="size-4" aria-hidden />
+            )}
+          </button>
+        ) : null}
+      </TableCell>
       <TableCell>
         <Link
           to="/vehiculos/catalogo/$catalogId"
@@ -367,5 +439,120 @@ function Row({ r }: { r: FleetMetricRow }) {
         </span>
       </TableCell>
     </TableRow>
+
+    {expanded ? (
+      <TableRow className="hover:bg-transparent">
+        <TableCell colSpan={12} className="whitespace-normal bg-canvas p-0">
+          <CatalogUsersPanel state={usersState} />
+        </TableCell>
+      </TableRow>
+    ) : null}
+    </>
+  )
+}
+
+/**
+ * "Quién tiene este modelo" — el espejo de `VehicleSummaryPanel` en
+ * `usuarios.index.tsx` (allá un usuario → sus autos; acá un modelo → sus
+ * usuarios). Se renderiza SOLO del lado del cliente, nunca por SSR: nace de
+ * un click, así que `ExpiryCell`/`FineDebtCell` (que usan `new Date()`) no
+ * arriesgan ningún mismatch de hidratación — no hay HTML de servidor con el
+ * que compararse.
+ */
+function CatalogUsersPanel({ state }: { state: CatalogUsersState | undefined }) {
+  if (!state || state.status === 'loading') {
+    return <p className="px-4 py-3 text-sm text-muted-foreground">Cargando usuarios…</p>
+  }
+
+  if (state.status === 'error') {
+    return (
+      <p className="px-4 py-3 text-sm text-status-yellow">
+        No se pudo traer el detalle. Cerrá y volvé a abrir la fila para reintentar.
+      </p>
+    )
+  }
+
+  if (state.users.length === 0) {
+    return <p className="px-4 py-3 text-sm text-muted-foreground">Nadie tiene este modelo.</p>
+  }
+
+  return (
+    <div className="overflow-x-auto p-3">
+      <table className="w-full min-w-[900px] text-xs">
+        <thead>
+          <tr className="border-b border-border text-muted-foreground">
+            <th className="px-2 py-1.5 text-left font-medium">Usuario</th>
+            <th className="px-2 py-1.5 text-left font-medium">Vehículo</th>
+            <th className="px-2 py-1.5 text-right font-medium">Km</th>
+            <th className="px-2 py-1.5 text-right font-medium">Escaneos</th>
+            <th className="px-2 py-1.5 text-left font-medium">VTV</th>
+            <th className="px-2 py-1.5 text-left font-medium">Seguro</th>
+            <th className="px-2 py-1.5 text-left font-medium">Deuda multas</th>
+            <th className="px-2 py-1.5 text-left font-medium">Última actividad</th>
+          </tr>
+        </thead>
+        <tbody>
+          {state.users.map((u) => (
+            <tr key={u.vehicleId} className={cn('border-b border-border/50 last:border-b-0', u.archived && 'opacity-60')}>
+              <td className="px-2 py-1.5">
+                <Link
+                  to="/usuarios/$userId"
+                  params={{ userId: u.userId }}
+                  className="font-medium text-foreground hover:text-brand hover:underline"
+                >
+                  {u.userName ?? u.userEmail}
+                </Link>
+                {u.userName ? <div className="text-muted-foreground">{u.userEmail}</div> : null}
+              </td>
+
+              <td className="px-2 py-1.5">
+                <span className="font-mono font-semibold tracking-wider">{u.plate}</span>
+                {u.alias ? <span className="text-muted-foreground"> · {u.alias}</span> : null}
+                {u.archived ? (
+                  <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    archivado
+                  </span>
+                ) : null}
+              </td>
+
+              <td className="px-2 py-1.5 text-right tabular-nums">{formatInt(u.odometerKm)}</td>
+
+              <td className="px-2 py-1.5 text-right tabular-nums">
+                {u.scansTotal === 0 ? (
+                  <span className="text-muted-foreground/50" title="Nunca usó el escáner">
+                    —
+                  </span>
+                ) : (
+                  <span className={cn(u.scansOk === 0 && 'text-status-yellow')}>
+                    {formatInt(u.scansOk)}
+                    <span className="text-muted-foreground"> / {formatInt(u.scansTotal)}</span>
+                  </span>
+                )}
+              </td>
+
+              <td className="px-2 py-1.5">
+                <ExpiryCell iso={u.vtvExpiresAt} />
+              </td>
+
+              <td className="px-2 py-1.5">
+                <ExpiryCell iso={u.insuranceExpiresAt} />
+              </td>
+
+              <td className="px-2 py-1.5">
+                <FineDebtCell amount={u.fineDebtAmount} />
+              </td>
+
+              <td className="px-2 py-1.5 text-muted-foreground">
+                {u.lastActivityAt ? (
+                  formatDate(u.lastActivityAt)
+                ) : (
+                  <span className="text-muted-foreground/70">sin actividad</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }

@@ -983,6 +983,86 @@ ronda los 900 caracteres.
 tarjeta: pedirlas de nuevo sería otro snapshot, y el texto que se manda podría
 no ser la lista que se ve dos tarjetas más abajo.
 
+### El `AL-xxxx` en TODAS las plantillas — desde el 2026-09-23
+
+Hasta acá sólo «Apertura» tenía `{{codigo}}`; «Presupuestos» no. Es la única
+forma de trazar un pedido días después, con varias conversaciones encima, así
+que se agregó ahí también (en el saludo) y quedó como una condición de las
+cuatro plantillas que hoy existen.
+
+**Guardrail en tiempo de módulo, no sólo una convención escrita**: al cargar
+`~/lib/quote-templates`, un `filter` sobre `QUOTE_TEMPLATES` busca alguna sin
+`{{codigo}}` en su `content` y, si encuentra una, **tira** con los `id` que
+faltan. La próxima plantilla que alguien agregue sin el código no pasa
+inadvertida — rompe fuerte apenas el módulo se importa, en vez de en silencio.
+Se evaluó un chequeo a nivel de tipos (un template literal type que exija la
+substring) y se descartó: TypeScript no puede expresar "esta string contiene
+esta substring" de forma legible, y el `throw` en tiempo de módulo cubre el
+mismo caso con mucho menos ceremonia.
+
+### Dos plantillas más, para pedir cotización a un TALLER — desde el 2026-09-23
+
+`cotizacion_red` («Pedir cotización — red») y `cotizacion_nuevo` («Pedir
+cotización — taller nuevo»). A diferencia de «Apertura» y «Presupuestos», que
+van a la PERSONA del pedido, estas dos llevan un tercer campo,
+`audience: 'taller'`, en `QuoteTemplate` — y eso cambia dos cosas.
+
+**Viaja MENOS dato, a propósito.** Nombre de la persona, teléfono, dirección
+exacta y patente quedan afuera: el taller no los necesita para cotizar, y
+mandárselos sin que haga falta es la misma deuda de Ley 25.326 que el backend
+marcó como bloqueante para este flujo (ver más abajo, "Es dato personal"). Lo
+que sí viaja: `{{codigo}}`, `{{vehiculo_taller}}` (`catalogLabel` con versión
+y año, TitleCased, SIN patente — a diferencia de `{{vehiculo}}` que es para la
+persona y sí la lleva), `{{pedido}}` y `{{localidad}}`.
+
+**`{{localidad}}` es la línea entera, y desaparece entera si no hay dato.**
+No es "Zona: {{localidad}}" con el prefijo fuera del placeholder — es
+`{{localidad}}` sola en su propio renglón del template, y su valor ya trae el
+`* Zona: …` armado. `renderQuoteTemplate` filtra, ANTES de sustituir, toda
+línea cuyo único contenido sea un placeholder de `OPTIONAL_LINE_KEYS` (hoy
+sólo `localidad`) que resolvió a `''` — mismo criterio que los renglones
+📍📞 de `responsesBlock()`, sólo que ahí se arman a mano y acá el texto fuente
+es estático. Localidad sale de `quote_requests.location_locality` (columna
+nueva para el repo, sumada a `READ_COLUMNS` y al SELECT del detalle **junto**
+con el tipo — `leads.md` ya avisa que leer una columna sin sumarla al guard
+hace que el guard mienta), no de `location_address`: la dirección exacta es
+justo lo que no tiene que viajar.
+
+**`{{vehiculo_taller}}` sin vehículo o sin catálogo cae en un corchete**
+(`[marca modelo versión año]`), nunca en una línea que desaparece — a
+diferencia de `localidad`, el auto es el dato central del pedido y omitirlo
+en silencio dejaría un mensaje que no dice para qué es.
+
+**`audience: 'taller'' apaga el botón de WhatsApp genérico de
+`<QuoteTemplates/>`.** Ese botón usa `canonicalWhatsAppDigits(detail.contactPhone)`
+— el teléfono de la PERSONA. Con las plantillas nuevas activas, mandar por ahí
+sería escribirle a quien no corresponde. `QuoteTemplates.tsx` sólo calcula
+`digits`/`waUrl` cuando `active.audience === 'persona'`; para `'taller'` el
+texto de "sin botón" cambia (dice que el envío va por el candidato elegido,
+no por acá) y sólo queda copiar.
+
+### Botón "Pedir cotización" en cada candidato de `PartnerCandidates`
+
+El envío real de la plantilla «red» pasa por acá, no por el botón genérico de
+arriba: cada fila de `PartnerCandidates` ya resolvía un link "WhatsApp" con un
+saludo fijo (`partnerWhatsAppUrl`); desde el 2026-09-23 suma un segundo botón,
+"Pedir cotización", que abre `wa.me/<taller>` con `renderQuoteTemplate` de la
+plantilla `cotizacion_red` YA renderizada para ESE pedido (`whatsAppMessageUrl`,
+mismo tope `WHATSAPP_TEXT_MAX`) — se calcula UNA vez en `PartnerCandidates`
+(no depende del candidato) y se pasa a cada `CandidateRow`. Mismo criterio de
+teléfono que todo el repo: sin `549` + 10 dígitos canónicos, no hay botón.
+
+Para el taller NUEVO no hay botón: no está en el directorio, no tenemos su
+número. El operador lo copia desde `<QuoteTemplates/>` y lo pega en su
+WhatsApp con el número que consiga por fuera.
+
+**Abrir el chat no escribe nada** — ni nota interna, ni derivación. Igual que
+el link "WhatsApp" que ya existía. Si se quiere que quede registro de "a quién
+le pedí cotización", el camino es el mismo de siempre: una nota interna a
+mano vía "Registrar derivación", a un click de acá. Hacerlo automático
+afirmaría que se mandó un mensaje que sólo se abrió — el link puede quedar sin
+enviar en la pestaña de WhatsApp Web.
+
 ## Cómo verificar un cambio acá
 
 `pnpm typecheck` + `pnpm build` (el build regenera `routeTree.gen.ts`, así que

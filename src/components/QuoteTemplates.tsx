@@ -72,10 +72,15 @@ export function QuoteTemplates({
   const text = edits[active.id] ?? original
   const edited = edits[active.id] !== undefined && edits[active.id] !== original
 
+  // El teléfono del PEDIDO es el de la persona. Para una plantilla que va al
+  // taller (`audience: 'taller'`) mandarla ahí sería escribirle a quien no
+  // corresponde — ese envío se resuelve por taller elegido, desde
+  // `PartnerCandidates`. Acá sólo queda copiar.
+  const isForPerson = active.audience === 'persona'
   // Mismo criterio de teléfono que todo el repo: `549` + 10 dígitos, sin
   // adivinar la característica — adivinarla mal le escribe a otra persona.
-  const digits = canonicalWhatsAppDigits(detail.contactPhone)
-  const waUrl = whatsAppMessageUrl(digits, text)
+  const digits = isForPerson ? canonicalWhatsAppDigits(detail.contactPhone) : null
+  const waUrl = isForPerson ? whatsAppMessageUrl(digits, text) : null
   const { expired } = splitQuoteResponsesForMessage(responses)
 
   async function copy() {
@@ -185,15 +190,19 @@ export function QuoteTemplates({
           ) : null}
 
           {/*
-            Las dos razones por las que no hay botón de WhatsApp se explican por
-            separado: una se arregla corrigiendo el teléfono del pedido, la otra
-            acortando el mensaje. Un solo "no se puede" mandaría a buscar mal.
+            Las razones por las que no hay botón de WhatsApp se explican por
+            separado: una se arregla corrigiendo el teléfono del pedido, otra
+            acortando el mensaje, y la de "taller" no es un problema — es que
+            el envío va por taller elegido, no por acá. Un solo "no se puede"
+            mandaría a buscar mal.
           */}
           {!waUrl ? (
             <span className="text-xs leading-relaxed text-muted-foreground">
-              {!digits
-                ? 'Sin botón de WhatsApp: el teléfono del pedido no está en la forma 549 + 10 dígitos, y completar una característica sería adivinarla. Copiá el texto y mandalo desde tu WhatsApp.'
-                : `Sin botón de WhatsApp: el mensaje tiene ${text.length} caracteres y el link soporta hasta ${WHATSAPP_TEXT_MAX}. Copialo, o acortá alguna respuesta.`}
+              {!isForPerson
+                ? 'Este mensaje es para el taller: mandalo con el botón "Pedir cotización" del candidato elegido, o copialo y pegalo en tu WhatsApp.'
+                : !digits
+                  ? 'Sin botón de WhatsApp: el teléfono del pedido no está en la forma 549 + 10 dígitos, y completar una característica sería adivinarla. Copiá el texto y mandalo desde tu WhatsApp.'
+                  : `Sin botón de WhatsApp: el mensaje tiene ${text.length} caracteres y el link soporta hasta ${WHATSAPP_TEXT_MAX}. Copialo, o acortá alguna respuesta.`}
             </span>
           ) : null}
         </div>

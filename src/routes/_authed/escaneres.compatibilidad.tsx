@@ -16,7 +16,7 @@ import {
 import { getScannerCompatibility, getScannerSessions } from '~/fn/scanners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { CopyableId } from '~/components/CopyableId'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -116,34 +116,17 @@ function ScannerCompatibility() {
 
       <VariantLegend variants={matrix.variants} search={search} />
 
+      {/*
+       * El filtro toca FILAS, nunca columnas: dos escáneres se comparan
+       * mirándolos juntos sobre la misma fila, así que esconder una columna
+       * rompería lo único que esta pantalla hace.
+       */}
       <div className="mt-5 max-w-sm">
-        <label
-          htmlFor="q"
-          className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-        >
-          Filtrar por vehículo
-        </label>
-        <Input
-          id="q"
-          type="search"
-          defaultValue={search.q ?? ''}
+        <SearchInput
+          label="Filtrar por vehículo"
           placeholder="Marca, modelo, versión o año"
-          /**
-           * `replace: true` para que escribir en el buscador no llene el
-           * historial con una entrada por tecla. Mismo criterio que Usuarios y
-           * Catálogo.
-           *
-           * El filtro toca FILAS, nunca columnas: dos escáneres se comparan
-           * mirándolos juntos sobre la misma fila, así que esconder una columna
-           * rompería lo único que esta pantalla hace.
-           */
-          onChange={(event) => {
-            const value = event.target.value.trim()
-            navigate({
-              search: (prev) => ({ ...prev, q: value === '' ? undefined : value }),
-              replace: true,
-            })
-          }}
+          value={search.q}
+          onSearch={(q) => navigate({ search: (prev) => ({ ...prev, q }), replace: true })}
         />
       </div>
 
