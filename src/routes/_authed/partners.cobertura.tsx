@@ -7,7 +7,7 @@ import {
 import { getPartnerCoverageBoard } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import { SortHeader } from '~/components/SortHeader'
 import {
   Table,
@@ -129,25 +129,14 @@ function CoberturaBoard() {
       </div>
 
       <div className="mb-3 flex flex-wrap items-end gap-x-4 gap-y-2">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="zone-q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Filtrar zona
-          </label>
-          <Input
-            id="zone-q"
-            type="search"
-            placeholder="Tigre, CABA, Zona Norte…"
-            defaultValue={search.q ?? ''}
-            className="w-56"
-            onChange={(e) => {
-              const v = e.currentTarget.value.trim()
-              setSearch({ q: v === '' ? undefined : v })
-            }}
-          />
-        </div>
+        <SearchInput
+          id="zone-q"
+          label="Filtrar zona"
+          placeholder="Tigre, CABA, Zona Norte…"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+          className="w-full sm:w-56"
+        />
 
         {focused.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5">

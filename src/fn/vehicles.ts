@@ -1,9 +1,10 @@
 import { createServerFn } from '@tanstack/react-start'
+import { z } from 'zod'
 import { fleetSearchSchema, vehicleSearchSchema } from '~/lib/vehicles'
-import { fleetMetrics, fleetSummary, listVehicles } from '~/server/vehicles.repo'
+import { fleetMetrics, fleetSummary, listCatalogUsers, listVehicles } from '~/server/vehicles.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
-import type { FleetMetricRow, FleetSummary, VehicleListRow } from '~/lib/vehicles'
+import type { CatalogUserRow, FleetMetricRow, FleetSummary, VehicleListRow } from '~/lib/vehicles'
 
 /**
  * Vehículos — el borde RPC.
@@ -36,4 +37,17 @@ export const fleetSummaryFn = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
   .handler(async (): Promise<FleetSummary> =>
     fleetSummary({ signal: requestSignal() }),
+  )
+
+/**
+ * "Quién tiene este modelo" — el desplegable de `/vehiculos/catalogo`. Se
+ * llama al click de una fila, nunca del loader (`vehiculos.catalogo.index.tsx`
+ * espera esto, no la lista completa de 210 modelos). Devuelve email, nombre y
+ * patente: mismo dato personal que `getUserVehicleSummaries`, mismo guard.
+ */
+export const getCatalogUsersFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(z.object({ catalogId: z.uuid() }))
+  .handler(async ({ data }): Promise<Array<CatalogUserRow>> =>
+    listCatalogUsers(data.catalogId, { signal: requestSignal() }),
   )

@@ -114,6 +114,54 @@ Si el de multas diverge, el mismo auto muestra dos montos distintos en
 clase de acoplamiento que `INTERNAL_PREDICATE` entre `ops.repo.ts` y
 `ops.v_ai_usage`.
 
+`listCatalogUsers` (el desplegable de abajo) es la única función de este
+archivo que NO recopia el predicado de escaneo: `OK` se **importa** de
+`scanners.repo.ts`. Si algún día el resto de `vehicles.repo.ts` también
+importa en vez de recopiar, es una limpieza aparte — hoy conviven las dos
+formas a propósito, porque `listVehicles`/`fleetMetrics` ya estaban escritas
+antes de que `OK`/`NO_DATA` se exportaran (`scan-sessions.md`).
+
+## El desplegable "quién tiene este modelo" (`/vehiculos/catalogo`) — desde el 2026-09-23
+
+Cada fila del Catálogo se despliega y muestra las PERSONAS que tienen ese
+modelo — el espejo exacto del toggle de `/usuarios` (allá un usuario → sus
+autos; acá un modelo → sus usuarios). Relevado antes de construirlo: el
+modelo con más usuarios tiene **3**, el promedio es 1,1 y 13 modelos tienen
+más de uno — el desplegable es chico siempre, no hace falta paginar.
+
+**Mismo mecanismo que `usuarios.index.tsx`**: `useState<Set>` de expandidos +
+fetch AL CLICK, nunca en el loader — 210 modelos × esta consulta sería pagar
+por lo que nadie abre. `getCatalogUsersFn({ catalogId })` en `src/fn/vehicles.ts`
+llama a `listCatalogUsers(catalogId)` en el repo, con `adminMiddleware` (email
+y teléfono indirecto vía patente — misma sensibilidad que
+`getUserVehicleSummaries`, trampa 8 de `users.md`).
+
+**Grano usuario × vehículo, no usuario**: una persona con dos autos del mismo
+modelo son DOS filas — mismo criterio que `/vehiculos/listado`, que tampoco
+deduplica. El cuadre: para un modelo, `count(*)` del desplegable tiene que dar
+exactamente `vehicleCount` de su fila del Catálogo (archivados incluidos en
+los dos lados — verificado el 2026-09-23 contra `HYUNDAI HB`, 3 y 3).
+
+`join` (no `left join`) a `vehicle_catalog_specs` y a `users`: mismo motivo que
+`listVehicles` — `vehicle_catalog_spec_id` y `user_id` son NOT NULL con FK, y
+un `left join` escondería corrupción detrás de celdas vacías. El doble salto
+`vehicles → vehicle_catalog_specs → vehicle_catalogs` es la misma trampa de
+`vehicle-manuals.md` (trampa 3): `vehicles` apunta al SPEC, no al catálogo —
+acá ni hace falta llegar a `vehicle_catalogs`, alcanza con filtrar
+`vcs.vehicle_catalog_id = $1`.
+
+Las columnas están elegidas para leerse IGUAL que en `/usuarios`: se reusan
+`ExpiryCell` y `FineDebtCell` de `~/components/VehicleCells` tal cual — si
+"VTV vence en 3 días" se viera distinto acá, una de las dos pantallas estaría
+mal. Igual que el toggle de `/usuarios`, este panel se renderiza SÓLO del
+lado del cliente (nace de un click, nunca de SSR), así que esas celdas —que
+usan `new Date()`— no arriesgan ningún mismatch de hidratación.
+
+Sin toggle cuando `vehicleCount === 0` (30 de 210 modelos): desplegar una
+tabla vacía no informa nada que la columna "Vehículos" en 0 no diga ya.
+
+Ni una escritura.
+
 ## `vehicle_tax_debts` está VACÍA en producción
 
 La columna "Deuda patente" del listado lee de `vehicle_tax_debts`

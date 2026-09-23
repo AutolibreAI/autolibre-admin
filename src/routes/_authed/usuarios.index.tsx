@@ -20,7 +20,7 @@ import { getUserVehicleSummaries, listAppUsers } from '~/fn/users'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { Badge } from '~/components/ui/badge'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -205,25 +205,12 @@ function UsersList() {
       ) : null}
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="w-full space-y-1.5 sm:w-auto">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Email o nombre"
-            defaultValue={search.q ?? ''}
-            className="w-full sm:w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Email o nombre"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         <FilterGroup label="Rol">
           {USER_ROLE_FILTERS.map((role) => (

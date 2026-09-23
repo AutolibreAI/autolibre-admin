@@ -25,7 +25,7 @@ import { SortHeader } from '~/components/SortHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { QuoteRequestComposer } from '~/components/QuoteRequestComposer'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
@@ -141,25 +141,12 @@ function Pedidos() {
       <SummaryTiles summary={summary} />
 
       <div className="mb-4 mt-5 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="AL-1001, patente, teléfono, email…"
-            defaultValue={search.q ?? ''}
-            className="w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="AL-1001, patente, teléfono, email…"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         <FilterGroup label="Estado">
           <Chip active={search.quoteStatus === 'open'} onClick={() => setSearch({ quoteStatus: 'open' })}>

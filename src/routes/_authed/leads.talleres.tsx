@@ -14,7 +14,7 @@ import { advanceMarketplaceLead, listMarketplaceLeads } from '~/fn/leads'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -89,28 +89,13 @@ function Leads() {
       ) : null}
 
       <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Taller, nombre o email"
-            defaultValue={search.q ?? ''}
-            className="w-56"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              navigate({
-                search: (prev) => ({ ...prev, q: value === '' ? undefined : value }),
-                replace: true,
-              })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Taller, nombre o email"
+          value={search.q}
+          onSearch={(q) => navigate({ search: (prev) => ({ ...prev, q }), replace: true })}
+          className="w-full sm:w-56"
+        />
 
         <div className="space-y-1.5">
           <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">

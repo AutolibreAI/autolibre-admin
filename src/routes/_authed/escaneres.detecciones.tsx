@@ -24,7 +24,7 @@ import { getDetectionSessionsFn, listDetectionsFn } from '~/fn/detections'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -102,25 +102,12 @@ function Detections() {
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Código DTC o tipo de anomalía"
-            defaultValue={search.q ?? ''}
-            className="w-64"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Código DTC o tipo de anomalía"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+        />
 
         <FilterGroup label="Tipo">
           {DETECTION_KIND_FILTERS.map((k) => (

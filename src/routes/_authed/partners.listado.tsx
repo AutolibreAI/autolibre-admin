@@ -10,7 +10,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { Badge } from '~/components/ui/badge'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -107,25 +107,13 @@ function PartnersListado() {
       ) : null}
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
-        <div className="space-y-1.5">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Nombre del taller"
-            defaultValue={search.q ?? ''}
-            className="w-56"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setSearch({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Nombre del taller"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+          className="w-full sm:w-56"
+        />
 
         {/*
           Multiselect: dentro de un grupo la semántica es O ("Motor o Frenos"),

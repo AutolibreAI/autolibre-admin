@@ -254,6 +254,7 @@ function QuoteRequestScreen() {
         key={d.id}
         quoteRequestId={d.id}
         publicNumber={d.publicNumber}
+        detail={d}
         pedidoHasLocation={d.locationLatitude !== null && d.locationLongitude !== null}
         catalog={catalog}
         zones={zones}

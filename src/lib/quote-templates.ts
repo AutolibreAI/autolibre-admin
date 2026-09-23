@@ -38,11 +38,31 @@ import { formatDate } from '~/lib/format'
  *   4. **La recomendación final es un `[corchete]`.** "Si querés avanzar
  *      rápido, X te da el diagnóstico sin costo" es juicio del operador sobre
  *      ese caso; ninguna plantilla la puede escribir sin inventar.
+ *
+ * ── Dos plantillas más, agregadas el 2026-09-23, para pedir cotización ─────
+ *
+ * «Pedir cotización — red» y «Pedir cotización — taller nuevo» van al TALLER,
+ * no a la persona del pedido — por eso llevan `audience: 'taller'` (ver más
+ * abajo) y por eso viaja MENOS dato que en las otras dos: nombre, teléfono,
+ * dirección exacta y patente de la persona quedan afuera. Mandárselos a un
+ * tercero sin que el taller los necesite para cotizar es la misma deuda de
+ * Ley 25.326 que el backend marcó como bloqueante para `/leads/pedidos`
+ * (`.claude/rules/leads.md`) — y la patente tampoco hace falta para cotizar.
  */
+
+export type QuoteTemplateAudience = 'persona' | 'taller'
 
 export interface QuoteTemplate {
   id: string
   title: string
+  /**
+   * A quién va el mensaje. Decide si `<QuoteTemplates/>` puede ofrecer un
+   * botón de WhatsApp con el teléfono DEL PEDIDO (`persona`) — para `taller`
+   * ese teléfono es el de otra persona, así que el envío se resuelve aparte
+   * (`PartnerCandidates`, con el WhatsApp de CADA candidato) y acá sólo queda
+   * copiar el texto.
+   */
+  audience: QuoteTemplateAudience
   /** Cruda, con `{{placeholders}}` — nunca se muestra así, sólo `renderQuoteTemplate()` la usa. */
   content: string
 }
@@ -51,6 +71,7 @@ export const QUOTE_TEMPLATES: ReadonlyArray<QuoteTemplate> = [
   {
     id: 'apertura',
     title: 'Apertura',
+    audience: 'persona',
     content: `Hola! Te escribo desde AutoLibre.ai por el pedido {{codigo}}.
 Tenemos registrado:
 
@@ -63,6 +84,7 @@ Ya estamos trabajando, cualquier duda o correccion avisanos!`,
   {
     id: 'presupuestos',
     title: 'Presupuestos',
+    audience: 'persona',
     /**
      * `{{intro}}` es el párrafo entero y no `respuesta de {{cantidad}} para
      * {{vehiculo}}` suelto, porque la gramática cambia con la cantidad: con un
@@ -70,7 +92,7 @@ Ya estamos trabajando, cualquier duda o correccion avisanos!`,
      * hay entre qué elegir), y con cero, "respuesta de cero talleres" se lee
      * como un bug nuestro. Las tres redacciones están en `introSentence()`.
      */
-    content: `Hola! {{intro}}
+    content: `Hola! Te escribo por el pedido {{codigo}}. {{intro}}
 
 {{presupuestos}}
 
@@ -78,7 +100,54 @@ Ya estamos trabajando, cualquier duda o correccion avisanos!`,
 
 Cualquier otra cosa que necesites avisá y esperamos tu feedback!`,
   },
+  {
+    id: 'cotizacion_red',
+    title: 'Pedir cotización — red',
+    audience: 'taller',
+    content: `Hola! Te escribo de AutoLibre.ai por el pedido {{codigo}}.
+Tenemos un usuario que necesita:
+
+* {{vehiculo_taller}}
+* {{pedido}}
+{{localidad}}
+
+¿Lo podés tomar? ¿Cuándo podrías hacerlo y qué costo estimás?`,
+  },
+  {
+    id: 'cotizacion_nuevo',
+    title: 'Pedir cotización — taller nuevo',
+    audience: 'taller',
+    content: `Hola! Somos AutoLibre.ai, una plataforma que conecta dueños de autos con talleres y proveedores.
+Tenemos un usuario que necesita lo siguiente (pedido {{codigo}}):
+
+* {{vehiculo_taller}}
+* {{pedido}}
+{{localidad}}
+
+¿Les interesaría el trabajo? ¿Cuándo lo pueden hacer? ¿Pueden estimar costo?`,
+  },
 ]
+
+/**
+ * Guardrail: ninguna plantilla se puede olvidar el `{{codigo}}` (`AL-xxxx`).
+ * Es la única forma de trazar un pedido días después, con varias
+ * conversaciones encima — corre en tiempo de módulo para que agregar una
+ * plantilla nueva sin el placeholder rompa fuerte, no en silencio.
+ */
+const templatesWithoutCodigo = QUOTE_TEMPLATES.filter((t) => !t.content.includes('{{codigo}}'))
+if (templatesWithoutCodigo.length > 0) {
+  throw new Error(
+    `QUOTE_TEMPLATES sin {{codigo}}: ${templatesWithoutCodigo.map((t) => t.id).join(', ')}`,
+  )
+}
+
+/**
+ * Placeholders cuya LÍNEA entera desaparece cuando no hay dato, en vez de
+ * dejar un renglón como "Zona: " vacío — mismo criterio que los renglones
+ * 📍📞 de `responsesBlock()`, sólo que ahí se arman a mano y acá el template
+ * es texto estático con `{{placeholders}}`. Ver `renderQuoteTemplate()`.
+ */
+const OPTIONAL_LINE_KEYS: ReadonlySet<string> = new Set(['localidad'])
 
 // ── Piezas del render ───────────────────────────────────────────────────────
 
@@ -158,6 +227,26 @@ function zoneValue(detail: QuoteRequestDetail): string {
 }
 
 /**
+ * Cómo se nombra el auto en las plantillas que van al TALLER: `Suzuki Fun 1.4
+ * 2007` — versión y año incluidos (el taller cotiza sobre eso), patente
+ * afuera (no la necesita, y es dato de la persona). Sin vehículo vinculado o
+ * sin catálogo, un corchete a completar — nunca se adivina el auto.
+ */
+function workshopVehiclePhrase(detail: QuoteRequestDetail): string {
+  return detail.catalogLabel ? titleCaseModel(detail.catalogLabel) : '[marca modelo versión año]'
+}
+
+/**
+ * `null` acá NO cae en un corchete: la línea entera de zona desaparece (ver
+ * `OPTIONAL_LINE_KEYS`). Es a propósito — un taller sin zona igual puede
+ * cotizar, así que forzarlo a completar un corchete de zona sería pedirle al
+ * operador que invente un dato que no tiene.
+ */
+function localityValue(detail: QuoteRequestDetail): string {
+  return detail.locationLocality ? `* Zona: ${detail.locationLocality}` : ''
+}
+
+/**
  * Qué respuestas entran al mensaje y cuáles no.
  *
  * **Una vencida NO entra**: mandar un precio que ya caducó es peor que mandar
@@ -232,12 +321,29 @@ export function renderQuoteTemplate(
     patente: detail.plate,
     vehiculo: vehiclePhrase(detail),
     vehiculo_completo: fullVehicleValue(detail),
+    vehiculo_taller: workshopVehiclePhrase(detail),
     pedido: detail.description,
     zona: zoneValue(detail),
+    localidad: localityValue(detail),
     intro: introSentence(included.length, vehiclePhrase(detail), detail.description),
     presupuestos: responsesBlock(responses),
   }
-  return template.content.replace(/\{\{(\w+)\}\}/g, (match, key: string) => values[key] ?? match)
+
+  // Una línea cuyo ÚNICO contenido es un placeholder de `OPTIONAL_LINE_KEYS`
+  // desaparece entera cuando ese placeholder resolvió a ''. No se puede
+  // decidir después del reemplazo (una línea vacía es indistinguible de una
+  // que nunca tuvo dato), así que se filtra ANTES, línea por línea.
+  const lines = template.content.split('\n').filter((line) => {
+    const trimmed = line.trim()
+    const match = /^\{\{(\w+)\}\}$/.exec(trimmed)
+    if (!match) return true
+    const key = match[1]!
+    return !(OPTIONAL_LINE_KEYS.has(key) && !values[key])
+  })
+
+  return lines
+    .map((line) => line.replace(/\{\{(\w+)\}\}/g, (match, key: string) => values[key] ?? match))
+    .join('\n')
 }
 
 // ── Mandarlo por WhatsApp ───────────────────────────────────────────────────

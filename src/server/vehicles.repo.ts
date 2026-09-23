@@ -1,7 +1,10 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { lastSignalSql } from '~/lib/activity'
+import { OK } from './scanners.repo'
 import type {
+  CatalogUserRow,
   FleetMetricRow,
   FleetSearch,
   FleetSortKey,
@@ -429,4 +432,93 @@ export async function fleetSummary(
     modelsWithVehicles: toInt(row?.models_with_vehicles),
     usersWithVehicle: toInt(row?.users_with_vehicle),
   }
+}
+
+// ── El desplegable "quién tiene este modelo" ────────────────────────────────
+
+interface CatalogUserQueryRow {
+  vehicle_id: string
+  user_id: string
+  user_email: string
+  user_name: string | null
+  plate: string
+  alias: string | null
+  archived: boolean
+  odometer_km: number | string
+  scans_ok: number | string
+  scans_total: number | string
+  vtv_expires_at: Date | string | null
+  insurance_expires_at: Date | string | null
+  fine_debt_amount: number | string | null
+  last_activity_at: Date | string | null
+}
+
+/**
+ * Las personas que tienen ESTE modelo — el espejo de `getUserVehicleSummaries`
+ * (`/usuarios`). Se llama al click, nunca desde el loader del catálogo: 210
+ * modelos × esta consulta sería pagar por lo que nadie abre.
+ *
+ * `join` (no `left`) al catálogo y al dueño, mismo motivo que `listVehicles`:
+ * `vehicle_catalog_spec_id` y `user_id` son NOT NULL con FK, y un `left join`
+ * escondería corrupción detrás de celdas vacías. El doble salto
+ * `vehicles → vehicle_catalog_specs → vehicle_catalogs` es la misma trampa
+ * que documenta `vehicle-manuals.md` (trampa 3): `vehicles` apunta al SPEC,
+ * no al catálogo.
+ *
+ * `OK` se IMPORTA de `scanners.repo.ts`, no se recopia — si diverge del
+ * corte que usa la matriz de `/escaneres`, esta columna y esa matriz dicen
+ * dos cosas distintas de la misma sesión.
+ */
+export async function listCatalogUsers(
+  catalogId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<CatalogUserRow>> {
+  void opts.signal
+
+  const rows = await sql<CatalogUserQueryRow>(
+    `select
+       v.id as vehicle_id,
+       u.id as user_id, u.email as user_email, u.name as user_name,
+       v.plate, v.alias, v.archived, v.odometer_value as odometer_km,
+       (select count(*) filter (where ${OK})::int
+          from driving_sessions ds where ds.vehicle_id = v.id) as scans_ok,
+       (select count(*)::int from driving_sessions ds where ds.vehicle_id = v.id) as scans_total,
+       (select vi.expiration_date from vehicle_inspections vi
+          where vi.vehicle_id = v.id
+          order by vi.archived asc, vi.created_at desc limit 1) as vtv_expires_at,
+       (select i.expiration_date from insurances i
+          where i.vehicle_id = v.id
+          order by i.archived asc, i.created_at desc limit 1) as insurance_expires_at,
+       case when not exists (select 1 from vehicle_fine_syncs vfs where vfs.vehicle_id = v.id)
+            then null
+            else coalesce((select round(sum(f.amount)) from fines f
+                             where f.vehicle_id = v.id and f.status = 'pending'), 0)::bigint
+       end as fine_debt_amount,
+       ${lastSignalSql('u.id')} as last_activity_at
+     from vehicles v
+     join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+     join users u on u.id = v.user_id
+     where vcs.vehicle_catalog_id = $1
+     order by u.email, v.plate`,
+    [catalogId],
+  )
+
+  return rows.map(
+    (r): CatalogUserRow => ({
+      vehicleId: r.vehicle_id,
+      userId: r.user_id,
+      userEmail: r.user_email,
+      userName: r.user_name,
+      plate: r.plate,
+      alias: r.alias,
+      archived: r.archived,
+      odometerKm: toInt(r.odometer_km),
+      scansOk: toInt(r.scans_ok),
+      scansTotal: toInt(r.scans_total),
+      vtvExpiresAt: toIso(r.vtv_expires_at),
+      insuranceExpiresAt: toIso(r.insurance_expires_at),
+      fineDebtAmount: toIntOrNull(r.fine_debt_amount),
+      lastActivityAt: toIso(r.last_activity_at),
+    }),
+  )
 }

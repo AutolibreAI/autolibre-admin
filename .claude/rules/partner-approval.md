@@ -186,6 +186,45 @@ La mayoría tiene 1–2 rubros, lo que sugiere que vinieron de la planilla vieja
 automática por familia (que da 5–10+ por familia declarada). Vale tenerlo en cuenta antes de leer un
 número bajo como un error.
 
+## "Lo que declaró al registrarse" (`/partners/$partnerId`) — desde el 2026-09-23
+
+Tarjeta de sólo lectura, al lado del editor de rubros (misma columna donde antes vivía "Lo que
+declaró" con sólo los `declaredServices`) — ahora se llama `DeclaredCard` y suma tres cosas que antes
+sólo se veían adentro del formulario de edición de la SOLICITUD (`ApplicationEditor`, en
+`/solicitudes/$applicationId`): el campo "otros" de rubros/tareas (`service_other`), marcas
+declaradas y combustibles declarados. Más un link directo a la solicitud de origen.
+
+**Siempre visible, no condicionada a `declaredServices.length > 0`.** Antes la tarjeta desaparecía
+sin nada declarado; ahora, sin `applicationId` (36 de 52 partners al 2026-09-23, vinieron del
+`legacy_sheet`) dice **"Vino de la planilla, no hay formulario"** en vez de no renderizar nada — la
+misma razón de siempre: que la tarjeta desaparezca no distingue "no declaró nada" de "no hay de dónde
+leerlo", y son dos hechos distintos.
+
+`getPartnerServices` en `partners.repo.ts` suma tres columnas al `LEFT JOIN partner_applications a ON
+a.id = p.application_id` que YA existía (`a.declared_services` se leía desde antes): `a.service_other`,
+`a.declared_brands`, `a.declared_fuel_types`, expuestas en `PartnerServicesView.partner` como
+`applicationServiceOther` / `applicationDeclaredBrands` / `applicationDeclaredFuelTypes` — con el
+prefijo `application` porque son datos de la SOLICITUD, no del partner (que tiene sus propios
+`whatsapp`/`email`/etc., editables, en otras tarjetas de la ficha).
+
+Es sólo lectura: cero escrituras nuevas, cero SP. Si aparece un formulario para editar estos campos
+desde acá, está mal — se editan desde `ApplicationEditor`, en la solicitud, que es la fuente.
+
+### El mismo "otros" también se sumó a la vista de lectura de la solicitud
+
+`/solicitudes/$applicationId` ya leía `serviceOther`/`howFoundOther` para el formulario de edición,
+pero no los mostraba en ningún lado de sólo-lectura. `ResolvedServicesSummary` (la tarjeta "Rubros
+cargados"/"Al aprobar", compartida entre el listado compacto y la ficha completa) ganó tres props
+opcionales —`serviceOther`, `howFound`, `howFoundOther`— que sólo se pasan desde la ficha (`compact`
+sigue sin ellos, el listado no cambia). Vacío no renderiza el renglón: es texto libre opcional, no un
+campo faltante que haya que señalar.
+
+El listado (`/solicitudes`) suma un indicador barato, `declaredOther: boolean` en
+`ApplicationListItem`, calculado con una segunda consulta chica contra `partner_applications`
+—`v_partner_application_queue` no trae esas dos columnas, y este repo no migra esa vista, que es del
+backend— para no repetir el `JOIN` a `partners` que la vista ya hace. Se ve como "declaró otros" al
+lado del nombre del taller, antes de abrir la ficha.
+
 ---
 
 # El editor de la solicitud (`ApplicationEditor`) — migración 010

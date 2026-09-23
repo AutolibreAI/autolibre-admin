@@ -107,7 +107,13 @@ params={…}>`, verificados contra `routeTree.gen.ts`.
 `ActivityDetailKind`, así que un tipo de evento nuevo sin destino **no
 compila** — o tiene su `case`, o está en `ACTIVITY_DETAIL_KINDS` (y entonces
 `DETAIL_QUERIES` también lo obliga a tener consulta de detalle). Verificado por
-mutación: sacando `'feedback'` de esa lista, fallan los dos archivos.
+mutación: sacando `'login'` de esa lista, fallan los dos archivos.
+
+**`feedback` es el ejemplo del otro camino.** Hasta el 2026-09-23 estaba en
+`ACTIVITY_DETAIL_KINDS` y abría una ficha propia. Cuando apareció
+`/feedback` como pantalla dueña, salió de esa lista y `ActivityLink` ganó un
+`case 'feedback'` que linkea a `/feedback?userId=…` en vez de a una ficha —
+el mismo patrón que ya usan `chat`, `escaneo` y `pedido`. → `.claude/rules/feedback.md`
 
 Corolario: los cuatro tipos de documento se llaman igual que los `DocType`
 (`seguro`/`cedula`/`registro`/`vtv`) y el `params={{ docType: kind }}` se apoya
@@ -186,13 +192,14 @@ de la ruta AJENA. → `.claude/rules/notifications.md`.
 **A la pantalla que ya es dueña de esa entidad**: un chat abre `/chats/:id` con
 la conversación entera, un escaneo abre `/escaneres/sesiones/:id` con su
 telemetría, un documento abre su ficha de OCR, un pedido abre `/leads/pedidos/:id`,
-un alta de usuario abre su expediente. Repetir esas pantallas adentro de
-`/actividad` sería el error que la premisa del `CLAUDE.md` prohíbe: una pantalla
-que no reemplaza ninguna consulta.
+un alta de usuario abre su expediente, un feedback abre `/feedback?userId=…`
+(desde el 2026-09-23 — antes tenía ficha propia acá, ver `.claude/rules/feedback.md`).
+Repetir esas pantallas adentro de `/actividad` sería el error que la premisa
+del `CLAUDE.md` prohíbe: una pantalla que no reemplaza ninguna consulta.
 
-`/actividad/:tipo/:id` existe sólo para los ocho tipos que **hoy no tienen
+`/actividad/:tipo/:id` existe sólo para los siete tipos que **hoy no tienen
 dueño** (`ACTIVITY_DETAIL_KINDS`): vehículo, mantenimiento, plan, consulta de
-multas, consulta de datos, dispositivo, login y feedback. Ahí sí reemplaza un
+multas, consulta de datos, dispositivo y login. Ahí sí reemplaza un
 `select * from <tabla> where id = '…'` más los dos joins que hacen falta para
 entenderlo.
 

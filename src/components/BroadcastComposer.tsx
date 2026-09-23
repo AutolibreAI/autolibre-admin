@@ -72,8 +72,24 @@ const CHIP_PREVIEW_COUNT = 12
  *
  * El id nunca se muestra ni se renderiza en el servidor: se genera en un
  * handler, así que `crypto.randomUUID()` no corre durante SSR.
+ *
+ * ── `presetRecipient` y `trigger`, para abrirlo YA con alguien elegido ──────
+ *
+ * `/feedback` abre este mismo compositor con la persona que mandó el mensaje
+ * ya puesta —el botón "Responder"— en vez de reimplementar un formulario de
+ * envío aparte. `trigger` reemplaza el botón "Nueva notificación" por el que
+ * pida el llamador; `presetRecipient` es la fila COMPLETA (con `pushTokens`
+ * ya resuelto, para que el aviso de "sin dispositivo" funcione igual que en
+ * la búsqueda a mano) y se agrega al abrir. `addRecipient` ya es idempotente
+ * por `id`, así que reabrir el mismo compositor no lo duplica.
  */
-export function BroadcastComposer() {
+export function BroadcastComposer({
+  presetRecipient,
+  trigger,
+}: {
+  presetRecipient?: NotificationRecipient
+  trigger?: ReactNode
+} = {}) {
   const router = useRouter()
 
   const [open, setOpen] = useState(false)
@@ -116,6 +132,7 @@ export function BroadcastComposer() {
   function handleOpenChange(next: boolean) {
     setOpen(next)
     if (next && !broadcastId) setBroadcastId(crypto.randomUUID())
+    if (next && presetRecipient) addRecipient(presetRecipient)
   }
 
   const titleTrim = title.trim()
@@ -248,10 +265,12 @@ export function BroadcastComposer() {
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetTrigger asChild>
-        <Button size="sm" className="gap-1.5">
-          <BellPlus className="size-3.5" aria-hidden />
-          Nueva notificación
-        </Button>
+        {trigger ?? (
+          <Button size="sm" className="gap-1.5">
+            <BellPlus className="size-3.5" aria-hidden />
+            Nueva notificación
+          </Button>
+        )}
       </SheetTrigger>
 
       <SheetContent side="right" className="w-full max-w-full bg-card sm:w-[34rem]">

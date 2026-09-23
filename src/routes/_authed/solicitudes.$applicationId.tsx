@@ -91,6 +91,9 @@ function ApplicationDetailPage() {
               <ResolvedServicesSummary
                 resolved={app.resolved}
                 declaredCount={app.declaredServices.length}
+                serviceOther={app.serviceOther}
+                howFound={app.howFound}
+                howFoundOther={app.howFoundOther}
               />
             </CardContent>
           </Card>

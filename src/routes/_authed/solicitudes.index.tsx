@@ -10,7 +10,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ApplicationStatusBadge } from '~/components/ApplicationStatusBadge'
 import { ResolvedServicesSummary } from '~/components/ResolvedServicesSummary'
 import { PanelSkeleton } from '~/components/Fallbacks'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -71,25 +71,13 @@ function ApplicationsQueue() {
       </Await>
 
       <div className="mb-4 mt-5 flex flex-wrap items-end gap-3">
-        <div className="w-full space-y-1.5 sm:w-auto">
-          <label
-            htmlFor="q"
-            className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-          >
-            Buscar
-          </label>
-          <Input
-            id="q"
-            type="search"
-            placeholder="Nombre o email"
-            defaultValue={search.q ?? ''}
-            className="w-full sm:w-56"
-            onChange={(e) => {
-              const value = e.currentTarget.value.trim()
-              setFilter({ q: value === '' ? undefined : value })
-            }}
-          />
-        </div>
+        <SearchInput
+          label="Buscar"
+          placeholder="Nombre o email"
+          value={search.q}
+          onSearch={(q) => setFilter({ q })}
+          className="w-full sm:w-56"
+        />
 
         <div className="space-y-1.5">
           <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -255,6 +243,14 @@ function Row({ app }: { app: ApplicationListItem }) {
           {app.businessName}
         </Link>
         <div className="text-xs text-muted-foreground">{app.email}</div>
+        {app.declaredOther ? (
+          <span
+            className="mt-0.5 inline-block text-xs text-brand"
+            title="Cargó texto libre en 'otros' del formulario"
+          >
+            declaró otros
+          </span>
+        ) : null}
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-2">

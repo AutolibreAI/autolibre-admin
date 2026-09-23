@@ -10,7 +10,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { BroadcastComposer } from '~/components/BroadcastComposer'
 import { SortHeader } from '~/components/SortHeader'
 import { Badge } from '~/components/ui/badge'
-import { Input } from '~/components/ui/input'
+import { SearchInput } from '~/components/SearchInput'
 import {
   Table,
   TableBody,
@@ -71,23 +71,14 @@ function CampaignsList() {
         }
       />
 
-      <div className="mb-4 space-y-1.5">
-        <label
-          htmlFor="campaign-q"
-          className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-        >
-          Buscar
-        </label>
-        <Input
+      <div className="mb-4">
+        <SearchInput
           id="campaign-q"
-          type="search"
+          label="Buscar"
           placeholder="Título o texto del mensaje"
-          defaultValue={search.q ?? ''}
-          className="w-72"
-          onChange={(e) => {
-            const value = e.currentTarget.value.trim()
-            setSearch({ q: value === '' ? undefined : value })
-          }}
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+          className="w-full sm:w-72"
         />
       </div>
 

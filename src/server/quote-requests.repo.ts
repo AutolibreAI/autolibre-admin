@@ -94,6 +94,7 @@ const READ_COLUMNS = [
   'location_address',
   'location_latitude',
   'location_longitude',
+  'location_locality',
 ] as const
 
 /**
@@ -513,6 +514,13 @@ interface DetailRow extends ListRow {
   /** Sólo con `location_source = 'device'`. Un `typed` no trae GPS. */
   location_latitude: string | number | null
   location_longitude: string | number | null
+  /**
+   * Localidad sola (sin calle/altura), para las plantillas que van al TALLER
+   * y no a la persona: mandarle la dirección exacta a un tercero es la deuda
+   * de Ley 25.326 que `.claude/rules/leads.md` marca como bloqueante. `null`
+   * en la misma situación que `location_address`.
+   */
+  location_locality: string | null
   /** `MARCA MODELO`, sin versión ni año. Para el mensaje, no para la tarjeta. */
   catalog_short_label: string | null
 }
@@ -548,6 +556,7 @@ export async function findQuoteRequestDetail(
             qr.location_address,
             qr.location_latitude,
             qr.location_longitude,
+            qr.location_locality,
             -- Sólo marca y modelo, para nombrar el auto en el mensaje que se
             -- le manda a la persona ("para el Nissan Note"). El catalog_label
             -- de arriba trae además versión y año, que en una tarjeta del
@@ -587,6 +596,7 @@ export async function findQuoteRequestDetail(
     locationAddress: r.location_address,
     locationLatitude: toNum(r.location_latitude),
     locationLongitude: toNum(r.location_longitude),
+    locationLocality: r.location_locality,
     catalogShortLabel: r.catalog_short_label,
     rubroCategorySlug: rubro?.category_slug ?? null,
     rubroServiceSlug: rubro?.service_slug ?? null,
