@@ -8,7 +8,8 @@ import {
   vehicleTypeLabel,
   type VehicleListRow,
 } from '~/lib/vehicles'
-import { listVehiclesFn } from '~/fn/vehicles'
+import { VEHICLE_REGIONS, VEHICLE_REGION_LABELS } from '~/lib/vehicle-location'
+import { listVehicleProvinceOptionsFn, listVehiclesFn } from '~/fn/vehicles'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
@@ -17,6 +18,7 @@ import {
   CountOrNeverCell,
   ExpiryCell,
   FineDebtCell,
+  LocationCell,
 } from '~/components/VehicleCells'
 import { SearchInput } from '~/components/SearchInput'
 import {
@@ -47,14 +49,23 @@ export const Route = createFileRoute('/_authed/vehiculos/listado')({
    */
   validateSearch: vehicleSearchSchema,
   loaderDeps: ({ search }) => search,
-  loader: ({ deps, abortController }) =>
-    listVehiclesFn({ data: deps, signal: abortController.signal }),
+  loader: async ({ deps, abortController }) => {
+    const signal = abortController.signal
+    // Las opciones del chip de provincia NO dependen del filtro (son las que
+    // existen en la base), pero van en el mismo `Promise.all`: es una consulta
+    // chica y así no hay un segundo round trip.
+    const [rows, provinces] = await Promise.all([
+      listVehiclesFn({ data: deps, signal }),
+      listVehicleProvinceOptionsFn({ signal }),
+    ])
+    return { rows, provinces }
+  },
   head: () => ({ meta: [{ title: 'Vehículos · Listado — AutoLibre' }] }),
   component: VehiculosListado,
 })
 
 function VehiculosListado() {
-  const rows = Route.useLoaderData()
+  const { rows, provinces } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -66,7 +77,12 @@ function VehiculosListado() {
     search.state !== 'all' ||
     Boolean(search.vehicleType) ||
     search.vtvExpired ||
-    search.fineDebt
+    search.fineDebt ||
+    search.vehicleRegions.length > 0 ||
+    search.vehicleProvinces.length > 0
+
+  const toggle = <T,>(list: ReadonlyArray<T>, value: T): Array<T> =>
+    list.includes(value) ? list.filter((x) => x !== value) : [...list, value]
 
   return (
     <>
@@ -123,6 +139,49 @@ function VehiculosListado() {
             Con deuda de multas
           </Chip>
         </FilterGroup>
+
+        {/*
+          Radicación. Multiselect como `/partners/listado`: vacío = sin filtro,
+          O dentro del grupo, Y entre grupos. "Sin clasificar" va en ámbar: hay
+          dato y el clasificador no lo supo ubicar (falta un alias).
+        */}
+        <FilterGroup
+          label="Radicación"
+          onClear={
+            search.vehicleRegions.length ? () => setSearch({ vehicleRegions: [] }) : undefined
+          }
+        >
+          {VEHICLE_REGIONS.map((r) => (
+            <Chip
+              key={r}
+              tone={r === 'sin_clasificar' ? 'warn' : 'brand'}
+              active={search.vehicleRegions.includes(r)}
+              onClick={() => setSearch({ vehicleRegions: toggle(search.vehicleRegions, r) })}
+            >
+              {VEHICLE_REGION_LABELS[r]}
+            </Chip>
+          ))}
+        </FilterGroup>
+
+        {provinces.length > 1 ? (
+          <FilterGroup
+            label="Provincia"
+            onClear={
+              search.vehicleProvinces.length ? () => setSearch({ vehicleProvinces: [] }) : undefined
+            }
+          >
+            {provinces.map((p) => (
+              <Chip
+                key={p.value}
+                active={search.vehicleProvinces.includes(p.value)}
+                onClick={() => setSearch({ vehicleProvinces: toggle(search.vehicleProvinces, p.value) })}
+              >
+                {p.label}
+                <span className="tabular-nums text-muted-foreground">{formatInt(p.vehicles)}</span>
+              </Chip>
+            ))}
+          </FilterGroup>
+        ) : null}
       </div>
 
       {rows.length === 0 ? (
@@ -131,11 +190,12 @@ function VehiculosListado() {
         </p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[1580px]">
+          <Table className="min-w-[1740px]">
             <TableHeader>
               <TableRow>
                 <SortHeader label="Vehículo" sortKey="plate" active={search.sort === 'plate'} dir={search.dir} to="/vehiculos/listado" />
                 <SortHeader label="Dueño" sortKey="owner" active={search.sort === 'owner'} dir={search.dir} to="/vehiculos/listado" />
+                <SortHeader label="Radicación" sortKey="location" active={search.sort === 'location'} dir={search.dir} to="/vehiculos/listado" firstClick="asc" />
                 <SortHeader label="Tipo" sortKey="type" active={search.sort === 'type'} dir={search.dir} to="/vehiculos/listado" firstClick="asc" />
                 <SortHeader label="Km" sortKey="odometer" active={search.sort === 'odometer'} dir={search.dir} to="/vehiculos/listado" align="right" firstClick="desc" />
                 <SortHeader label="VTV" sortKey="vtv" active={search.sort === 'vtv'} dir={search.dir} to="/vehiculos/listado" firstClick="asc" />
@@ -195,6 +255,10 @@ function Row({ v }: { v: VehicleListRow }) {
         {v.userName ? (
           <div className="truncate text-xs text-muted-foreground">{v.userEmail}</div>
         ) : null}
+      </TableCell>
+
+      <TableCell className="text-xs whitespace-nowrap">
+        <LocationCell location={v.location} />
       </TableCell>
 
       <TableCell className="text-muted-foreground">{vehicleTypeLabel(v.vehicleType)}</TableCell>

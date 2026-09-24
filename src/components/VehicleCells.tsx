@@ -1,5 +1,10 @@
 import { formatArs, formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
+import {
+  VEHICLE_REGION_LABELS,
+  vehicleLocationLabel,
+  type VehicleLocation,
+} from '~/lib/vehicle-location'
 
 /**
  * Celdas compartidas de las vistas por vehículo: el toggle de `/usuarios`, el
@@ -111,4 +116,42 @@ export function AmountOrNoneCell({ amount, title }: { amount: number | null; tit
       {formatArs(amount)}
     </span>
   )
+}
+
+/**
+ * Radicación según el registro. Una línea: partido o localidad + región
+ * ("San Isidro · AMBA", "Rosario · Santa Fe"). El `title` lleva lo crudo que
+ * vino del registro y la fecha del dato, para poder auditar la clasificación
+ * sin abrir DBeaver.
+ *
+ * `sin dato` gris (no se consultó la patente); `sin clasificar` ámbar (hay
+ * dato y el clasificador no lo supo ubicar — falta un alias). Mismo criterio
+ * de color que el resto del panel: ámbar = falta algo, no está roto.
+ * → `.claude/rules/vehicle-location.md`
+ */
+export function LocationCell({ location }: { location: VehicleLocation }) {
+  const raw = [location.city, location.provinceLabel].filter(Boolean).join(', ')
+  const title = [
+    `Registro: ${raw || '—'}`,
+    location.region !== 'sin_dato' ? VEHICLE_REGION_LABELS[location.region] : null,
+    location.sourceDate ? `dato del ${formatDate(location.sourceDate)}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  if (location.region === 'sin_dato') {
+    return (
+      <span className="text-muted-foreground/50" title="Sin consulta por patente">
+        sin dato
+      </span>
+    )
+  }
+  if (location.region === 'sin_clasificar') {
+    return (
+      <span className="text-status-yellow" title={title}>
+        {raw || 'sin clasificar'}
+      </span>
+    )
+  }
+  return <span title={title}>{vehicleLocationLabel(location)}</span>
 }

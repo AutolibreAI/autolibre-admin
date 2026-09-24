@@ -30,6 +30,8 @@ import {
   getVehicleDistribution,
 } from '~/fn/ops'
 import { getQuoteRequestSeriesFn } from '~/fn/quote-requests'
+import { getVehicleLocationBreakdownFn } from '~/fn/vehicles'
+import { VehicleLocationSection } from '~/components/VehicleLocationBreakdown'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PulseRow } from '~/components/PulseCards'
 import { Chip, FilterGroup } from '~/components/Filters'
@@ -72,7 +74,7 @@ export const Route = createFileRoute('/_authed/metricas')({
   loaderDeps: ({ search }) => search,
 
   /**
-   * Diez llamadas en paralelo contra el pool: el pulso del negocio (las 4
+   * Once llamadas en paralelo contra el pool: la radicación de la flota, el pulso del negocio (las 4
    * cards, compartidas con Inicio), los cinco bloques con datos de la sección
    * `Preguntas` (adopción por función, deuda de patente y multas por vehículo,
    * recurrencia de escaneo, propuestas del chat, tareas sin solución), la serie
@@ -94,6 +96,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       onboarding,
       distribution,
       quoteSeries,
+      locations,
     ] = await Promise.all([
       getOpsPulse({ signal }),
       getUsageAdoption({ signal }),
@@ -105,6 +108,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       getOnboardingSeries({ data: deps, signal }),
       getVehicleDistribution({ data: deps, signal }),
       getQuoteRequestSeriesFn({ data: deps, signal }),
+      getVehicleLocationBreakdownFn({ signal }),
     ])
     return {
       pulse,
@@ -117,6 +121,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       onboarding,
       distribution,
       quoteSeries,
+      locations,
     }
   },
 
@@ -130,6 +135,8 @@ export const Route = createFileRoute('/_authed/metricas')({
  * De arriba abajo:
  *  1. Las 4 cards del pulso (idénticas a Inicio): usuarios, vehículos, partners,
  *     leads. Comparten `PulseRow` — si se ven distintas, una está mal.
+ *  1b. Dónde están radicados los autos (`VehicleLocationSection`): AMBA,
+ *     resto de PBA, interior — `.claude/rules/vehicle-location.md`.
  *  2. `Preguntas`: los bloques que contestan (o dicen por qué no se puede
  *     contestar) preguntas de producto. Adopción por función, deuda de patente
  *     y multas por vehículo (grano distinto: es el auto, no el usuario, y el %
@@ -154,6 +161,7 @@ function MetricasPage() {
     onboarding,
     distribution,
     quoteSeries,
+    locations,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -173,6 +181,8 @@ function MetricasPage() {
       />
 
       <PulseRow pulse={pulse} />
+
+      <VehicleLocationSection data={locations} />
 
       <section className="mt-8">
         <h2 className="font-heading text-base font-semibold">Preguntas</h2>

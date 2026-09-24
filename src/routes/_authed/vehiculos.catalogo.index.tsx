@@ -15,7 +15,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { SearchInput } from '~/components/SearchInput'
-import { ExpiryCell, FineDebtCell } from '~/components/VehicleCells'
+import { ExpiryCell, FineDebtCell, LocationCell } from '~/components/VehicleCells'
 import {
   Table,
   TableBody,
@@ -478,11 +478,12 @@ function CatalogUsersPanel({ state }: { state: CatalogUsersState | undefined }) 
 
   return (
     <div className="overflow-x-auto p-3">
-      <table className="w-full min-w-[900px] text-xs">
+      <table className="w-full min-w-[1020px] text-xs">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
             <th className="px-2 py-1.5 text-left font-medium">Usuario</th>
             <th className="px-2 py-1.5 text-left font-medium">Vehículo</th>
+            <th className="px-2 py-1.5 text-left font-medium">Radicación</th>
             <th className="px-2 py-1.5 text-right font-medium">Km</th>
             <th className="px-2 py-1.5 text-right font-medium">Escaneos</th>
             <th className="px-2 py-1.5 text-left font-medium">VTV</th>
@@ -513,6 +514,10 @@ function CatalogUsersPanel({ state }: { state: CatalogUsersState | undefined }) 
                     archivado
                   </span>
                 ) : null}
+              </td>
+
+              <td className="px-2 py-1.5 whitespace-nowrap">
+                <LocationCell location={u.location} />
               </td>
 
               <td className="px-2 py-1.5 text-right tabular-nums">{formatInt(u.odometerKm)}</td>

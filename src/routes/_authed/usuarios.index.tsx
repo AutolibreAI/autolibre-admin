@@ -29,7 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
-import { CountOrNeverCell, ExpiryCell, FineDebtCell } from '~/components/VehicleCells'
+import { CountOrNeverCell, ExpiryCell, FineDebtCell, LocationCell } from '~/components/VehicleCells'
 import { formatArs, formatDate, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
@@ -600,10 +600,11 @@ function VehicleSummaryPanel({ state }: { state: VehicleSummaryState | undefined
 
   return (
     <div className="overflow-x-auto p-3">
-      <table className="w-full min-w-[1300px] text-xs">
+      <table className="w-full min-w-[1420px] text-xs">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
             <th className="px-2 py-1.5 text-left font-medium">Vehículo</th>
+            <th className="px-2 py-1.5 text-left font-medium">Radicación</th>
             <th className="px-2 py-1.5 text-left font-medium">VTV</th>
             <th className="px-2 py-1.5 text-right font-medium">Chats IA diagnóstico</th>
             <th className="px-2 py-1.5 text-left font-medium">Deuda de patente</th>
@@ -634,6 +635,10 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
         <div className="text-muted-foreground">
           {v.brand} {v.model} <span className="tabular-nums">{v.year}</span>
         </div>
+      </td>
+
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <LocationCell location={v.location} />
       </td>
 
       <td className="px-2 py-1.5">

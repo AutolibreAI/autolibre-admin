@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { UserRole } from './types'
+import type { VehicleLocation } from './vehicle-location'
 
 /**
  * Usuarios — el contrato compartido entre servidor y cliente.
@@ -421,6 +422,8 @@ export interface UserVehicleSummary {
    */
   activeAnomalyCount: number | null
   lastTelemetryAnalysisAt: string | null
+  /** Radicación — la misma columna que `/vehiculos/listado`. → `~/lib/vehicle-location` */
+  location: VehicleLocation
 }
 
 export interface UserLegalAcceptance {

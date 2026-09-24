@@ -384,6 +384,17 @@ OPERADOR marca respondido, no cuando la persona lo recibe. La pantalla dice
 trabajo aparte: un evento en `ops` al tocar el botón de WhatsApp — y ni así
 sería "envió", sería "abrió WhatsApp".
 
+## Dónde están radicados — desde el 2026-09-24
+
+Bloque justo debajo del pulso: los autos ACTIVOS de usuarios reales por
+región (AMBA = CABA + Conurbano de 40 municipios, resto de PBA a partidos,
+interior por provincia, sin clasificar, sin dato). Grano vehículo con
+patentes únicas al lado; dos %: sobre el total y sobre los que tienen dato.
+Tabla fija, sin search params (mismo criterio que la de adopción). Viene de
+`vehicleLocationBreakdown()` en `src/server/vehicle-location.ts`, no de
+`ops.repo.ts`; la regla es `.claude/rules/vehicle-location.md`. Cuadre: la
+suma de filas = autos activos reales (207 al 2026-09-24).
+
 ## Ni una escritura
 
 `usageAdoption`, `vehicleDebtAdoption`, `scanRecurrence`,

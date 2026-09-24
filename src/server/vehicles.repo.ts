@@ -3,6 +3,13 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import { lastSignalSql } from '~/lib/activity'
 import { OK } from './scanners.repo'
+import {
+  REGION_RANK_SQL,
+  loadLocationTable,
+  locationJoin,
+  mapLocation,
+  type LocationQueryColumns,
+} from './vehicle-location'
 import type {
   CatalogUserRow,
   FleetMetricRow,
@@ -43,7 +50,7 @@ const toIso = (v: unknown): string | null =>
 
 // ── Listado total ──────────────────────────────────────────────────────────
 
-interface ListRow {
+interface ListRow extends LocationQueryColumns {
   id: string
   plate: string
   alias: string | null
@@ -79,7 +86,7 @@ interface ListRow {
  * de un enum de zod y de este `Record` — nunca de texto suelto. Mismo patrón
  * que `listUsers` y `listFineDebtors`.
  */
-const LIST_SORT_COLUMNS: Record<VehicleSortKey, string> = {
+const LIST_SORT_COLUMNS: Record<Exclude<VehicleSortKey, 'location'>, string> = {
   plate: 'plate',
   owner: 'user_email',
   model: 'model_sort',
@@ -140,7 +147,25 @@ export async function listVehicles(
   }
   if (search.fineDebt) outerWhere.push('fine_debt_amount > 0')
 
-  const sortColumn = LIST_SORT_COLUMNS[search.sort]
+  // Radicación: la tabla clasificada entra como `unnest` de arrays (ver
+  // `locationJoin`), así que región y provincia se filtran como columnas.
+  const location = locationJoin(params, await loadLocationTable())
+  if (search.vehicleRegions.length) {
+    params.push(search.vehicleRegions)
+    outerWhere.push(`loc_region = any($${params.length}::text[])`)
+  }
+  if (search.vehicleProvinces.length) {
+    params.push(search.vehicleProvinces)
+    outerWhere.push(`loc_province = any($${params.length}::text[])`)
+  }
+
+  // Radicación ordena por región (en el orden de `VEHICLE_REGIONS`), después
+  // provincia y partido — no por el texto crudo, que separaría `CAPITAL
+  // FEDERAL` de `Ciudad Autónoma de Buenos Aires`.
+  const orderBy =
+    search.sort === 'location'
+      ? `${REGION_RANK_SQL} ${search.dir}, loc_province_label ${search.dir} nulls last, loc_partido ${search.dir} nulls last`
+      : `${LIST_SORT_COLUMNS[search.sort]} ${search.dir} nulls last`
 
   const rows = await sql<ListRow>(
     `
@@ -189,7 +214,9 @@ export async function listVehicles(
         case when lds.vehicle_id is null then null
              else (select count(*)::int from diagnostic_dtcs dd where dd.session_id = lds.session_id)
         end as active_dtc_count,
-        jsonb_array_length(dta.anomalies) as active_anomaly_count
+        jsonb_array_length(dta.anomalies) as active_anomaly_count,
+
+        ${location.columns}
 
       from vehicles v
       join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
@@ -201,9 +228,10 @@ export async function listVehicles(
         select a.id from driving_telemetry_analysis a
          where a.vehicle_id = v.id order by a.created_at desc limit 1
       )
+      ${location.joins}
     ) s
     ${outerWhere.length ? `where ${outerWhere.join(' and ')}` : ''}
-    order by ${sortColumn} ${search.dir} nulls last, plate
+    order by ${orderBy}, plate
     limit 1000
     `,
     params,
@@ -239,6 +267,7 @@ export async function listVehicles(
       diagnosticChatCount: toInt(r.diagnostic_chat_count),
       activeDtcCount: toIntOrNull(r.active_dtc_count),
       activeAnomalyCount: toIntOrNull(r.active_anomaly_count),
+      location: mapLocation(r),
     }),
   )
 }
@@ -436,7 +465,7 @@ export async function fleetSummary(
 
 // ── El desplegable "quién tiene este modelo" ────────────────────────────────
 
-interface CatalogUserQueryRow {
+interface CatalogUserQueryRow extends LocationQueryColumns {
   vehicle_id: string
   user_id: string
   user_email: string
@@ -475,6 +504,9 @@ export async function listCatalogUsers(
 ): Promise<Array<CatalogUserRow>> {
   void opts.signal
 
+  const params: Array<unknown> = [catalogId]
+  const location = locationJoin(params, await loadLocationTable())
+
   const rows = await sql<CatalogUserQueryRow>(
     `select
        v.id as vehicle_id,
@@ -494,13 +526,15 @@ export async function listCatalogUsers(
             else coalesce((select round(sum(f.amount)) from fines f
                              where f.vehicle_id = v.id and f.status = 'pending'), 0)::bigint
        end as fine_debt_amount,
-       ${lastSignalSql('u.id')} as last_activity_at
+       ${lastSignalSql('u.id')} as last_activity_at,
+       ${location.columns}
      from vehicles v
      join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
      join users u on u.id = v.user_id
+     ${location.joins}
      where vcs.vehicle_catalog_id = $1
      order by u.email, v.plate`,
-    [catalogId],
+    params,
   )
 
   return rows.map(
@@ -519,6 +553,7 @@ export async function listCatalogUsers(
       insuranceExpiresAt: toIso(r.insurance_expires_at),
       fineDebtAmount: toIntOrNull(r.fine_debt_amount),
       lastActivityAt: toIso(r.last_activity_at),
+      location: mapLocation(r),
     }),
   )
 }

@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { lastSignalSql } from '~/lib/activity'
+import { loadLocationTable, locationJoin, mapLocation, type LocationQueryColumns } from './vehicle-location'
 import type {
   AuthProvider,
   MaintenanceTaskState,
@@ -712,7 +713,7 @@ function mapCensus(row: CensusRow | null): UserCensus {
 
 // ── Resumen por vehículo, para el toggle del listado ────────────────────────
 
-interface VehicleSummaryRow {
+interface VehicleSummaryRow extends LocationQueryColumns {
   id: string
   plate: string
   alias: string | null
@@ -760,6 +761,9 @@ export async function listUserVehicleSummaries(
   opts: { signal?: AbortSignal } = {},
 ): Promise<Array<UserVehicleSummary>> {
   void opts.signal
+
+  const params: Array<unknown> = [userId]
+  const location = locationJoin(params, await loadLocationTable())
 
   const rows = await sql<VehicleSummaryRow>(
     `select
@@ -842,7 +846,10 @@ export async function listUserVehicleSummaries(
        -- MÁS RECIENTE. jsonb_array_length(null) da null en Postgres, así que
        -- "nunca se analizó" sale gratis del LEFT JOIN sin un CASE aparte.
        jsonb_array_length(dta.anomalies) as active_anomaly_count,
-       dta.created_at as last_telemetry_analysis_at
+       dta.created_at as last_telemetry_analysis_at,
+
+       -- Radicación: la misma columna que /vehiculos/listado (vehicle-location.ts).
+       ${location.columns}
 
      from vehicles v
      join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
@@ -853,9 +860,10 @@ export async function listUserVehicleSummaries(
        select a.id from driving_telemetry_analysis a
         where a.vehicle_id = v.id order by a.created_at desc limit 1
      )
+     ${location.joins}
      where v.user_id = $1
      order by v.archived, v.created_at desc`,
-    [userId],
+    params,
   )
 
   return rows.map(
@@ -883,6 +891,7 @@ export async function listUserVehicleSummaries(
       pendingTasksCount: toInt(r.pending_tasks_count),
       activeAnomalyCount: toIntOrNull(r.active_anomaly_count),
       lastTelemetryAnalysisAt: toIso(r.last_telemetry_analysis_at),
+      location: mapLocation(r),
     }),
   )
 }

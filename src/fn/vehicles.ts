@@ -2,9 +2,11 @@ import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { fleetSearchSchema, vehicleSearchSchema } from '~/lib/vehicles'
 import { fleetMetrics, fleetSummary, listCatalogUsers, listVehicles } from '~/server/vehicles.repo'
+import { listProvinceOptions, vehicleLocationBreakdown } from '~/server/vehicle-location'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type { CatalogUserRow, FleetMetricRow, FleetSummary, VehicleListRow } from '~/lib/vehicles'
+import type { ProvinceOption, VehicleLocationBreakdown } from '~/lib/vehicle-location'
 
 /**
  * Vehículos — el borde RPC.
@@ -51,3 +53,20 @@ export const getCatalogUsersFn = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<Array<CatalogUserRow>> =>
     listCatalogUsers(data.catalogId, { signal: requestSignal() }),
   )
+
+/**
+ * Las provincias que existen en la base, para el filtro de radicación de
+ * `/vehiculos/listado`. Publica cuántos autos hay por provincia: mismo guard.
+ */
+export const listVehicleProvinceOptionsFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<Array<ProvinceOption>> => listProvinceOptions())
+
+/**
+ * "Dónde están radicados" — el bloque de `/metricas`. Agregado, sin datos
+ * personales, pero publica el tamaño y la geografía de la flota: mismo guard
+ * que `fleetMetricsFn`.
+ */
+export const getVehicleLocationBreakdownFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<VehicleLocationBreakdown> => vehicleLocationBreakdown())

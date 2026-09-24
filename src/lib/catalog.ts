@@ -160,9 +160,10 @@ export const PARTNER_STATUS_FILTER_LABELS: Record<PartnerStatusFilterValue, stri
  * Un search param multiselect: acepta que llegue un solo valor
  * (`?partnerZones=CABA`, tipeado a mano) y lo envuelve en array — sin esto
  * `z.array` falla y `.catch` lo deja vacío EN SILENCIO. Mismo patrón que
- * `coverageRubros` en `~/lib/partners-coverage`.
+ * `coverageRubros` en `~/lib/partners-coverage`. Exportado para los filtros
+ * de radicación de `~/lib/vehicle-location`.
  */
-function multiSelectParam<T extends z.ZodTypeAny>(item: T) {
+export function multiSelectParam<T extends z.ZodTypeAny>(item: T) {
   return z
     .preprocess(
       (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]),

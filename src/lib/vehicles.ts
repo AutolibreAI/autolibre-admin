@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { vehicleLocationSearchShape, type VehicleLocation } from './vehicle-location'
 
 /**
  * Vehículos cargados en el sistema — el listado total y las métricas de flota.
@@ -50,6 +51,7 @@ export const VEHICLE_SORT_KEYS = [
   'fineCount',
   'tasksPending',
   'createdAt',
+  'location',
 ] as const
 export type VehicleSortKey = (typeof VEHICLE_SORT_KEYS)[number]
 
@@ -81,6 +83,11 @@ export const vehicleSearchSchema = z.object({
   vtvExpired: z.coerce.boolean().catch(false).default(false),
   /** Sólo autos con deuda de multas pendiente. */
   fineDebt: z.coerce.boolean().catch(false).default(false),
+  /**
+   * Radicación: región y provincia, multiselect (`vehicleRegions` /
+   * `vehicleProvinces`). Definidos en `~/lib/vehicle-location`.
+   */
+  ...vehicleLocationSearchShape,
   sort: z.enum(VEHICLE_SORT_KEYS).catch('createdAt').default('createdAt'),
   dir: z.enum(['asc', 'desc']).catch('desc').default('desc'),
 })
@@ -142,6 +149,9 @@ export interface VehicleListRow {
   /** DTCs del último escaneo / anomalías del último análisis. `null` = nunca. */
   activeDtcCount: number | null
   activeAnomalyCount: number | null
+
+  /** Radicación según el registro (`vehicle_plate_lookups`). → `~/lib/vehicle-location` */
+  location: VehicleLocation
 }
 
 // ── Métricas de flota ──────────────────────────────────────────────────────
@@ -266,4 +276,6 @@ export interface CatalogUserRow {
   fineDebtAmount: number | null
   /** `lastSignalSql` de `~/lib/activity` — la MISMA señal que `/usuarios`. */
   lastActivityAt: string | null
+  /** Radicación — la misma columna que `/vehiculos/listado`. */
+  location: VehicleLocation
 }

@@ -162,6 +162,18 @@ tabla vacía no informa nada que la columna "Vehículos" en 0 no diga ya.
 
 Ni una escritura.
 
+## Radicación — desde el 2026-09-24
+
+El Listado suma la columna "Radicación" (ordenable) y los filtros
+`vehicleRegions` / `vehicleProvinces`; los desplegables de Catálogo y de
+`/usuarios` suman la misma columna. Sale de `vehicle_plate_lookups` por
+patente, clasificada a CABA / AMBA (40 municipios) / resto de PBA / interior.
+Todo el detalle —clasificador, alias, la tabla inyectada con `unnest` y los
+cuadres— está en `.claude/rules/vehicle-location.md`. Lo que importa acá: las
+tres consultas (`listVehicles`, `listCatalogUsers`, `listUserVehicleSummaries`)
+toman la radicación del MISMO `locationJoin`, y el cuadre del listado sigue
+siendo `count(*) from vehicles` (el join es 1:1 por `UNIQUE (plate)`).
+
 ## `vehicle_tax_debts` está VACÍA en producción
 
 La columna "Deuda patente" del listado lee de `vehicle_tax_debts`
