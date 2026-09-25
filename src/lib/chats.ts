@@ -118,18 +118,16 @@ export const CHAT_TYPE_FILTERS = ['all', 'diagnostico', 'general'] as const
 export type ChatTypeFilter = (typeof CHAT_TYPE_FILTERS)[number]
 
 /**
- * "Con mensajes": la conversación tiene al menos un mensaje de cualquiera de
- * los dos lados. Es el DEFAULT — las conversaciones vacías son la mayoría de la
- * base (48 de 70 al relevar esto) y casi siempre ruido: se crean y quedan ahí.
- * Quien las quiera ve las tiene a un click, pero no son lo primero que se
- * muestra.
+ * Las conversaciones VACÍAS (ningún mensaje de ningún lado) no se muestran
+ * nunca — decidido el 2026-09-25: abrir el asistente sin escribir es ruido, no
+ * uso (125 de 228 en producción). Hasta esa fecha había un "Todos" y un "Sin
+ * mensajes" que las mostraban; se sacaron. El recorte vive en el WHERE interno
+ * de `listChats`, así que ningún filtro las puede traer de vuelta.
  *
- * "Sin respuesta de IA": mandó mensaje(s) y el asistente nunca contestó — un
- * corte real, no uno inventado. "Sin mensajes": la conversación existe
- * (`conversations` tiene la fila) y no se escribió nada, ninguno de los dos
- * lados. "Todos" incluye las vacías.
+ * "Con mensajes" es el listado entero. "Sin respuesta de IA": mandó mensaje(s)
+ * y el asistente nunca contestó — un corte real, no uno inventado.
  */
-export const CHAT_MESSAGE_FILTERS = ['withMessages', 'all', 'noAiReply', 'empty'] as const
+export const CHAT_MESSAGE_FILTERS = ['withMessages', 'noAiReply'] as const
 export type ChatMessageFilter = (typeof CHAT_MESSAGE_FILTERS)[number]
 
 export const CHAT_SORT_KEYS = [
@@ -161,9 +159,9 @@ export const chatSearchSchema = z.object({
    */
   model: z.string().trim().max(120).optional(),
   /**
-   * Default `withMessages`: las conversaciones vacías se ocultan salvo que se
-   * pidan. `.catch` cae al mismo default — un `?messages=basura` de un link
-   * viejo muestra el listado útil, no un error.
+   * Default `withMessages`. `.catch` cae al mismo default — un `?messages=all`
+   * o `?messages=empty` de un link viejo (valores que existían hasta el
+   * 2026-09-25) muestra el listado útil, no un error.
    */
   messages: z.enum(CHAT_MESSAGE_FILTERS).catch('withMessages').default('withMessages'),
   sort: z.enum(CHAT_SORT_KEYS).catch('startedAt').default('startedAt'),

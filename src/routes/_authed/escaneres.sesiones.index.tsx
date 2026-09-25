@@ -1,4 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { useSessionRowClick } from '~/components/useSessionRowClick'
 import { Bot, Zap } from 'lucide-react'
 import {
   SCAN_ANOMALY_FILTERS,
@@ -41,7 +42,7 @@ import type { SessionBucket } from '~/lib/scanners'
  * más los `select count(*)` sueltos por `session_id` que hacen falta para saber
  * qué trajo cada escaneo. → `.claude/rules/scan-sessions.md`
  */
-export const Route = createFileRoute('/_authed/escaneres/sesiones')({
+export const Route = createFileRoute('/_authed/escaneres/sesiones/')({
   validateSearch: scanSessionSearchSchema,
   loaderDeps: ({ search }) => search,
   loader: ({ deps, abortController }) =>
@@ -202,9 +203,10 @@ function ScanRow({ row: r }: { row: ScanSessionRow }) {
     r.rpmMax !== null ? `${formatInt(r.rpmMax)} rpm` : null,
     r.engineTempMax !== null ? `${formatInt(r.engineTempMax)} °C` : null,
   ].filter(Boolean)
+  const rowClick = useSessionRowClick(r.id)
 
   return (
-    <TableRow>
+    <TableRow onClick={rowClick.onClick} className={rowClick.className}>
       <TableCell>
         <span
           className={cn(

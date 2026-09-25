@@ -256,6 +256,12 @@ export const quoteRequestSearchSchema = z.object({
   /** Sólo abiertos, sin `contacted_at`, con más de `QUOTE_UNCONTACTED_AFTER_HOURS`. */
   quoteUncontacted: z.coerce.boolean().catch(false).default(false),
   /**
+   * Los cerrados como `duplicate` (duplicados de verdad y pedidos de PRUEBA del
+   * equipo) no se listan salvo que se pidan — desde el 2026-09-25. Son filas
+   * que el operador tiene que poder encontrar, pero no pedidos reales.
+   */
+  quoteShowDuplicates: z.coerce.boolean().catch(false).default(false),
+  /**
    * `createdAt desc` por default: el más nuevo primero — pedido explícito del
    * 2026-09-15, así que lo que acaba de entrar es lo primero que se ve al
    * abrir la pantalla. Antes era `asc` (el más viejo arriba, igual que el
@@ -542,7 +548,14 @@ export interface QuoteRequestListItem {
  * `/leads/seguros`: los cuatro estados siempre, incluso en cero.
  */
 export interface QuoteRequestStatusSummary {
+  /**
+   * Pedidos REALES: sin los cerrados como `duplicate` (duplicados de verdad y
+   * pedidos de prueba del equipo). Todos los contadores de abajo tienen el
+   * mismo corte — `total` es lo mismo que muestra la card "Pedidos totales".
+   */
   total: number
+  /** Los excluidos de todo lo anterior. Se muestra aparte, nunca se suma. */
+  duplicates: number
   byStatus: Record<QuoteRequestStatus, number>
   /** Subconjunto de `closed` con `close_reason_code = 'cancelled_by_user'`. */
   cancelledByUser: number

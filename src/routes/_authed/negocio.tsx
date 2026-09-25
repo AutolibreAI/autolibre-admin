@@ -241,7 +241,7 @@ function NegocioPage() {
         <h2 className="mb-3 font-heading text-base font-semibold">Pedidos</h2>
         <ComingSoonPipeline
           what="Un pedido es una solicitud de presupuesto que abre una persona para que el operador le consiga talleres. No es un Lead, que es el usuario yendo hacia UN taller (1 a 1)."
-          blocker="El flujo ya existe en el backend (aggregate QuoteRequest, tabla quote_requests) pero todavía no está desplegado en producción, así que acá no hay filas que sumar — el detalle por pedido se ve en Leads › Pedidos cuando la tabla existe. El MVP no guarda una fila por oferta ni el cobro: sólo proposals_count y notas internas del operador. Para que la métrica de negocio exista falta, además del deploy, una fila por oferta con su partner y, si genera ingreso, el monto y la fecha del cobro."
+          blocker="Los pedidos ya están en producción: el detalle se ve en Leads › Pedidos, el total en la card «Pedidos totales» y la evolución en Métricas — siempre sin los descartados como duplicado o prueba. Lo que falta para una métrica de NEGOCIO es el cobro: ninguna tabla registra si un pedido generó ingreso, cuánto ni cuándo."
         />
       </section>
     </>

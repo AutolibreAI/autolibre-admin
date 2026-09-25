@@ -2,7 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { FAILED, NO_DATA, OK } from './scanners.repo'
-import { quoteRequestsAvailability } from './quote-requests.repo'
+import { notDuplicatePredicate, quoteRequestsAvailability } from './quote-requests.repo'
 import {
   ACTIVITY_KINDS,
   ACTIVITY_LIMIT,
@@ -153,11 +153,11 @@ const BRANCHES: Record<ActivityKind, string> = {
                from conversation_messages m
               where m.conversation_id = c.id and m.author::text = 'user'
               order by m.sent_at limit 1)`,
-    // 48 de 70 conversaciones no tienen NINGÚN mensaje (`chats.md`). No es un
-    // caso de borde: es la mayoría, y se muestra, no se esconde.
-    outcome: `case when not exists (
-        select 1 from conversation_messages m2 where m2.conversation_id = c.id
-      ) then 'sin_mensajes' end`,
+    // Una conversacion SIN mensajes no entra (decidido 2026-09-25): abrir el
+    // asistente sin escribir no es algo que la persona hizo, es ruido — 125 de
+    // 228 en produccion. Mismo corte que /chats y que "uso el chat" de
+    // usageAdoption: al menos un mensaje, de cualquiera de los dos lados.
+    where: `exists (select 1 from conversation_messages m2 where m2.conversation_id = c.id)`,
   }),
 
   escaneo: branch('escaneo', {
@@ -300,6 +300,11 @@ const BRANCHES: Record<ActivityKind, string> = {
       left(btrim(qr.description), 120)
     ), '')`,
     outcome: `qr.status::text`,
+    // Los duplicados NO entran (decidido 2026-09-25): el operador los usa
+    // tambien para descartar los pedidos de PRUEBA que manda el equipo, asi que
+    // no son "algo que hizo una persona". Predicado IMPORTADO, no recopiado: es
+    // el mismo que resta la card "Pedidos totales".
+    where: notDuplicatePredicate('qr.'),
   }),
 
   consulta_multas: branch('consulta_multas', {

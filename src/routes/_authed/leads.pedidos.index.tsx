@@ -111,13 +111,18 @@ function Pedidos() {
     search.quoteStatus !== 'all' ||
     search.quoteChannel !== 'all' ||
     search.quoteOutcome !== 'all' ||
-    search.quoteUncontacted
+    search.quoteUncontacted ||
+    search.quoteShowDuplicates
 
   return (
     <>
       <PageHeader
         title="Pedidos de presupuesto"
-        subtitle={`${formatInt(rows.length)} ${filtered ? 'con este filtro' : 'pedidos'} · de ${formatInt(summary.total)} en total`}
+        subtitle={`${formatInt(rows.length)} ${filtered ? 'con este filtro' : 'pedidos'} · de ${formatInt(summary.total)} pedidos reales${
+          summary.duplicates > 0
+            ? ` (${formatInt(summary.duplicates)} descartados como duplicado o prueba)`
+            : ''
+        }`}
         actions={
           <>
             {/* El que llega de forma informal (llamada, en persona, referido) y
@@ -209,6 +214,22 @@ function Pedidos() {
             Sin contactar &gt; {QUOTE_UNCONTACTED_AFTER_HOURS} h
           </Chip>
         </FilterGroup>
+
+        {/*
+          Los cerrados como `duplicate` son duplicados de verdad Y pedidos de
+          prueba del equipo: no son pedidos reales y no se listan por default.
+          Están a un click para poder encontrarlos, nunca en los contadores.
+        */}
+        {summary.duplicates > 0 ? (
+          <FilterGroup label="Descartados">
+            <Chip
+              active={search.quoteShowDuplicates}
+              onClick={() => setSearch({ quoteShowDuplicates: !search.quoteShowDuplicates })}
+            >
+              Incluir duplicados / prueba ({formatInt(summary.duplicates)})
+            </Chip>
+          </FilterGroup>
+        ) : null}
       </div>
 
       {rows.length === 0 ? (
@@ -293,7 +314,9 @@ function SummaryTiles({ summary }: { summary: QuoteRequestStatusSummary }) {
     {
       label: 'Cerrados',
       value: summary.byStatus.closed,
-      sub: `${formatInt(summary.cancelledByUser)} cancelados por el usuario`,
+      sub: `${formatInt(summary.cancelledByUser)} cancelados por el usuario${
+        summary.duplicates > 0 ? ` · sin ${formatInt(summary.duplicates)} duplicados/prueba` : ''
+      }`,
     },
     {
       label: `Sin contactar > ${QUOTE_UNCONTACTED_AFTER_HOURS} h`,

@@ -1,7 +1,7 @@
 # Sesiones de escáner (`/escaneres/sesiones`, `/escaneres/sesiones/:sessionId`)
 
 Alcance: `src/lib/scan-sessions.ts`, `src/server/scan-sessions.repo.ts`,
-`src/fn/scan-sessions.ts`, `src/routes/_authed/escaneres.sesiones.tsx`,
+`src/fn/scan-sessions.ts`, `src/routes/_authed/escaneres.sesiones.index.tsx`,
 `src/routes/_authed/escaneres.sesiones.$sessionId.tsx`, y el layout
 `src/routes/_authed/escaneres.tsx` + su redirect `escaneres.index.tsx`.
 
@@ -176,6 +176,57 @@ el día que se cargue tiene que aparecer sin tocar este archivo.
 
 Mismo criterio que el resto de este archivo: la pantalla es de lectura
 completa. Si aparece un `UPDATE`/`INSERT` en `getScanSessionDetail`, está mal.
+
+## ⚠ El listado es `escaneres.sesiones.index.tsx`, NO `escaneres.sesiones.tsx`
+
+Corregido el 2026-09-25. Con el listado en `escaneres.sesiones.tsx`, la ficha
+`escaneres.sesiones.$sessionId.tsx` quedaba anidada ADENTRO del listado, que
+no tiene `<Outlet/>`: cualquier link o click a una sesión cambiaba la URL y la
+pantalla seguía mostrando la tabla. La ficha existía desde el 2026-09-13 y no
+se podía abrir desde ningún lado. Sin error, ni en el build ni en la consola.
+
+Es la misma trampa que `leads.md` documenta para `leads.pedidos.index.tsx` y la
+que esquiva `chats.index.tsx`. **Regla: si una ruta `x.$id.tsx` es la ficha de
+un listado, el listado es `x.index.tsx`.** Chequeo: en `routeTree.gen.ts`, el
+`getParentRoute` de la ficha tiene que ser el layout (`AuthedEscaneresRoute`),
+nunca la ruta del listado.
+
+## La ficha, revisada el 2026-09-25
+
+**Se entra clickeando la fila entera**, no sólo la fecha — en el listado, en el
+panel de la matriz y en el de detecciones, con el mismo hook
+(`~/components/useSessionRowClick`). El `<Link>` de la fecha se queda para
+teclado, botón del medio y pestaña nueva; el click se ignora si cae en otro
+control de la fila (el link del usuario, copiar el id) o si hay texto
+seleccionado.
+
+Orden de la ficha: resumen (estado, duración, lecturas, DTCs, **distancia desde
+borrado** con "no informada" ≠ `0 km`, km del auto, batería, escáner, vehículo
+con combustible/caja, usuario) → DTCs → **un gráfico por PID** → anomalías →
+historia del auto (sus otros escaneos + el último mantenimiento HECHO hasta el
+día del escaneo) → IA → datos técnicos plegados.
+
+- **Los DTC se listan desde el snapshot**, todos con título (`dtcCodeInfo`,
+  `lookupDtc`). Antes la tabla sólo tenía los de `diagnostic_dtcs` (los que
+  alguien buscó) y los demás quedaban como chips sin título.
+- **Un PID es un gráfico de RANGO** (`~/components/PidRangeChart`), no una
+  curva: la base sólo guarda `{min,max,avg,stdDev,sampleCount}` por PID. Las
+  lecturas crudas están en DigitalOcean Spaces y **el panel no las lee —
+  decidido el 2026-09-25, nada que tenga que ver con DigitalOcean**. La ficha
+  lo dice en pantalla.
+- **Etiquetas, unidades y límites físicos de cada PID** viven en
+  `~/lib/scan-pids` (`PID_INFO`), compartido con `/escaneres/comparar`. Una
+  clave nueva del backend se muestra cruda y ordena al final.
+- **Lectura dudosa** (`implausibleReason`, `isSuspectSession`): un PID fuera de
+  su rango físico se pinta ámbar; 3 o más en la misma sesión la marcan entera
+  como basura. Calibrado contra producción: 2 sesiones enteras (motor a 181 °C,
+  227 km/h y 8.280 rpm clavados, trims en −100) y 3 PIDs sueltos en su byte
+  crudo extremo. Se marca, no se esconde.
+- `vehicleOdometerKm` es el km ACTUAL del auto: la base no guarda el km por
+  sesión, y la ficha lo aclara.
+- El mantenimiento es `performed_at <= día del escaneo` en hora de Buenos Aires
+  (`performed_at` es la fecha que tipeó la persona), y viaja como texto
+  `YYYY-MM-DD` armado en SQL: es un `date`, y pasarlo por `Date` corre el día.
 
 ## Qué NO se implementó, y por qué
 

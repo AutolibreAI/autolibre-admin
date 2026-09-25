@@ -116,12 +116,8 @@ export async function listChats(
     outerWhere.push(`model = $${params.length}`)
   }
 
-  if (search.messages === 'withMessages') {
-    outerWhere.push('(user_message_count > 0 or ai_message_count > 0)')
-  } else if (search.messages === 'noAiReply') {
+  if (search.messages === 'noAiReply') {
     outerWhere.push('user_message_count > 0 and ai_message_count = 0')
-  } else if (search.messages === 'empty') {
-    outerWhere.push('user_message_count = 0 and ai_message_count = 0')
   }
 
   const sortColumn = SORT_COLUMNS[search.sort]
@@ -184,6 +180,10 @@ export async function listChats(
       left join vehicles v on v.id = c.vehicle_id
       left join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
       left join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
+      -- Las conversaciones vacias no se listan nunca (decidido 2026-09-25,
+      -- ver CHAT_MESSAGE_FILTERS). En el WHERE interno: es columna cruda y
+      -- ahorra calcular las subconsultas de las que se van a descartar.
+      where exists (select 1 from conversation_messages m where m.conversation_id = c.id)
     ) s
     ${outerWhere.length ? `where ${outerWhere.join(' and ')}` : ''}
     order by ${sortColumn} ${search.dir} nulls last, id
