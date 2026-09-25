@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
-import { Check, Copy, History, MessageCircle, Pencil, Plus, RotateCcw } from 'lucide-react'
+import { Check, Copy, History, MessageCircle, Pencil, Plus } from 'lucide-react'
 import {
   TEMPLATE_VARIABLES,
   WHATSAPP_TEXT_MAX,
@@ -55,20 +55,23 @@ import { cn } from '~/lib/utils'
  * el texto que se manda podría no ser la lista que se ve dos tarjetas más
  * abajo.
  *
- * ── Editar acá NO toca la plantilla ────────────────────────────────────────
+ * ── De sólo lectura, desde el 2026-09-25 ───────────────────────────────────
  *
- * El operador corrige el texto YA RENDERIZADO para este envío puntual antes de
- * mandarlo — sobre todo el renglón de la recomendación, que es juicio suyo y
- * viene entre corchetes. Eso vive en `edits`, un mapa por `id` de plantilla en
- * el estado de este componente, y nunca escribe la plantilla. Cambiar de
- * pedido o recargar lo pierde a propósito: la plantilla es la fuente de
- * verdad, esto es un borrador de un solo uso. Editar la PLANTILLA en sí
- * —el texto crudo con `{{llaves}}`, vigente para todos los pedidos— es el
- * Sheet de «Editar plantilla» / «Nueva plantilla», que sí escribe.
+ * Antes el texto renderizado se podía corregir acá mismo, en un textarea
+ * editable — con «Restablecer» para volver al original. Se sacó, a pedido:
+ * el ajuste de último momento (completar o borrar el renglón de la
+ * recomendación, que viene entre corchetes) se hace en el compositor de
+ * WhatsApp, que YA lo pre-carga editable al abrir el link — tenerlo editable
+ * acá también era el mismo trabajo dos veces. Editar la PLANTILLA en sí — el
+ * texto crudo con `{{llaves}}`, vigente para todos los pedidos — sigue
+ * siendo el Sheet de «Editar plantilla» / «Nueva plantilla», que es la única
+ * escritura real de este componente.
  *
- * **El botón de WhatsApp manda lo EDITADO**, no el render original: si mandara
- * el original, el operador editaría el cuadro y se preguntaría por qué llegó
- * otra cosa.
+ * El bloque de texto va recortado a unas pocas líneas con un toggle «ver
+ * más» — mismo patrón que el detalle de cada fila en `ResponseRow`
+ * (`QuoteResponses.tsx`) — para no ocupar la pantalla con un mensaje de
+ * varios párrafos que la mayoría de las veces no hace falta leer entero acá:
+ * se lee (y se edita) en WhatsApp.
  */
 export function QuoteTemplates({
   detail,
@@ -81,9 +84,9 @@ export function QuoteTemplates({
 }) {
   const router = useRouter()
   const [activeId, setActiveId] = useState(templates[0]?.id)
-  const [edits, setEdits] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState(false)
   const [editing, setEditing] = useState<'active' | 'new' | null>(null)
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     if (!copied) return
@@ -91,12 +94,20 @@ export function QuoteTemplates({
     return () => clearTimeout(id)
   }, [copied])
 
+  // Colapsado por default en cada plantilla nueva que se mira — si quedara
+  // expandido al cambiar de pestaña, la de al lado heredaría el alto de la
+  // anterior sin que nadie lo haya pedido.
+  useEffect(() => {
+    setExpanded(false)
+  }, [activeId])
+
   const active = templates.find((t) => t.id === activeId) ?? templates[0]
   if (!active) return null
 
-  const original = renderQuoteTemplate(active, detail, responses)
-  const text = edits[active.id] ?? original
-  const edited = edits[active.id] !== undefined && edits[active.id] !== original
+  const text = renderQuoteTemplate(active, detail, responses)
+  // Recorte a ojo: un mensaje de menos de ~6 líneas o ~320 caracteres ya
+  // entra sin recortar, así que el toggle "ver más" no aparece para nada.
+  const isLong = text.split('\n').length > 6 || text.length > 320
 
   // El teléfono del PEDIDO es el de la persona. Para una plantilla que va al
   // taller (`audience: 'taller'`) mandarla ahí sería escribirle a quien no
@@ -115,8 +126,7 @@ export function QuoteTemplates({
       setCopied(true)
     } catch {
       // Mismo criterio que `CopyableId`: sin permiso de portapapeles, no
-      // fingimos que se copió. El texto sigue completo en el textarea para
-      // seleccionarlo a mano.
+      // fingimos que se copió.
     }
   }
 
@@ -128,8 +138,7 @@ export function QuoteTemplates({
             <h2 className="font-heading text-base font-semibold">Mensajes</h2>
             <p className="mt-0.5 max-w-prose text-sm text-muted-foreground">
               Lo que sale de este pedido ya viene completo. Completá o borrá lo que quede entre{' '}
-              <code className="font-mono">[corchetes]</code> antes de mandarlo — se puede editar acá sin tocar la
-              plantilla.
+              <code className="font-mono">[corchetes]</code> al mandarlo por WhatsApp — acá es de sólo lectura.
             </p>
           </div>
           <div className="flex shrink-0 gap-1.5">
@@ -176,13 +185,25 @@ export function QuoteTemplates({
           </p>
         ) : null}
 
-        <Textarea
-          value={text}
-          onChange={(e) => setEdits((prev) => ({ ...prev, [active.id]: e.currentTarget.value }))}
-          rows={14}
-          className="font-mono text-sm"
-          aria-label={`Texto del mensaje ${active.title}`}
-        />
+        <div className="rounded-md border border-border bg-secondary p-3">
+          <pre
+            className={cn(
+              'whitespace-pre-wrap font-mono text-sm leading-relaxed',
+              !expanded && isLong && 'line-clamp-6',
+            )}
+          >
+            {text}
+          </pre>
+          {isLong ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1.5 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {expanded ? 'ver menos' : 'ver más'}
+            </button>
+          ) : null}
+        </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {waUrl ? (
@@ -207,24 +228,6 @@ export function QuoteTemplates({
               </>
             )}
           </Button>
-
-          {edited ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                setEdits((prev) => {
-                  const next = { ...prev }
-                  delete next[active.id]
-                  return next
-                })
-              }
-            >
-              <RotateCcw className="size-3.5" aria-hidden />
-              Restablecer
-            </Button>
-          ) : null}
 
           {/*
             Las razones por las que no hay botón de WhatsApp se explican por
