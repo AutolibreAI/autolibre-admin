@@ -8,6 +8,8 @@ import {
 } from '~/lib/notification-schedules'
 import { describeAudience } from '~/lib/audience'
 import { listNotificationSchedulesFn } from '~/fn/schedules'
+import { listNotificationRulesFn } from '~/fn/notification-rules'
+import { NotificationRuleCards } from '~/components/NotificationRuleCards'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ScheduleComposer } from '~/components/ScheduleComposer'
 import { Chip, FilterGroup } from '~/components/Filters'
@@ -24,9 +26,18 @@ import {
 import { formatDateTime, formatInt } from '~/lib/format'
 
 /**
- * `/notificaciones/reglas` — el listado de reglas de notificación.
+ * `/notificaciones/reglas` — las DOS clases de regla de notificación, en dos
+ * secciones:
  *
- * Qué reemplaza: nada todavía, y es a propósito — ver la cabecera de
+ * 1. **Recordatorios de vencimiento** (`public.notification_rules`, del
+ *    backend). Reemplaza el `select * from notification_rules` + el
+ *    `count(*) … group by rule_id` contra `notifications` que nadie corría.
+ *    Sólo lectura: `.claude/plans/reglas-de-vencimiento.md`.
+ * 2. **Envíos programados** (`ops.notification_schedule`, migración 014).
+ *    Los filtros de la URL (`q`, `scheduleState`) son SÓLO de esta sección, y
+ *    por eso viven adentro de ella y no en el header de la página.
+ *
+ * Sobre la sección 2 — qué reemplaza: nada todavía, y es a propósito — ver la cabecera de
  * `.claude/plans/notificaciones-automaticas.md`. Esta pantalla deja
  * DEFINIDA la audiencia y la recurrencia de un envío recurrente; el motor que
  * las evalúa y dispara es una fase aparte, bloqueada por una decisión de
@@ -39,8 +50,16 @@ import { formatDateTime, formatInt } from '~/lib/format'
 export const Route = createFileRoute('/_authed/notificaciones/reglas/')({
   validateSearch: notificationScheduleSearchSchema,
   loaderDeps: ({ search }) => search,
-  loader: async ({ deps, abortController }) =>
-    listNotificationSchedulesFn({ data: deps, signal: abortController.signal }),
+  loader: async ({ deps, abortController }) => {
+    const signal = abortController.signal
+    // En paralelo. Las reglas de vencimiento no dependen de los filtros, pero
+    // son 22 filas: separarlas en otro loader no ahorra nada que se note.
+    const [schedules, rules] = await Promise.all([
+      listNotificationSchedulesFn({ data: deps, signal }),
+      listNotificationRulesFn({ signal }),
+    ])
+    return { schedules, rules }
+  },
   head: () => ({ meta: [{ title: 'Reglas de notificación — AutoLibre' }] }),
   component: SchedulesList,
 })
@@ -52,7 +71,7 @@ const STATE_LABELS: Record<NotificationScheduleStateFilter, string> = {
 }
 
 function SchedulesList() {
-  const schedules = Route.useLoaderData()
+  const { schedules, rules } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -63,65 +82,94 @@ function SchedulesList() {
     <>
       <PageHeader
         title="Reglas"
-        subtitle={`${formatInt(schedules.length)} ${search.q || search.scheduleState !== 'all' ? 'con este filtro' : 'en total'}`}
-        actions={
-          <>
-            <ScheduleComposer />
-            <SsrTag>ssr: full</SsrTag>
-          </>
-        }
+        subtitle={`${formatInt(rules.length)} recordatorio${rules.length === 1 ? '' : 's'} de vencimiento · ${formatInt(schedules.length)} envío${schedules.length === 1 ? '' : 's'} programado${schedules.length === 1 ? '' : 's'}${search.q || search.scheduleState !== 'all' ? ' con este filtro' : ''}`}
+        actions={<SsrTag>ssr: full</SsrTag>}
       />
 
-      <div className="mb-4 flex flex-wrap items-end gap-4">
-        <SearchInput
-          id="schedule-q"
-          label="Buscar"
-          placeholder="Nombre de la regla"
-          value={search.q}
-          onSearch={(q) => setSearch({ q })}
-        />
-
-        <FilterGroup label="Estado">
-          {NOTIFICATION_SCHEDULE_STATE_FILTERS.map((state) => (
-            <Chip
-              key={state}
-              active={search.scheduleState === state}
-              onClick={() => setSearch({ scheduleState: state })}
-            >
-              {STATE_LABELS[state]}
-            </Chip>
-          ))}
-        </FilterGroup>
-      </div>
-
-      {schedules.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card px-6 py-16 text-center">
-          <p className="text-sm font-medium">Todavía no hay reglas</p>
-          <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
-            Una regla guarda una audiencia y una recurrencia — "a quiénes" y "cuándo". Nace pausada:
-            crearla no le manda nada a nadie todavía.
+      <section className="mb-10">
+        <div className="mb-3">
+          <h2 className="font-heading text-lg font-semibold">Recordatorios de vencimiento</h2>
+          <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">
+            Los arma y los manda el backend, cada hora: cuando falta lo indicado para que venza un
+            documento o un mantenimiento, le llega un push a su dueño.
           </p>
         </div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Regla</TableHead>
-                <TableHead>Audiencia</TableHead>
-                <TableHead>Cuándo</TableHead>
-                <TableHead>Estado</TableHead>
-                <TableHead>Actualizada</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {schedules.map((s) => (
-                <ScheduleRow key={s.id} schedule={s} />
-              ))}
-            </TableBody>
-          </Table>
+
+        <NotificationRuleCards rules={rules} />
+
+        <div className="mt-4 rounded-lg border border-status-yellow/40 bg-status-yellow-bg px-4 py-3">
+          <p className="text-sm font-medium text-status-yellow">
+            Pausar, agregar o cambiar estos avisos todavía no se puede desde acá
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Está pedido al backend: primero hay que confirmar que un deploy no los vuelva a
+            activar solo y qué pasa con los avisos atrasados al crear uno nuevo.
+          </p>
         </div>
-      )}
+      </section>
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-lg font-semibold">Envíos programados</h2>
+            <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">
+              Reglas del panel: a quiénes y cada cuánto. Nacen pausadas.
+            </p>
+          </div>
+          <ScheduleComposer />
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-end gap-4">
+          <SearchInput
+            id="schedule-q"
+            label="Buscar"
+            placeholder="Nombre de la regla"
+            value={search.q}
+            onSearch={(q) => setSearch({ q })}
+          />
+
+          <FilterGroup label="Estado">
+            {NOTIFICATION_SCHEDULE_STATE_FILTERS.map((state) => (
+              <Chip
+                key={state}
+                active={search.scheduleState === state}
+                onClick={() => setSearch({ scheduleState: state })}
+              >
+                {STATE_LABELS[state]}
+              </Chip>
+            ))}
+          </FilterGroup>
+        </div>
+
+        {schedules.length === 0 ? (
+          <div className="rounded-lg border border-border bg-card px-6 py-16 text-center">
+            <p className="text-sm font-medium">Todavía no hay envíos programados</p>
+            <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
+              Una regla guarda una audiencia y una recurrencia — "a quiénes" y "cuándo". Nace pausada:
+              crearla no le manda nada a nadie todavía.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Regla</TableHead>
+                  <TableHead>Audiencia</TableHead>
+                  <TableHead>Cuándo</TableHead>
+                  <TableHead>Estado</TableHead>
+                  <TableHead>Actualizada</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {schedules.map((s) => (
+                  <ScheduleRow key={s.id} schedule={s} />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
     </>
   )
 }

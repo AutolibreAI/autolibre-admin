@@ -192,6 +192,17 @@ export interface NotificationListItem {
   scheduledAt: string
   sentAt: string | null
   createdAt: string
+  /**
+   * La regla de vencimiento que la generó (`notification_rules`, por
+   * `rule_id`). `null` para todo lo que no es un aviso de vencimiento — la gran
+   * mayoría: envíos manuales, diagnósticos, datos del vehículo. → `~/lib/notification-rules`
+   */
+  rule: {
+    sourceType: string
+    offsetUnit: string
+    offsetDirection: string
+    offsetValue: number
+  } | null
 }
 
 // ── Search params ────────────────────────────────────────────────────────────
@@ -251,6 +262,13 @@ export const notificationSearchSchema = z.object({
    * pantalla va a querer. `optional`, no `.catch`, igual que `userId`.
    */
   notificationBroadcastId: z.uuid().optional(),
+  /**
+   * Las filas que generó UNA regla de vencimiento (`notifications.rule_id`). Se
+   * llega así desde el conteo "N avisos" de `/notificaciones/reglas`.
+   * Calificado por la misma regla que `notificationBroadcastId` — `ruleId`
+   * pelado es un nombre que otra pantalla va a querer. `optional`, no `.catch`.
+   */
+  notificationRuleId: z.uuid().optional(),
   sort: z.enum(NOTIFICATION_SORT_KEYS).catch('scheduledAt').default('scheduledAt'),
   dir: z.enum(NOTIFICATION_SORT_DIRS).catch('desc').default('desc'),
 })
