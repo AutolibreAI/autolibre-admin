@@ -240,7 +240,11 @@ export type EditApplicationInput = z.infer<typeof editApplicationSchema>
 
 export const listPartnerCandidatesSchema = z
   .object({
-    categorySlug: z.string().trim().min(1).max(60),
+    /**
+     * Uno o más rubros — desde la 016 el candidato correcto es el que cubre
+     * el MÁXIMO de rubros que el pedido pide, no sólo uno.
+     */
+    categorySlugs: z.array(z.string().trim().min(1).max(60)).min(1).max(16),
     /** El punto del PEDIDO. Las dos viajan juntas o ninguna, igual que `setPartnerLocationSchema`. */
     lat: z.number().min(-90).max(90).nullable(),
     lng: z.number().min(-180).max(180).nullable(),
@@ -278,7 +282,13 @@ export interface PartnerCandidate {
   hours: string | null
   whatsapp: string | null
   address: string | null
-  /** Los `services` de ESTE rubro que el partner cubre, no todo su catálogo. */
+  /**
+   * De los rubros PEDIDOS (`categorySlugs` del pedido), cuáles cubre este
+   * partner. El orden de los candidatos es por `cardinality(matchedCategories)`
+   * descendente — el que cubre más rubros de los que se pidieron va primero.
+   */
+  matchedCategories: Array<{ slug: string; name: string }>
+  /** Los `services` de los rubros pedidos que el partner cubre, no todo su catálogo. */
   matchedServices: Array<{ slug: string; name: string }>
   /**
    * `null` = no sabemos dónde está el partner (sin coordenadas cargadas) O no

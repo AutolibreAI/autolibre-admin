@@ -176,15 +176,13 @@ export function QuoteRequestActions({
 // ── received → contacted ─────────────────────────────────────────────────────
 
 function ContactedForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy: boolean; run: RunFn }) {
-  const [auditNote, setAuditNote] = useState('')
-
   return (
     <form
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault()
         void run(
-          () => markQuoteRequestContactedFn({ data: { quoteRequestId, auditNote: auditNote.trim() || undefined } }),
+          () => markQuoteRequestContactedFn({ data: { quoteRequestId } }),
           'Marcado como contactado.',
         )
       }}
@@ -196,7 +194,6 @@ function ContactedForm({ quoteRequestId, busy, run }: { quoteRequestId: string; 
           y mientras no esté respondido la persona todavía puede cancelarlo.
         </p>
       </div>
-      <AuditNoteField value={auditNote} onChange={setAuditNote} />
       <Button type="submit" size="sm" disabled={busy} className="gap-1.5">
         <PhoneCall className="size-3.5" aria-hidden />
         {busy ? 'Guardando…' : 'Marcar contactado'}
@@ -224,7 +221,6 @@ function AnsweredForm({
   // que quede escrito. Con cero cargados arranca vacío en vez de en "0" —
   // mandar un cero que nadie escribió diría "llamamos y no conseguimos nada".
   const [count, setCount] = useState(loadedProposals > 0 ? String(loadedProposals) : '')
-  const [auditNote, setAuditNote] = useState('')
 
   // Sólo dígitos: `Number('')` es 0, y un campo vacío mandado como cero diría
   // "no conseguimos nada" sin que nadie lo haya escrito.
@@ -239,7 +235,7 @@ function AnsweredForm({
         void run(
           () =>
             markQuoteRequestAnsweredFn({
-              data: { quoteRequestId, proposalsCount: Number(count.trim()), auditNote: auditNote.trim() || undefined },
+              data: { quoteRequestId, proposalsCount: Number(count.trim()) },
             }),
           'Marcado como respondido.',
         )
@@ -277,7 +273,6 @@ function AnsweredForm({
             : ''}
         </p>
       </div>
-      <AuditNoteField value={auditNote} onChange={setAuditNote} />
       <Button type="submit" size="sm" disabled={busy || !valid} className="gap-1.5">
         <CheckCheck className="size-3.5" aria-hidden />
         {busy ? 'Guardando…' : 'Marcar respondido'}
@@ -295,14 +290,11 @@ function AnsweredForm({
  * se confirma es exactamente lo que viaja.
  */
 function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy: boolean; run: RunFn }) {
-  const closedReasonId = useId()
-  const outcomeNoteId = useId()
+  const noteId = useId()
   const [code, setCode] = useState<OperatorCloseReason | null>(null)
-  const [closedReason, setClosedReason] = useState('')
   // `null` = "Sin preguntar": no se sabe cómo terminó. NO es `no_response`.
   const [outcome, setOutcome] = useState<QuoteRequestOutcome | null>(null)
-  const [outcomeNote, setOutcomeNote] = useState('')
-  const [auditNote, setAuditNote] = useState('')
+  const [note, setNote] = useState('')
   const [confirming, setConfirming] = useState(false)
 
   return (
@@ -317,10 +309,8 @@ function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy
               data: {
                 quoteRequestId,
                 closeReasonCode: code,
-                closedReason: closedReason.trim() || undefined,
                 outcome: outcome ?? undefined,
-                outcomeNote: outcomeNote.trim() || undefined,
-                auditNote: auditNote.trim() || undefined,
+                internalNote: note.trim() || undefined,
               },
             }),
           'Pedido cerrado.',
@@ -345,23 +335,6 @@ function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy
           ))}
         </FilterGroup>
 
-        <div className="space-y-1">
-          <label htmlFor={closedReasonId} className="block text-xs text-muted-foreground">
-            Nota interna del cierre (opcional) — la persona nunca la ve
-          </label>
-          <Textarea
-            id={closedReasonId}
-            value={closedReason}
-            onChange={(e) => {
-              const value = e.currentTarget.value
-              setClosedReason(value)
-            }}
-            maxLength={1000}
-            rows={2}
-            className="text-xs"
-          />
-        </div>
-
         <FilterGroup label="Resultado (según el operador)">
           <Chip active={outcome === null} onClick={() => setOutcome(null)}>
             Sin preguntar
@@ -378,23 +351,25 @@ function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy
         </p>
 
         <div className="space-y-1">
-          <label htmlFor={outcomeNoteId} className="block text-xs text-muted-foreground">
-            Nota del resultado (opcional)
+          <label htmlFor={noteId} className="block text-xs text-muted-foreground">
+            Nota para el hilo (opcional) — la persona nunca la ve
           </label>
-          <Input
-            id={outcomeNoteId}
-            value={outcomeNote}
+          <Textarea
+            id={noteId}
+            value={note}
             onChange={(e) => {
               const value = e.currentTarget.value
-              setOutcomeNote(value)
+              setNote(value)
             }}
-            maxLength={1000}
-            autoComplete="off"
+            maxLength={2000}
+            rows={2}
             className="text-xs"
           />
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Se agrega al hilo de notas internas en el mismo momento que el cierre: un pedido cerrado no admite
+            notas nuevas, así que las dos cosas viajan juntas.
+          </p>
         </div>
-
-        <AuditNoteField value={auditNote} onChange={setAuditNote} />
       </fieldset>
 
       {confirming && code ? (
@@ -499,34 +474,4 @@ export function QuoteRequestNoteComposer({ quoteRequestId, status }: { quoteRequ
 
 function FormTitle({ children }: { children: ReactNode }) {
   return <h3 className="mb-1 text-sm font-medium">{children}</h3>
-}
-
-/**
- * `p_note` del SP. Rotulado para que no se confunda con la nota interna: esta
- * NO aparece en el hilo del pedido.
- */
-function AuditNoteField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const id = useId()
-  return (
-    <div className="space-y-1">
-      <label htmlFor={id} className="block text-xs text-muted-foreground">
-        Nota de auditoría (opcional)
-      </label>
-      <Input
-        id={id}
-        value={value}
-        onChange={(e) => {
-          const v = e.currentTarget.value
-          onChange(v)
-        }}
-        maxLength={500}
-        autoComplete="off"
-        placeholder="Por qué, si no es obvio"
-        className="text-xs"
-      />
-      <p className="text-xs text-muted-foreground">
-        Queda en <code className="font-mono">ops.action_log</code>, no en el hilo de notas internas del pedido.
-      </p>
-    </div>
-  )
 }

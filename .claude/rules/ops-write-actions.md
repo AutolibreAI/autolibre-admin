@@ -11,10 +11,16 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/server/quote-requests.repo.ts` y `src/fn/quote-requests.ts`, y
 `src/components/QuoteRequestActions.tsx`. La 012 suma `migrations/012_ops_crear_pedido.sql`,
 `createQuoteRequest` de `src/server/quote-requests.repo.ts`, `createQuoteRequestFn` de
-`src/fn/quote-requests.ts` y `src/components/QuoteRequestComposer.tsx`. La 013 suma
-`migrations/013_ops_rubro_de_pedido.sql` y su `.test.sql`, `setQuoteRequestRubro` de
-`src/server/quote-requests.repo.ts`, `setQuoteRequestRubroFn` de `src/fn/quote-requests.ts`
-y `src/components/PartnerCandidates.tsx` (`.claude/plans/partners-derivacion.md`).
+`src/fn/quote-requests.ts` y `src/components/QuoteRequestComposer.tsx`. La 013 sumaba
+`migrations/013_ops_rubro_de_pedido.sql` — **retirada por la 016**, ver más abajo; su
+`.test.sql` quedó como redirect. La 016 suma
+`migrations/016_ops_varios_rubros_y_nota_de_cierre.sql` y su `.test.sql`,
+`setQuoteRequestRubros` de `src/server/quote-requests.repo.ts`, `setQuoteRequestRubrosFn` de
+`src/fn/quote-requests.ts`, `src/components/MultiSelect.tsx` y los cambios de
+`src/components/PartnerCandidates.tsx`/`QuoteRequestActions.tsx`. La 017 suma
+`migrations/017_ops_plantillas_de_mensaje.sql` y su `.test.sql`,
+`src/server/quote-message-templates.repo.ts`, `src/fn/quote-message-templates.ts` y el editor
+de `src/components/QuoteTemplates.tsx` (`.claude/plans/pedidos-ficha-2026-09-25.md`).
 
 ## La regla que esto reemplaza, y por qué
 
@@ -959,3 +965,179 @@ Hasta que ese paso 3 no esté hecho, la tarjeta de Presupuestos de la ficha se
 muestra con el cartel de "falta aplicar la migración 015" y no deja cargar nada
 — `quoteResponsesAvailable()` lo detecta con `to_regclass`, y cada escritura lo
 re-chequea en su handler.
+
+---
+
+# Migración 016 — varios rubros por pedido, y la nota del cierre atómica
+
+Alcance: `migrations/016_ops_varios_rubros_y_nota_de_cierre.sql` y su
+`.test.sql`, `setQuoteRequestRubros` + el `p_internal_note` de `closeQuoteRequest`
+en `src/server/quote-requests.repo.ts`, `setQuoteRequestRubrosFn` en
+`src/fn/quote-requests.ts`, `src/components/MultiSelect.tsx` (primer uso),
+`src/components/PartnerCandidates.tsx`, `src/components/QuoteRequestActions.tsx`.
+Nace de `.claude/plans/pedidos-ficha-2026-09-25.md`.
+
+## Dos cambios independientes, una migración
+
+Llegaron juntos en el mismo pedido de producto y no comparten tabla, pero los
+dos tocan la ficha de un pedido y los dos son DROP + CREATE, así que se
+escribieron en el mismo archivo.
+
+### 1. `ops.quote_request_rubro`: de un rubro a varios
+
+La 013 modelaba "el rubro del pedido" como una fila `(quote_request_id) →
+category_slug`. El candidato correcto para derivar no es "cubre ESE rubro" —
+es "cubre el MÁXIMO de rubros que el pedido pide", y eso necesita el
+CONJUNTO. La tabla tenía **0 filas en producción** al relevar esto
+(2026-09-25): reestructurarla no migra datos, así que se DROPEA y se recrea
+con `PRIMARY KEY (quote_request_id, category_slug)` — N filas por pedido, sin
+`service_slug` (el plan decidió "servicio puntual: fuera").
+
+`ops.set_quote_request_rubro` (singular, 013) se DROPEA con su firma EXACTA y
+se reemplaza por `ops.set_quote_request_rubros` (plural): reemplaza el
+CONJUNTO entero, mismo patrón que `ops.reorder_quote_request_responses` (015)
+— la lista completa, no un alta/baja individual, porque dos pestañas
+agregando un rubro cada una a la vez tienen que converger a lo que el
+operador vio en pantalla.
+
+`listPartnerCandidates` cambia su criterio de orden principal: pasa a ser
+`matched_category_count DESC` **antes** que la distancia — un partner que
+cubre 2 de 2 rubros pedidos conviene más que uno más cercano que sólo cubre 1,
+porque evita derivar a dos talleres distintos.
+
+`013_ops_rubro_de_pedido.test.sql` quedó como un archivo de puro comentario
+que redirige a la 016 — igual que `008_ops_partner_perfil_y_links.test.sql`
+quedó cuando la 009 le agregó `p_name` a `set_partner_profile`. No queda nada
+de esa suite que siga siendo válido: la tabla que probaba ya no tiene esa
+forma, y la función que probaba ya no existe.
+
+### 2. `ops.close_quote_request`: la nota del cierre, en la MISMA sentencia
+
+Hasta acá, agregar una nota antes de cerrar eran DOS llamadas
+(`add_quote_request_internal_note` + `close_quote_request`). Un pedido cerrado
+no admite notas nuevas, así que si la segunda llamada fallaba —la persona lo
+canceló desde la app entre medio— la nota de la primera quedaba huérfana: una
+nota sobre un cierre que nunca pasó.
+
+`ops.close_quote_request` suma `p_internal_note text DEFAULT NULL`: si viene,
+se agrega al hilo con el MISMO formato fechado (hora de Buenos Aires) que
+`add_quote_request_internal_note`, dentro del mismo `UPDATE` que cierra el
+pedido. Agregar un parámetro es la trampa de la 009 otra vez: `DROP FUNCTION`
+con la firma exacta de 7 parámetros de la 011, después `CREATE` con 8. La
+suite re-verifica TODAS las validaciones de la 011 sobre la función nueva, no
+sólo la que cambió — un `DROP + CREATE` es exactamente donde se cae un `IF`
+sin que nadie lo note.
+
+En la UI (`QuoteRequestActions.tsx`), esto reemplaza a los campos viejos
+«Nota interna del cierre» (`closed_reason`) y «Nota del resultado»
+(`outcome_note`) — ver la sección de notas de la 017 más abajo, que es la
+decisión de producto completa. El SP sigue aceptando esos dos parámetros
+(nadie los borró de la firma ni de la tabla) por si algún llamador viejo los
+manda; lo ya cargado en pedidos cerrados antes de este cambio se sigue
+mostrando en el recorrido.
+
+## Se probó como 007–015
+
+`migrations/016_ops_varios_rubros_y_nota_de_cierre.test.sql`: `BEGIN …
+ROLLBACK`, con su propio actor y sus propios pedidos (uno por estado, para
+re-verificar el cierre). Cubre los guardrails de forma de las dos funciones,
+el alta/reclasificación/vaciado de rubros con `[]` como "sin clasificar", el
+rubro inválido rechazado sin aplicar nada parcial, las cuatro validaciones de
+cierre heredadas de la 011, el camino feliz con y sin `p_internal_note`
+(verificando el sello fechado en el hilo), y la integración con el SQL exacto
+de parámetros nombrados de los dos repos.
+
+---
+
+# Migración 017 — plantillas de mensaje editables
+
+Alcance: `migrations/017_ops_plantillas_de_mensaje.sql` y su `.test.sql`,
+`src/server/quote-message-templates.repo.ts`, `src/fn/quote-message-templates.ts`,
+las piezas nuevas de `src/lib/quote-templates.ts` (`QuoteMessageTemplate`,
+`TEMPLATE_VARIABLES`, `saveQuoteMessageTemplateSchema`), el editor
+`TemplateEditorSheet` de `src/components/QuoteTemplates.tsx`. Nace de
+`.claude/plans/pedidos-ficha-2026-09-25.md`, Fase 3.
+
+## Versión, no fila mutable
+
+`ops.quote_message_template_version` es APPEND-ONLY: "editar" es insertar una
+fila nueva con el mismo `template_key`. La vigente de una clave es su versión
+más reciente que no esté `archived`. "Volver a una versión anterior" no
+necesita un SP propio — el cliente relee el `content` de esa versión vieja y
+lo manda como si fuera una edición nueva (botón «usar esta versión» en el
+historial del editor); el historial queda intacto y dice quién y cuándo hizo
+cada cambio, incluida la vuelta atrás.
+
+Las 4 plantillas de `QUOTE_TEMPLATES` (`~/lib/quote-templates.ts`) siguen
+siendo la SEMILLA: si un `template_key` no tiene ninguna versión en esta
+tabla, el panel las usa. La primera edición de una crea la versión 1 y desde
+ahí la base manda para esa clave — `listQuoteMessageTemplates()` en el repo
+hace ese merge, no el cliente. Una plantilla nueva ("Nueva plantilla" en la
+UI) nace directo en `ops`, sin semilla: `p_template_key` llega `NULL` y el SP
+le genera una (`custom_xxxxxxxxxxxx`).
+
+## Por qué el guardrail de `{{codigo}}` vive en DOS lugares
+
+Ya corría en tiempo de módulo sobre `QUOTE_TEMPLATES` (arranca el proceso si
+falta). Una plantilla nueva o editada desde el panel no pasa por ese archivo,
+así que el `CHECK (content LIKE '%{{codigo}}%')` de la tabla y la validación
+del SP son la ÚNICA barrera para esas. Zod la repite una tercera vez del lado
+del cliente, con el mismo mensaje — el de zod llega como issue con el `path`
+del campo, el del SP es el que no se puede saltear.
+
+## Qué variables puede usar cada plantilla, y quién lo valida
+
+`TEMPLATE_VARIABLES` (`~/lib/quote-templates.ts`) es un catálogo cerrado por
+audiencia — `persona` y `taller` no comparten todas las variables
+(`vehiculo_completo`/`intro`/`presupuestos` no existen para un mensaje al
+taller; `vehiculo_taller` no tiene sentido para la persona). El SP **no**
+conoce esta lista — vive en código, no en la base — así que
+`unknownTemplateVariables()` valida en TypeScript, del lado del cliente, ANTES
+de llamar al SP. Duplicarla en plpgsql sería una tercera copia para mantener
+sincronizada con cada variable nueva que `renderQuoteTemplate()` aprenda a
+resolver.
+
+## Los 8 guardrails, con dos matices
+
+Los mismos 6 de siempre (vive en `migrations/`, SECURITY INVOKER, `search_path`
+fijo, actor de la sesión, log dentro de la función, sin FK cruzada) más dos
+que se leen distinto acá:
+
+- **Guardrail 5 (`before`/`after`)**: acá `before` SÍ trae información real
+  incluso en la primera llamada de una edición — es la versión vigente
+  ANTERIOR de esa clave (o `NULL` si es la primera vez que se guarda algo con
+  esa clave). A diferencia de la 012/013, donde `before` es siempre `NULL`
+  porque no había fila previa posible, acá "qué decía la plantilla antes de
+  este cambio" es exactamente lo que un editor de contenido necesita poder
+  auditar.
+- **Guardrail 7 (`FOR UPDATE`)**: lockea la versión vigente ANTERIOR de la
+  clave (si la hay) antes de insertar la nueva — dos ediciones concurrentes
+  de la misma clave se serializan en vez de correr una carrera invisible.
+  Sin fila previa (clave nueva) no hay nada que lockear, mismo criterio que
+  el alta de la 012/013.
+- **Guardrail 8 no aplica**: la tabla no tiene `updated_at` — sus filas nunca
+  se editan (append-only), así que no hay nada que ese guardrail proteja.
+
+## `archived`: la columna está, el botón todavía no
+
+El plan pide la capacidad de archivar una plantilla ("versión nueva con
+`archived = true`, no hay borrado") pero la UI de la Fase 3 —Editar / Nueva
+plantilla / historial con «usar esta versión»— no pide un botón para eso
+todavía. La columna y el parámetro `p_archived` del SP quedan escritos y
+probados; retirar una plantilla custom hoy es un `UPDATE` a mano contra esa
+columna, no una migración nueva. Si se agrega el botón más adelante, el SP ya
+está listo.
+
+## Se probó como 007–016
+
+`migrations/017_ops_plantillas_de_mensaje.test.sql`: `BEGIN … ROLLBACK`, sin
+depender de `quote_requests` (esta tabla no tiene FK a ninguna, guardrail 6,
+así que corre igual en una base donde `quote_requests` no exista). Cubre los
+guardrails de forma, el alta con clave generada, que editar una clave cree una
+versión NUEVA y no pise la anterior, los tres rechazos de representabilidad
+(título vacío, contenido vacío, audiencia fuera del catálogo,
+`{{codigo}}` ausente), el actor inexistente, el `before`/`after` del log (NULL
+en la primera versión de una clave, el título anterior en la segunda), que
+editar una plantilla de SEMILLA (`template_key = 'apertura'`) le cree su
+primera fila sin que el SP sepa ni le importe que es una semilla, y la
+integración con parámetros nombrados.

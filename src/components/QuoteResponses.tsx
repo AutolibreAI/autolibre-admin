@@ -64,8 +64,13 @@ interface FormState {
   currency: QuoteCurrency
   detail: string
   validUntil: string
+  /**
+   * Sólo se ofrece en el FORM si la fila ya traía una (compatibilidad con lo
+   * cargado antes de que este campo se ocultara). Una fila nueva nunca la
+   * pide — es la nota interna POR presupuesto, distinta del hilo de notas del
+   * pedido, y se decidió ocultarla para no duplicar dónde anotar algo.
+   */
   internalNotes: string
-  auditNote: string
 }
 
 function emptyForm(): FormState {
@@ -80,7 +85,6 @@ function emptyForm(): FormState {
     detail: '',
     validUntil: '',
     internalNotes: '',
-    auditNote: '',
   }
 }
 
@@ -100,7 +104,6 @@ function formFrom(r: QuoteResponse): FormState {
     detail: r.detail,
     validUntil: r.validUntil ?? '',
     internalNotes: r.internalNotes ?? '',
-    auditNote: '',
   }
 }
 
@@ -368,127 +371,137 @@ function ResponseRow({
   }
 
   const amount = formatQuoteAmount(r)
+  const [expanded, setExpanded] = useState(false)
+  // Umbral de largo a partir del cual "ver más" tiene sentido — dos líneas de
+  // un párrafo de este ancho rondan los 110-130 caracteres.
+  const detailIsLong = r.detail.length > 140
+
+  const contactLine = [r.address, r.phone, r.hours].filter((v): v is string => v !== null).join(' · ')
 
   return (
-    <div className={cn('rounded-md border border-border bg-card p-3', r.expired === true && 'opacity-70')}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 gap-2">
-          <span className="mt-0.5 shrink-0 text-sm font-semibold tabular-nums text-muted-foreground">
-            {index + 1}.
-          </span>
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {r.partnerId ? (
-                <Link
-                  to="/partners/$partnerId"
-                  params={{ partnerId: r.partnerId }}
-                  className="font-medium text-brand hover:underline"
-                >
-                  {r.name}
-                </Link>
-              ) : (
-                <span className="font-medium">{r.name}</span>
-              )}
-              <Badge variant="outline" className="border-border text-muted-foreground">
-                {r.partnerId ? 'del directorio' : 'taller de afuera'}
-              </Badge>
-              {/*
-                El partner pudo pausarse o archivarse DESPUÉS de contestar. No
-                invalida la respuesta: se avisa y se sigue mostrando.
-              */}
-              {r.partnerStatus !== null && r.partnerStatus !== 'active' ? (
-                <span className="text-xs text-status-yellow">
-                  el taller está {r.partnerStatus === 'paused' ? 'pausado' : r.partnerStatus} en el directorio
-                </span>
-              ) : null}
-            </div>
-
-            <div className="space-y-0.5 text-xs text-muted-foreground">
-              {r.address ? <div>📍 {r.address}</div> : null}
-              {r.phone ? <div className="tabular-nums">📞 {r.phone}</div> : null}
-              {r.hours ? <div>🕘 {r.hours}</div> : null}
-            </div>
-
-            <p className="whitespace-pre-wrap text-sm leading-relaxed">{r.detail}</p>
-
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <span>cargado {formatDateTime(r.createdAt)} UTC</span>
-              {r.validUntil ? (
-                <span className={cn(r.expired ? 'text-status-yellow' : undefined)}>
-                  {r.expired ? 'venció' : 'vigente hasta'} el {formatDate(`${r.validUntil}T00:00:00.000Z`)}
-                </span>
-              ) : null}
-              {amount && r.currency !== 'ARS' ? <span>en {quoteCurrencyLabel(r.currency).toLowerCase()}</span> : null}
-            </div>
-
-            {r.internalNotes ? (
-              <p className="rounded border border-border bg-secondary px-2 py-1 text-xs leading-relaxed">
-                <span className="text-muted-foreground">Nota interna: </span>
-                {r.internalNotes}
-              </p>
-            ) : null}
-          </div>
+    <div className={cn('rounded-md border border-border bg-card px-3 py-2', r.expired === true && 'opacity-70')}>
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <span className="shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">{index + 1}.</span>
+          {r.partnerId ? (
+            <Link
+              to="/partners/$partnerId"
+              params={{ partnerId: r.partnerId }}
+              className="truncate font-medium text-brand hover:underline"
+            >
+              {r.name}
+            </Link>
+          ) : (
+            <span className="truncate font-medium">{r.name}</span>
+          )}
+          {r.partnerTier === 'founding' ? (
+            <Badge variant="outline" className="shrink-0 border-brand/30 bg-brand-soft text-brand">
+              Aliado
+            </Badge>
+          ) : null}
+          {/* El partner pudo pausarse o archivarse DESPUÉS de contestar. No invalida la respuesta. */}
+          {r.partnerStatus !== null && r.partnerStatus !== 'active' ? (
+            <span className="shrink-0 text-xs text-status-yellow">
+              {r.partnerStatus === 'paused' ? 'pausado' : r.partnerStatus}
+            </span>
+          ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
+        <div className="flex shrink-0 items-baseline gap-3">
           {/*
             Sin precio no hay renglón, igual que en el mensaje: un "—" acá se
-            leería como "no sabemos", y lo que pasa es que el taller no pasó
-            número. "Sin cargo" (precio 0) sí se muestra: es una respuesta.
+            leería como "no sabemos". "Sin cargo" (precio 0) sí se muestra: es
+            una respuesta.
           */}
           <span className={cn('text-sm tabular-nums', amount ? 'font-semibold' : 'text-muted-foreground')}>
             {amount ?? 'sin precio'}
           </span>
-
-          {!confirming ? (
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={disabled || busy || index === 0}
-                onClick={() => move(-1)}
-                aria-label="Subir en el mensaje"
-                className="h-7 w-7 p-0"
-              >
-                <ArrowUp className="size-3.5" aria-hidden />
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={disabled || busy || index === total - 1}
-                onClick={() => move(1)}
-                aria-label="Bajar en el mensaje"
-                className="h-7 w-7 p-0"
-              >
-                <ArrowDown className="size-3.5" aria-hidden />
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={disabled || busy}
-                onClick={onEdit}
-                className="h-7 gap-1.5 px-2.5 text-xs"
-              >
-                <Pencil className="size-3.5" aria-hidden />
-                Editar
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={disabled || busy}
-                onClick={() => setConfirming(true)}
-                className="h-7 gap-1.5 px-2.5 text-xs"
-              >
-                <Trash2 className="size-3.5" aria-hidden />
-                Borrar
-              </Button>
-            </div>
+          {r.validUntil ? (
+            <span className={cn('text-xs tabular-nums', r.expired ? 'text-status-yellow' : 'text-muted-foreground')}>
+              {r.expired ? 'venció' : 'vig.'} {formatDate(`${r.validUntil}T00:00:00.000Z`)}
+            </span>
           ) : null}
         </div>
+      </div>
+
+      {contactLine ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{contactLine}</p> : null}
+
+      <div className="mt-1">
+        <p className={cn('whitespace-pre-wrap text-sm leading-relaxed', !expanded && detailIsLong && 'line-clamp-2')}>
+          {r.detail}
+        </p>
+        {detailIsLong ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-0.5 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {expanded ? 'ver menos' : 'ver más'}
+          </button>
+        ) : null}
+      </div>
+
+      {r.internalNotes ? (
+        <p className="mt-1 rounded border border-border bg-secondary px-2 py-1 text-xs leading-relaxed">
+          <span className="text-muted-foreground">Nota interna: </span>
+          {r.internalNotes}
+        </p>
+      ) : null}
+
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          cargado {formatDateTime(r.createdAt)} UTC
+          {amount && r.currency !== 'ARS' ? ` · en ${quoteCurrencyLabel(r.currency).toLowerCase()}` : ''}
+        </span>
+
+        {!confirming ? (
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled || busy || index === 0}
+              onClick={() => move(-1)}
+              aria-label="Subir en el mensaje"
+              className="size-6 p-0"
+            >
+              <ArrowUp className="size-3.5" aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled || busy || index === total - 1}
+              onClick={() => move(1)}
+              aria-label="Bajar en el mensaje"
+              className="size-6 p-0"
+            >
+              <ArrowDown className="size-3.5" aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled || busy}
+              onClick={onEdit}
+              aria-label="Editar"
+              className="size-6 p-0"
+            >
+              <Pencil className="size-3.5" aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled || busy}
+              onClick={() => setConfirming(true)}
+              aria-label="Borrar"
+              className="size-6 p-0 text-destructive hover:text-destructive"
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {confirming ? (
@@ -565,7 +578,6 @@ function ResponseForm({
     detail: useId(),
     validUntil: useId(),
     notes: useId(),
-    audit: useId(),
   }
   const [f, setF] = useState<FormState>(() => (response ? formFrom(response) : emptyForm()))
   const [busy, setBusy] = useState(false)
@@ -595,7 +607,6 @@ function ResponseForm({
       detail: f.detail.trim(),
       internalNotes: f.internalNotes.trim() || undefined,
       validUntil: f.validUntil.trim() || undefined,
-      auditNote: f.auditNote.trim() || undefined,
     }
     try {
       if (mode === 'edit' && response) {
@@ -754,55 +765,35 @@ function ResponseForm({
         </Field>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Vigente hasta (opcional)" htmlFor={ids.validUntil}>
-          <Input
-            id={ids.validUntil}
-            type="date"
-            value={f.validUntil}
-            onChange={(e) => {
-              const v = e.currentTarget.value
-              set('validUntil', v)
-            }}
-            className="text-xs"
-          />
-          <Hint>Una vez vencida, el presupuesto deja de entrar en el mensaje.</Hint>
-        </Field>
-
-        <Field label="Nota interna (opcional)" htmlFor={ids.notes}>
-          <Input
-            id={ids.notes}
-            value={f.internalNotes}
-            onChange={(e) => {
-              const v = e.currentTarget.value
-              set('internalNotes', v)
-            }}
-            maxLength={2000}
-            autoComplete="off"
-            placeholder="Lo atendió Juan"
-            className="text-xs"
-          />
-          <Hint>Para vos. NO sale en el mensaje.</Hint>
-        </Field>
-      </div>
-
-      <Field label="Nota de auditoría (opcional)" htmlFor={ids.audit}>
+      <Field label="Vigente hasta (opcional)" htmlFor={ids.validUntil}>
         <Input
-          id={ids.audit}
-          value={f.auditNote}
+          id={ids.validUntil}
+          type="date"
+          value={f.validUntil}
           onChange={(e) => {
             const v = e.currentTarget.value
-            set('auditNote', v)
+            set('validUntil', v)
           }}
-          maxLength={500}
-          autoComplete="off"
-          placeholder="Por qué, si no es obvio"
-          className="text-xs"
+          className="w-44 text-xs"
         />
-        <Hint>
-          Queda en <code className="font-mono">ops.action_log</code>, no en la fila ni en el hilo del pedido.
-        </Hint>
+        <Hint>Una vez vencida, el presupuesto deja de entrar en el mensaje.</Hint>
       </Field>
+
+      {/*
+        La nota interna POR presupuesto se ocultó del form: la única nota que
+        queda para cargar es el hilo de notas del pedido. Una fila cargada
+        antes de este cambio la sigue mostrando —sólo lectura, para no perder
+        el dato— y `submit()` la reenvía tal cual porque el reemplazo del SP es
+        completo.
+      */}
+      {f.internalNotes.trim() !== '' ? (
+        <Field label="Nota interna (de antes)" htmlFor={ids.notes}>
+          <p id={ids.notes} className="text-xs leading-relaxed">
+            {f.internalNotes}
+          </p>
+          <Hint>Ya no se puede editar desde acá — es sólo lectura. No sale en el mensaje.</Hint>
+        </Field>
+      ) : null}
 
       {mode === 'edit' ? (
         <p className="text-xs leading-relaxed text-muted-foreground">

@@ -1380,7 +1380,9 @@ interface CandidateRow {
   hours: string | null
   whatsapp: string | null
   address: string | null
+  matched_categories: Array<{ slug: string; name: string }>
   matched_services: Array<{ slug: string; name: string }>
+  matched_category_count: number | string
   distance_km: string | number | null
 }
 
@@ -1394,6 +1396,14 @@ interface CandidateRow {
  * puede empujar el argumento de `acos` apenas arriba de 1.0 para dos puntos
  * casi idénticos, y `acos(1.0000000001)` es `NaN` en Postgres — un partner en
  * la misma esquina que el pedido saldría con distancia nula en vez de ~0.
+ *
+ * ── Multiselect desde la 016 ────────────────────────────────────────────────
+ *
+ * `categorySlugs` es un array: el candidato correcto es el que cubre el
+ * MÁXIMO de rubros que el pedido pide, así que el orden principal pasa a ser
+ * `matched_category_count DESC` — antes de la distancia, no después. Un
+ * partner que cubre 2 de 2 rubros pedidos conviene más que uno más cercano
+ * que sólo cubre 1, porque evita derivar a dos talleres distintos.
  */
 export async function listPartnerCandidates(
   input: ListPartnerCandidatesInput,
@@ -1405,9 +1415,14 @@ export async function listPartnerCandidates(
     `SELECT p.id, p.name, p.coverage_zone, p.tier::text AS tier, p.modality, p.hours,
             p.whatsapp, p.address,
             coalesce(
+              jsonb_agg(DISTINCT jsonb_build_object('slug', sc.slug, 'name', sc.name))
+                FILTER (WHERE sc.id IS NOT NULL),
+              '[]'::jsonb) AS matched_categories,
+            coalesce(
               jsonb_agg(DISTINCT jsonb_build_object('slug', s.slug, 'name', s.name))
                 FILTER (WHERE s.id IS NOT NULL),
               '[]'::jsonb) AS matched_services,
+            count(DISTINCT sc.id) AS matched_category_count,
             CASE
               WHEN p.latitude IS NOT NULL AND $2::float8 IS NOT NULL THEN
                 6371 * acos(least(1, greatest(-1,
@@ -1419,13 +1434,14 @@ export async function listPartnerCandidates(
        JOIN partner_services ps ON ps.partner_id = p.id
        JOIN services s ON s.id = ps.service_id AND s.active
        JOIN service_categories sc ON sc.id = s.category_id AND sc.active
-      WHERE p.status = 'active' AND sc.slug = $1
+      WHERE p.status = 'active' AND sc.slug = ANY($1::text[])
       GROUP BY p.id
-      ORDER BY distance_km NULLS LAST,
-               -- founding antes que standard, a igualdad de distancia.
+      ORDER BY matched_category_count DESC,
+               distance_km NULLS LAST,
+               -- founding antes que standard, a igualdad de lo anterior.
                (p.tier = 'founding') DESC,
                p.name ASC`,
-    [input.categorySlug, input.lat, input.lng],
+    [input.categorySlugs, input.lat, input.lng],
   )
 
   return rows.map((r) => ({
@@ -1437,6 +1453,7 @@ export async function listPartnerCandidates(
     hours: r.hours,
     whatsapp: r.whatsapp,
     address: r.address,
+    matchedCategories: [...r.matched_categories].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     matchedServices: [...r.matched_services].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     distanceKm: r.distance_km === null ? null : Number(r.distance_km),
   }))

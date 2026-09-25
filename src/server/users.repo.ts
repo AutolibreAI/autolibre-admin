@@ -362,7 +362,13 @@ interface VehicleRow {
   registration_card_loaded_at: Date | string | null
 }
 
-interface TaskRow {
+/**
+ * Exportado para `findQuoteVehicleProfile` en `quote-requests.repo.ts`
+ * (`.claude/plans/pedidos-ficha-2026-09-25.md`, Fase 4): las tareas de UN
+ * vehículo comparten forma y derivación de estado con las de TODOS los
+ * vehículos de un usuario — es la misma tabla, filtrada distinto.
+ */
+export interface TaskRow {
   id: string
   vehicle_plate: string
   name: string
@@ -371,6 +377,21 @@ interface TaskRow {
   performed_at: Date | string | null
   archived: boolean
   created_at: Date | string
+}
+
+/** Campo por campo — mismo criterio que `mapCensus`: un spread no avisa si una columna se renombra. */
+export function mapTaskRow(r: TaskRow): UserMaintenanceTask {
+  return {
+    id: r.id,
+    vehiclePlate: r.vehicle_plate,
+    name: r.name,
+    itemType: r.item_type,
+    dueDate: toIso(r.due_date),
+    performedAt: toIso(r.performed_at),
+    archived: r.archived,
+    createdAt: toIsoRequired(r.created_at),
+    state: deriveTaskState(r),
+  }
 }
 
 interface LegalRow {
@@ -631,19 +652,7 @@ export async function findUserDetail(
       }),
     ),
 
-    tasks: tasks.map(
-      (r): UserMaintenanceTask => ({
-        id: r.id,
-        vehiclePlate: r.vehicle_plate,
-        name: r.name,
-        itemType: r.item_type,
-        dueDate: toIso(r.due_date),
-        performedAt: toIso(r.performed_at),
-        archived: r.archived,
-        createdAt: toIsoRequired(r.created_at),
-        state: deriveTaskState(r),
-      }),
-    ),
+    tasks: tasks.map(mapTaskRow),
   }
 }
 
@@ -831,8 +840,19 @@ export async function listUserVehicleSummaries(
        -- (y no session_id) porque es la columna de la FK del join: es la
        -- que dice de forma inequívoca "no hubo fila", nunca un dato del
        -- dominio que casualmente sea null.
+       --
+       -- Corregido el 2026-09-25: contaba diagnostic_dtcs, que sólo tiene
+       -- fila para los códigos que alguien BUSCÓ (22 de 34 snapshots al
+       -- 2026-09-08 — ver .claude/rules/scan-detections.md). El universo
+       -- real de "qué códigos trajo esa sesión" es
+       -- session_dtc_snapshots.codes, el mismo que usa /escaneres/detecciones
+       -- y /escaneres/sesiones: si este número diverge del de esas
+       -- pantallas, la ficha del usuario y del pedido dicen menos DTCs de
+       -- los que en verdad hubo.
        case when lds.vehicle_id is null then null
-            else (select count(*)::int from diagnostic_dtcs dd where dd.session_id = lds.session_id)
+            else coalesce((select array_length(sds.codes, 1)
+                             from session_dtc_snapshots sds
+                            where sds.session_id = lds.session_id), 0)
        end as active_dtc_count,
        lds.scanned_at as last_dtc_scan_at,
 

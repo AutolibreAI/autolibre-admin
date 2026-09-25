@@ -1063,6 +1063,97 @@ mano vía "Registrar derivación", a un click de acá. Hacerlo automático
 afirmaría que se mandó un mensaje que sólo se abrió — el link puede quedar sin
 enviar en la pestaña de WhatsApp Web.
 
+### La ficha, revisada el 2026-09-25 (`.claude/plans/pedidos-ficha-2026-09-25.md`)
+
+Seis cambios sobre `/leads/pedidos/:id`, en cuatro fases. Relevado antes de
+empezar: de los pedidos `app` de producción (los únicos con `vehicle_id`
+real), el número de motor está vacío en `vehicles` en el 100% de los casos —
+de ahí el bloque Vehículo de la Fase 4.
+
+**Una sola nota que queda: el hilo.** Se sacaron del formulario la nota de
+auditoría (`p_note`, iba a `ops.action_log` y nadie la leía después), «nota
+interna del cierre» (`closed_reason`) y «nota del resultado» (`outcome_note`)
+de `QuoteRequestActions`, y la nota interna POR presupuesto de
+`<QuoteResponses/>`. Lo ya cargado en esos campos antes del cambio se sigue
+mostrando (en el recorrido, o como texto de sólo lectura en la fila) — no se
+borró nada, se dejó de pedir. Cerrar un pedido ahora tiene un solo campo de
+texto, que se agrega al hilo **en la misma operación** que el cierre
+(`p_internal_note` de `ops.close_quote_request`, migración 016 — ver
+`.claude/rules/ops-write-actions.md`): antes eran dos llamadas, y la segunda
+podía fallar (la persona canceló desde la app entre medio) dejando una nota
+de un cierre que nunca pasó.
+
+**Presupuestos, en formato compacto.** `ResponseRow` pasó de una tarjeta de
+varias líneas a una fila: `N · nombre (+Aliado/pausado)` con el precio
+alineado a la derecha y tabular, vigencia al lado, el detalle recortado a 2
+líneas con «ver más», y dirección/teléfono/horario en una segunda línea
+chica y truncada. Las acciones (↑↓/Editar/Borrar) son iconos siempre
+visibles —no un menú que se abre, y no ocultos hasta el hover: el plan pidió
+que sean accesibles por teclado, y un control que sólo aparece con el mouse
+encima no lo es—. `QuoteResponse` sumó `partnerTier` (antes sólo se sabía si
+era del directorio) para poder mostrar el badge «Aliado» en la fila.
+
+**Rubros: multiselect, no un solo valor.** `ops.set_quote_request_rubro`
+(013, un rubro por pedido) se reemplazó por `ops.set_quote_request_rubros`
+(016, el CONJUNTO — un pedido puede pedir "frenos y suspensión", y el
+candidato correcto es el que cubre el máximo de rubros pedidos, no sólo uno).
+`quoteRubro` (string) pasó a `quoteRubros` (`string[]`, `multiSelectParam`).
+`listPartnerCandidates` ordena primero por `matched_category_count DESC`,
+recién después por distancia. `PartnerCandidates` usa el `MultiSelect` nuevo
+(ver abajo) para elegir rubros y para el filtro de zona —antes chips sueltas,
+que no escalaban a las ~30 zonas del directorio—, y cada fila de candidato
+muestra qué rubros de los PEDIDOS cubre (`matchedCategories`), no sólo sus
+servicios.
+
+**`<MultiSelect/>` (`src/components/MultiSelect.tsx`), nuevo componente
+compartido.** Trigger con resumen ("Motor, Frenos +1"), popover con casillas +
+buscador (filtra en el cliente, `normalizeForMatch`), «Limpiar», contador.
+Usa dos primitivas de shadcn agregadas para esto —`ui/popover.tsx` y
+`ui/checkbox.tsx`, sin sombra por `design-system.md`—. Genérico a propósito:
+no sabe nada de rubros ni de zonas, así que la próxima pantalla que necesite
+"elegir varios de una lista cerrada" lo reusa en vez de reinventar chips.
+
+**Plantillas de mensaje, editables desde el panel (migración 017).** Hasta
+acá `QUOTE_TEMPLATES` era una constante de código: cambiar una palabra era un
+commit. Ahora son versiones en `ops.quote_message_template_version`
+(append-only: "editar" inserta una versión nueva, "volver atrás" reenvía el
+contenido de una vieja). Las 4 de siempre quedan como SEMILLA — si una clave
+no tiene ninguna versión guardada, se usa la del código; la primera edición
+crea la versión 1. `listQuoteMessageTemplatesFn` hace el merge semilla+base
+en el SERVIDOR, así que `QuoteTemplates` y `PartnerCandidates` (el botón
+"Pedir cotización", que busca `cotizacion_red`) dejan de importar
+`QUOTE_TEMPLATES` directo — las dos tienen que usar la MISMA versión,
+editada o no. El editor (`Sheet` con «Editar plantilla» / «Nueva plantilla»)
+tiene título, audiencia, textarea con el texto crudo, botones de variable
+que insertan `{{llave}}` en el cursor (`TEMPLATE_VARIABLES`, catálogo cerrado
+por audiencia — `persona` y `taller` no comparten todas), vista previa
+renderizada con el pedido abierto, e historial con «usar esta versión». El
+guardrail de `{{codigo}}` obligatorio se repite en TRES lugares ahora: el
+`throw` en tiempo de módulo sobre la semilla, el `CHECK` de la tabla + el SP
+(única barrera real para lo editado desde el panel), y zod del lado del
+cliente. → `.claude/rules/ops-write-actions.md`, migración 017.
+
+**Bloque «Vehículo» de sólo lectura (Fase 4).** Visible siempre que el pedido
+tenga `vehicle_id`, sea o no `app`. VIN, número de motor **con la fuente**
+(`vehicles` → cédula → seguro, en ese orden — nunca `vehicles` solo, porque
+relevado el 2026-09-25 está vacío ahí en el 100% de los 8 pedidos `app` de
+producción), kilometraje, los DTCs del ÚLTIMO escaneo con título
+(`lookupDtc()`, mismo catálogo que `/escaneres/detecciones`), y una
+`<MaintenanceTasks/>` plegable con las tareas de ESE auto. `null` ≠ `0` en
+los DTCs: sin escaneo nunca no hay fecha; escaneado y sin códigos sí la
+tiene. **De paso corrigió un bug real**: `listUserVehicleSummaries`
+(`/usuarios`) contaba `diagnostic_dtcs` —sólo los códigos que alguien
+BUSCÓ— en vez de `session_dtc_snapshots.codes` —todos los que trajo la
+sesión—, mismo error que `.claude/rules/scan-detections.md` ya documentaba
+para otra pantalla. Los dos ahora leen la misma fuente; si vuelven a
+divergir, `/usuarios` y esta ficha van a decir dos números de DTC distintos
+para el mismo auto.
+
+`Tasks`/`TaskRow`/`TaskStateTag` se extrajeron de `/usuarios/:id` a
+`src/components/MaintenanceTasks.tsx` (renombrado `MaintenanceTasks` en el
+export) para que las dos pantallas compartan la forma — si "vencida" se ve
+distinto en una de las dos, una está mal.
+
 ## Cómo verificar un cambio acá
 
 `pnpm typecheck` + `pnpm build` (el build regenera `routeTree.gen.ts`, así que

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { canonicalWhatsAppDigits } from '~/lib/partners'
+import { multiSelectParam } from '~/lib/catalog'
 import type { GrowthUnit } from '~/lib/ops'
 
 /**
@@ -271,33 +272,40 @@ export const quoteRequestIdSchema = z.object({ quoteRequestId: z.uuid() })
 /**
  * Search param de la ficha (`/leads/pedidos/:id`) para el panel de candidatos.
  *
- * Calificado por dominio (`quoteRubro`, no `category` ni `rubro` pelados):
+ * Calificado por dominio (`quoteRubros`, no `category` ni `rubro` pelados):
  * `category` ya lo usa `/partners/listado` (`string`) y `coverageRubros` lo usa
  * `/partners/cobertura` (`string[]`) — un tercer nombre genérico bajo la misma
  * clave repetiría la colisión que ya documentó `.claude/rules/notifications.md`.
  *
- * Filtrar para MIRAR candidatos de un rubro no es lo mismo que CLASIFICAR el
- * pedido: el search param es efímero (cambiar el chip no escribe nada), y
- * `ops.set_quote_request_rubro` es la acción explícita que sí persiste.
+ * Filtrar para MIRAR candidatos de uno o más rubros no es lo mismo que
+ * CLASIFICAR el pedido: el search param es efímero (cambiar el multiselect no
+ * escribe nada), y `ops.set_quote_request_rubros` es la acción explícita que
+ * sí persiste.
+ *
+ * Multiselect desde la 016: un pedido puede pedir más de una cosa ("frenos y
+ * suspensión"), y el candidato correcto es el que cubre el MÁXIMO de rubros
+ * que el pedido necesita, no sólo uno.
  */
 export const quoteRequestDetailSearchSchema = z.object({
-  quoteRubro: z.string().trim().max(60).optional(),
+  quoteRubros: multiSelectParam(z.string().trim().max(60)),
 })
 export type QuoteRequestDetailSearch = z.infer<typeof quoteRequestDetailSearchSchema>
 
 /**
- * Clasificar el rubro de un pedido — `ops.set_quote_request_rubro` (013).
+ * Clasificar el rubro (o los rubros) de un pedido —
+ * `ops.set_quote_request_rubros` (016, reemplaza a la 013). Reemplaza el
+ * CONJUNTO entero: `[]` es "sin clasificar", no "no tocar nada" — mismo
+ * criterio que `reorderQuoteResponsesSchema`, que también viaja completo.
  *
  * `p_actor_id` no está acá: sale de la sesión, nunca del payload, mismo
  * criterio que las cuatro escrituras de la 011.
  */
-export const setQuoteRequestRubroSchema = z.object({
+export const setQuoteRequestRubrosSchema = z.object({
   quoteRequestId: z.uuid(),
-  categorySlug: z.string().trim().min(1).max(60),
-  serviceSlug: z.string().trim().max(80).optional(),
+  categorySlugs: z.array(z.string().trim().min(1).max(60)).max(16),
   auditNote: z.string().trim().max(500).optional(),
 })
-export type SetQuoteRequestRubroInput = z.infer<typeof setQuoteRequestRubroSchema>
+export type SetQuoteRequestRubrosInput = z.infer<typeof setQuoteRequestRubrosSchema>
 
 // ── Escrituras: las transiciones del operador (SPs de `ops`, migración 011) ──
 //
@@ -310,8 +318,25 @@ export type SetQuoteRequestRubroInput = z.infer<typeof setQuoteRequestRubroSchem
  * interna del pedido — esa es `addQuoteRequestInternalNoteSchema` y alimenta el
  * hilo de la ficha. Confundirlas deja el hilo sin la llamada y el log con texto
  * que no es auditoría.
+ *
+ * Ningún formulario del panel la pide desde el 2026-09-25 (se decidió que la
+ * única nota que queda es el hilo de notas internas), pero el SP la sigue
+ * aceptando: se deja el campo por si algún día vuelve a hacer falta.
  */
 const auditNote = z.string().trim().max(500).optional()
+
+/**
+ * Una línea del hilo de notas internas. Colapsa saltos de línea ANTES de
+ * viajar: el SP concatena `p_text`/`p_internal_note` tal cual, y una nota
+ * multilínea partiría la entrada del hilo en dos —la segunda mitad se leería
+ * como "sin fecha, escrita a mano" en `parseInternalNotes`—. Compartida entre
+ * `addQuoteRequestInternalNoteSchema` y el `internalNote` del cierre: las dos
+ * alimentan el MISMO hilo, así que tienen que normalizar igual.
+ */
+const internalNoteLine = z
+  .string()
+  .overwrite((s) => s.replace(/\s+/g, ' ').trim())
+  .max(2000)
 
 export const markQuoteRequestContactedSchema = z.object({
   quoteRequestId: z.uuid(),
@@ -340,29 +365,33 @@ export type OperatorCloseReason = z.infer<typeof operatorCloseReasonSchema>
 export const closeQuoteRequestSchema = z.object({
   quoteRequestId: z.uuid(),
   closeReasonCode: operatorCloseReasonSchema,
-  /** Nota interna del cierre (`closed_reason`). La persona nunca la ve. */
+  /**
+   * `closed_reason` / `outcome_note`: campos viejos del SP que el formulario
+   * dejó de pedir el 2026-09-25 (quedó un solo lugar para anotar algo: el
+   * hilo). Siguen aceptándose acá por si algún llamador viejo los manda; lo
+   * ya cargado en pedidos cerrados antes de este cambio se sigue mostrando en
+   * el recorrido.
+   */
   closedReason: z.string().trim().max(1000).optional(),
   /** Ausente = "no se sabe / no se preguntó", que NO es `no_response`. */
   outcome: z.enum(QUOTE_REQUEST_OUTCOMES).optional(),
   outcomeNote: z.string().trim().max(1000).optional(),
+  /**
+   * Se agrega al hilo de notas internas EN LA MISMA operación que el cierre
+   * (`ops.close_quote_request`, migración 016) — no una llamada aparte a
+   * `add_quote_request_internal_note`: un pedido cerrado no admite notas
+   * nuevas, así que dos llamadas separadas podían dejar una nota huérfana de
+   * un cierre que falló por el medio.
+   */
+  internalNote: internalNoteLine.optional(),
   auditNote,
 })
 export type CloseQuoteRequestInput = z.infer<typeof closeQuoteRequestSchema>
 
 export const addQuoteRequestInternalNoteSchema = z.object({
   quoteRequestId: z.uuid(),
-  /**
-   * UNA línea. `internal_notes` es un log de una nota por renglón
-   * (`YYYY-MM-DD HH24:MI — texto`), y el SP agrega el texto tal cual: un salto
-   * adentro de la nota partiría la entrada en dos y la segunda mitad se leería
-   * como una línea "sin fecha — escrita a mano" en `parseInternalNotes`. Se
-   * colapsa acá, antes de viajar.
-   */
-  text: z
-    .string()
-    .overwrite((s) => s.replace(/\s+/g, ' ').trim())
-    .min(1, 'La nota no puede estar vacía.')
-    .max(2000),
+  /** UNA línea — ver `internalNoteLine`. */
+  text: internalNoteLine.min(1, 'La nota no puede estar vacía.'),
 })
 export type AddQuoteRequestInternalNoteInput = z.infer<typeof addQuoteRequestInternalNoteSchema>
 
@@ -404,8 +433,6 @@ export function readableQuoteRequestError(cause: unknown): string {
   if (raw.includes('INVALID_OUTCOME')) return 'Ese resultado no existe en la base. Recargá la pantalla.'
   if (raw.includes('INTERNAL_NOTE_REQUIRED')) return 'La nota no puede estar vacía.'
   if (raw.includes('INVALID_CATEGORY_SLUG')) return 'Ese rubro no existe o no está activo. Recargá la pantalla.'
-  if (raw.includes('INVALID_SERVICE_SLUG'))
-    return 'Ese servicio no existe, no está activo, o no cuelga de este rubro.'
   if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED'))
     return 'Tu sesión no corresponde a un usuario de AutoLibre. Volvé a iniciar sesión.'
   if (raw === 'FORBIDDEN') return 'Tu rol no tiene permiso para esta acción.'
@@ -589,13 +616,12 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    */
   catalogShortLabel: string | null
   /**
-   * Rubro con el que el operador clasificó este pedido, vía
-   * `ops.set_quote_request_rubro` (migración 013). `null` = todavía no se
-   * clasificó. No es un campo de `quote_requests` — vive en `ops`, ver la
-   * cabecera de esa migración.
+   * Los rubros con los que el operador clasificó este pedido, vía
+   * `ops.set_quote_request_rubros` (migración 016, reemplaza a la 013 de un
+   * solo rubro). `[]` = todavía no se clasificó. No es un campo de
+   * `quote_requests` — vive en `ops`, ver la cabecera de esa migración.
    */
-  rubroCategorySlug: string | null
-  rubroServiceSlug: string | null
+  rubroCategorySlugs: Array<string>
 }
 
 export type QuoteRequestsListResult =

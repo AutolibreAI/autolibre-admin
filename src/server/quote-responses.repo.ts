@@ -77,6 +77,7 @@ interface ResponseRow {
   position: number
   partner_id: string | null
   partner_status: string | null
+  partner_tier: string | null
   provider_name: string | null
   provider_address: string | null
   provider_phone: string | null
@@ -121,6 +122,7 @@ const SELECT_COLUMNS = `
   r.position,
   r.partner_id,
   p.status::text as partner_status,
+  p.tier::text as partner_tier,
   r.provider_name,
   r.provider_address,
   r.provider_phone,
@@ -145,6 +147,7 @@ function mapRow(r: ResponseRow): QuoteResponse {
     position: toInt(r.position),
     partnerId: r.partner_id,
     partnerStatus: r.partner_status,
+    partnerTier: r.partner_tier,
     providerName: r.provider_name,
     providerAddress: r.provider_address,
     providerPhone: r.provider_phone,
@@ -219,6 +222,7 @@ function fromSp(row: SpRow | null): QuoteResponse {
   return mapRow({
     ...row.r,
     partner_status: null,
+    partner_tier: null,
     resolved_name: row.r.provider_name ?? '(taller del directorio)',
     resolved_address: row.r.provider_address,
     resolved_phone: row.r.provider_phone,

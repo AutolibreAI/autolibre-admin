@@ -9,7 +9,7 @@ import {
   markQuoteRequestContactedSchema,
   quoteRequestIdSchema,
   quoteRequestSearchSchema,
-  setQuoteRequestRubroSchema,
+  setQuoteRequestRubrosSchema,
 } from '~/lib/quote-requests'
 import {
   addQuoteRequestInternalNote,
@@ -22,7 +22,7 @@ import {
   quoteRequestSeries,
   quoteRequestStatusSummary,
   quoteRequestsAvailability,
-  setQuoteRequestRubro,
+  setQuoteRequestRubros,
 } from '~/server/quote-requests.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -147,20 +147,21 @@ export const addQuoteRequestInternalNoteFn = createServerFn({ method: 'POST' })
   })
 
 /**
- * Clasificar el rubro de un pedido (migración 013) — para el panel de
- * candidatos de `.claude/plans/partners-derivacion.md`. El SP mismo valida que
- * el pedido exista, pero esa validación es un `SELECT` crudo sobre
- * `quote_requests`: en una base sin esa tabla explotaría con el error de
- * Postgres, no con la sentinela legible. Se chequea acá antes, igual que las
- * cuatro escrituras de la 011.
+ * Clasificar los rubros de un pedido (migración 016, reemplaza a la 013 de un
+ * solo rubro) — para el panel de candidatos de
+ * `.claude/plans/partners-derivacion.md`. El SP mismo valida que el pedido
+ * exista, pero esa validación es un `SELECT` crudo sobre `quote_requests`: en
+ * una base sin esa tabla explotaría con el error de Postgres, no con la
+ * sentinela legible. Se chequea acá antes, igual que las cuatro escrituras de
+ * la 011.
  */
-export const setQuoteRequestRubroFn = createServerFn({ method: 'POST' })
+export const setQuoteRequestRubrosFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .validator(setQuoteRequestRubroSchema)
-  .handler(async ({ data, context }): Promise<{ categorySlug: string; serviceSlug: string | null }> => {
+  .validator(setQuoteRequestRubrosSchema)
+  .handler(async ({ data, context }): Promise<{ categorySlugs: Array<string> }> => {
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
-    return setQuoteRequestRubro(data, context.user.id, { signal })
+    return setQuoteRequestRubros(data, context.user.id, { signal })
   })
 
 /**

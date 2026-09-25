@@ -64,6 +64,8 @@ export interface QuoteResponse {
   partnerId: string | null
   /** `partners.status` actual, para avisar si quedó pausado o archivado. */
   partnerStatus: string | null
+  /** `partners.tier` actual. `null` para un taller de afuera. */
+  partnerTier: string | null
   /** Los campos CRUDOS del taller de afuera, para sembrar el formulario. */
   providerName: string | null
   providerAddress: string | null

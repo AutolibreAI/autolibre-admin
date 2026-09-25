@@ -292,108 +292,31 @@ BEGIN
 END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- abierto → closed
+-- abierto → closed: sus pruebas viven en la 016.
+--
+-- La 016 le agregó `p_internal_note` a `close_quote_request`, entre
+-- `p_outcome_note` y `p_note` — y agregar un parámetro no reemplaza una
+-- función: crea una sobrecarga. Por eso esa migración hace DROP + CREATE
+-- (mismo patrón que `set_partner_profile` en la 009), y por eso la firma de
+-- 7 argumentos que estas pruebas usaban ya no existe. Correrlas tal cual
+-- contra una base con la 016 aplicada no tira un error de "función
+-- inexistente" —quedó un solo `close_quote_request` con 8 parámetros, todos
+-- con DEFAULT desde el cuarto— sino algo peor: Postgres bindea por
+-- POSICIÓN, así que el séptimo argumento posicional (antes `p_note`, la nota
+-- de auditoría) pasaría a bindear con `p_internal_note` y terminaría
+-- escribiéndose en el HILO del pedido en vez de en `ops.action_log`. Un test
+-- viejo corrido contra una base nueva no falla ruidoso: falla mintiendo.
+--
+-- No se actualizaron acá: se movieron, con las cuatro validaciones
+-- re-verificadas sobre la función nueva (no sólo la que cambió) y un caso
+-- nuevo para `p_internal_note`.
+--
+--   → migrations/016_ops_varios_rubros_y_nota_de_cierre.test.sql
+--
+-- Esta suite se queda con `mark_quote_request_contacted`,
+-- `mark_quote_request_answered` y `add_quote_request_internal_note`, que
+-- siguen siendo de la 011.
 -- ═══════════════════════════════════════════════════════════════════════════
-
-DO $$
-DECLARE
-  v_fix t_fix%ROWTYPE;
-  v_row quote_requests%ROWTYPE;
-  v_log ops.action_log%ROWTYPE;
-  v_msg text;
-BEGIN
-  SELECT * INTO v_fix FROM t_fix;
-
-  BEGIN
-    PERFORM ops.close_quote_request(v_fix.answered_id, NULL, v_fix.actor_id);
-    PERFORM pg_temp.check('30 sin código de cierre', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('30 sin código de cierre', v_msg LIKE 'CLOSE_REASON_CODE_REQUIRED%', v_msg);
-  END;
-
-  BEGIN
-    PERFORM ops.close_quote_request(v_fix.answered_id, 'cancelled_by_user', v_fix.actor_id);
-    PERFORM pg_temp.check('31 cancelled_by_user es de la app', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('31 cancelled_by_user es de la app',
-      v_msg LIKE 'CLOSE_REASON_RESERVED_FOR_APP%', v_msg);
-  END;
-
-  BEGIN
-    PERFORM ops.close_quote_request(v_fix.answered_id, 'se_cerro', v_fix.actor_id);
-    PERFORM pg_temp.check('32 código de cierre fuera del enum', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('32 código de cierre fuera del enum',
-      v_msg LIKE 'INVALID_CLOSE_REASON_CODE%', v_msg);
-  END;
-
-  BEGIN
-    PERFORM ops.close_quote_request(v_fix.answered_id, 'resolved', v_fix.actor_id, NULL, 'quizas');
-    PERFORM pg_temp.check('33 outcome fuera del enum', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('33 outcome fuera del enum', v_msg LIKE 'INVALID_OUTCOME%', v_msg);
-  END;
-
-  -- Un pedido que el usuario canceló desde la app no se toca: ni el estado, ni
-  -- su `closed_at`, ni el motivo.
-  BEGIN
-    PERFORM ops.close_quote_request(v_fix.cancelled_id, 'resolved', v_fix.actor_id);
-    PERFORM pg_temp.check('34 no toca un cancelado por el usuario', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('34 no toca un cancelado por el usuario',
-      v_msg LIKE 'INVALID_QUOTE_REQUEST_TRANSITION%', v_msg);
-  END;
-  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.cancelled_id;
-  PERFORM pg_temp.check('35 el cancelado quedó intacto',
-    v_row.close_reason_code = 'cancelled_by_user' AND v_row.cancellation_reason = 'no_longer_needed',
-    coalesce(v_row.close_reason_code::text, '(null)'));
-
-  BEGIN
-    PERFORM ops.close_quote_request(gen_random_uuid(), 'resolved', v_fix.actor_id);
-    PERFORM pg_temp.check('36 pedido inexistente', false, 'no tiró');
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    PERFORM pg_temp.check('36 pedido inexistente', v_msg LIKE 'QUOTE_REQUEST_NOT_FOUND%', v_msg);
-  END;
-
-  -- Camino feliz con todo: la nota interna y el outcome se normalizan con btrim.
-  PERFORM ops.close_quote_request(
-    v_fix.answered_id, 'resolved', v_fix.actor_id,
-    '  Contrató al taller de Morón  ', 'hired', 'Le salió $180.000', 'Cierre de prueba'
-  );
-  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.answered_id;
-  PERFORM pg_temp.check('37 answered → closed con todo',
-    v_row.status = 'closed' AND v_row.closed_at IS NOT NULL
-      AND v_row.close_reason_code = 'resolved'
-      AND v_row.closed_reason = 'Contrató al taller de Morón'
-      AND v_row.outcome = 'hired'
-      AND v_row.outcome_note = 'Le salió $180.000',
-    v_row.status::text || ' / ' || coalesce(v_row.closed_reason, '(null)'));
-  PERFORM pg_temp.check('38 no pisa lo anterior al cierre',
-    v_row.answered_at IS NOT NULL AND v_row.proposals_count = 2,
-    coalesce(v_row.proposals_count::text, '(null)'));
-
-  SELECT * INTO v_log FROM ops.action_log
-   WHERE target_id = v_fix.answered_id AND action = 'quote_request.close';
-  PERFORM pg_temp.check('39 log del cierre',
-    v_log.before->>'status' = 'answered' AND v_log.after->>'close_reason_code' = 'resolved'
-      AND v_log.note = 'Cierre de prueba',
-    coalesce(v_log.after::text, '(sin log)'));
-
-  -- Un spam o un duplicado se cierra directo desde received. `''` en la nota
-  -- interna y en el outcome es "sin dato", no un valor en blanco.
-  PERFORM ops.close_quote_request(v_fix.noted_id, 'duplicate', v_fix.actor_id, '', '', '');
-  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.noted_id;
-  PERFORM pg_temp.check('40 received → closed, con vacíos normalizados a NULL',
-    v_row.status = 'closed' AND v_row.close_reason_code = 'duplicate'
-      AND v_row.closed_reason IS NULL AND v_row.outcome IS NULL AND v_row.outcome_note IS NULL,
-    v_row.status::text || ' / ' || coalesce(v_row.closed_reason, '(null)'));
-END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Nota interna
@@ -493,16 +416,9 @@ SELECT ops.mark_quote_request_answered(
        p_note             => $4
      ) AS q;
 
-PREPARE repo_close AS
-SELECT ops.close_quote_request(
-       p_quote_request_id  => $1,
-       p_close_reason_code => $2,
-       p_actor_id          => $3,
-       p_closed_reason     => $4,
-       p_outcome           => $5,
-       p_outcome_note      => $6,
-       p_note              => $7
-     ) AS q;
+-- `repo_close` se movió a la 016 con su firma nueva (8 parámetros, con
+-- `p_internal_note`) — ver la cabecera de la sección "abierto → closed" más
+-- arriba.
 
 PREPARE repo_add_note AS
 SELECT ops.add_quote_request_internal_note(
@@ -518,10 +434,6 @@ CREATE TEMP TABLE t_repo_contacted ON COMMIT DROP AS
 CREATE TEMP TABLE t_repo_answered ON COMMIT DROP AS
   EXECUTE repo_mark_answered(pg_temp.fix_id('repo_to_answer_id'), 3, pg_temp.fix_id('actor_id'), NULL);
 
-CREATE TEMP TABLE t_repo_closed ON COMMIT DROP AS
-  EXECUTE repo_close(pg_temp.fix_id('repo_to_close_id'), 'no_workshops_found', pg_temp.fix_id('actor_id'),
-                     'Nadie en la zona', NULL, NULL, 'Cierre desde el repo');
-
 CREATE TEMP TABLE t_repo_noted ON COMMIT DROP AS
   EXECUTE repo_add_note(pg_temp.fix_id('repo_to_note_id'), 'Nota desde el repo', pg_temp.fix_id('actor_id'));
 
@@ -529,7 +441,6 @@ CREATE TEMP TABLE t_repo_noted ON COMMIT DROP AS
 -- no se los lleva.
 DEALLOCATE repo_mark_contacted;
 DEALLOCATE repo_mark_answered;
-DEALLOCATE repo_close;
 DEALLOCATE repo_add_note;
 
 DO $$
@@ -556,16 +467,8 @@ BEGIN
     v_row.status = 'answered' AND v_row.proposals_count = 3 AND v_log.id IS NOT NULL AND v_log.note IS NULL,
     v_row.status::text || ' / ' || coalesce(v_row.proposals_count::text, '(null)'));
 
-  SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.repo_to_close_id;
-  SELECT * INTO v_log FROM ops.action_log
-   WHERE target_id = v_fix.repo_to_close_id AND action = 'quote_request.close';
-  PERFORM pg_temp.check('62 integración: close_quote_request con outcome "sin preguntar"',
-    v_row.status = 'closed'
-      AND v_row.close_reason_code = 'no_workshops_found'
-      AND v_row.closed_reason = 'Nadie en la zona'
-      AND v_row.outcome IS NULL AND v_row.outcome_note IS NULL
-      AND v_log.note = 'Cierre desde el repo',
-    v_row.status::text || ' / ' || coalesce(v_row.outcome::text, '(null)'));
+  -- La integración de `close_quote_request` se movió a la 016 con su firma
+  -- nueva — ver la cabecera de "abierto → closed" más arriba.
 
   SELECT * INTO v_row FROM quote_requests WHERE id = v_fix.repo_to_note_id;
   PERFORM pg_temp.check('63 integración: add_quote_request_internal_note',
@@ -576,11 +479,11 @@ BEGIN
   -- Lo que el repo lee de la columna `q`: `id` y `status`, y nada de la ubicación.
   SELECT count(*) INTO v_bad
     FROM (SELECT q FROM t_repo_contacted UNION ALL SELECT q FROM t_repo_answered
-          UNION ALL SELECT q FROM t_repo_closed UNION ALL SELECT q FROM t_repo_noted) r
+          UNION ALL SELECT q FROM t_repo_noted) r
    WHERE jsonb_typeof(r.q -> 'id') <> 'string'
       OR r.q ->> 'status' IS NULL
       OR r.q ?| ARRAY['location_latitude', 'location_longitude', 'raw_submission'];
-  SELECT q INTO v_out FROM t_repo_closed;
+  SELECT q INTO v_out FROM t_repo_noted;
   PERFORM pg_temp.check('64 integración: la columna q trae id y status, sin coordenadas', v_bad = 0,
     coalesce(v_out::text, '(sin fila)'));
 END $$;

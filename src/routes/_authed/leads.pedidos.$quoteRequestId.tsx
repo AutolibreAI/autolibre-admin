@@ -15,6 +15,8 @@ import {
 } from '~/lib/quote-requests'
 import { getQuoteRequestFn } from '~/fn/quote-requests'
 import { listQuoteResponsesFn } from '~/fn/quote-responses'
+import { listQuoteMessageTemplatesFn } from '~/fn/quote-message-templates'
+import { getQuoteVehicleProfileFn } from '~/fn/quote-vehicle-profile'
 import {
   getServiceCatalog,
   listPartnerCandidatesFn,
@@ -28,6 +30,7 @@ import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/Quot
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { QuoteTemplates } from '~/components/QuoteTemplates'
+import { QuoteVehicleProfileCard } from '~/components/QuoteVehicleProfileCard'
 import { Card, CardContent } from '~/components/ui/card'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
@@ -56,23 +59,23 @@ import type { ReactNode } from 'react'
  */
 export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
   /**
-   * `quoteRubro` es el ÚNICO search param de esta ruta: qué rubro se está
+   * `quoteRubros` es el ÚNICO search param de esta ruta: qué rubros se están
    * MIRANDO en el panel de candidatos. Cambiarlo no clasifica el pedido —
    * eso es la escritura explícita de `<PartnerCandidates/>` — pero sí hace
-   * que el `loader` vuelva a pedir los candidatos de ese rubro.
+   * que el `loader` vuelva a pedir los candidatos de esos rubros.
    */
   validateSearch: quoteRequestDetailSearchSchema,
-  loaderDeps: ({ search }) => ({ quoteRubro: search.quoteRubro }),
+  loaderDeps: ({ search }) => ({ quoteRubros: search.quoteRubros }),
 
   /**
    * SSR completo (heredado). Es una ficha de CONTENIDO que se abre desde un
    * link pegado en un chat de equipo ("mirá AL-1042") y tiene que llegar
    * pintada. Mismo criterio que `/chats/:id` y `/usuarios/:id`.
    *
-   * Un cambio de `quoteRubro` re-corre este loader desde el CLIENTE (la
+   * Un cambio de `quoteRubros` re-corre este loader desde el CLIENTE (la
    * navegación de TanStack Router pega los server functions por RPC), no
-   * dispara un nuevo SSR completo — es lo que hace viable tener el rubro en
-   * la URL sin pagar un round trip de servidor por cada cambio de chip.
+   * dispara un nuevo SSR completo — es lo que hace viable tener los rubros en
+   * la URL sin pagar un round trip de servidor por cada cambio.
    */
   loader: async ({ params, deps, abortController }) => {
     // `parse` acá además del validator del server function: un id que no es
@@ -91,37 +94,57 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         catalog: [],
         zones: [],
         candidates: [],
-        effectiveCategorySlug: null,
+        effectiveCategorySlugs: [],
         responses: { available: false as const },
         partnerOptions: [],
+        templates: [],
+        vehicleProfile: null,
       }
 
-    // Los presupuestos y el directorio van en el MISMO `Promise.all` que el
-    // catálogo: son independientes entre sí y esperar uno detrás de otro sólo
-    // sumaría round trips a una ficha que ya hace cuatro.
-    const [catalog, zones, responses, partnerOptions] = await Promise.all([
+    // Los presupuestos, el directorio y las plantillas van en el MISMO
+    // `Promise.all` que el catálogo: son independientes entre sí y esperar
+    // uno detrás de otro sólo sumaría round trips a una ficha que ya hace
+    // varios. El perfil del vehículo sólo se pide si el pedido tiene uno
+    // vinculado — el caso más común (`web`/`whatsapp` sin cuenta) no tiene
+    // nada que pedir acá.
+    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
       listQuoteResponsesFn({ data: params, signal }),
       listPartnerOptionsFn({ signal }),
+      listQuoteMessageTemplatesFn({ signal }),
+      result.detail.vehicleId
+        ? getQuoteVehicleProfileFn({ data: { vehicleId: result.detail.vehicleId }, signal })
+        : Promise.resolve(null),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
-    // param gana; si no está, el default es el rubro guardado.
-    const effectiveCategorySlug = deps.quoteRubro ?? result.detail.rubroCategorySlug ?? null
+    // param gana; si no está, el default son los rubros guardados.
+    const effectiveCategorySlugs = deps.quoteRubros.length > 0 ? deps.quoteRubros : result.detail.rubroCategorySlugs
 
-    const candidates = effectiveCategorySlug
-      ? await listPartnerCandidatesFn({
-          data: {
-            categorySlug: effectiveCategorySlug,
-            lat: result.detail.locationLatitude,
-            lng: result.detail.locationLongitude,
-          },
-          signal,
-        })
-      : []
+    const candidates =
+      effectiveCategorySlugs.length > 0
+        ? await listPartnerCandidatesFn({
+            data: {
+              categorySlugs: effectiveCategorySlugs,
+              lat: result.detail.locationLatitude,
+              lng: result.detail.locationLongitude,
+            },
+            signal,
+          })
+        : []
 
-    return { result, catalog, zones, candidates, effectiveCategorySlug, responses, partnerOptions }
+    return {
+      result,
+      catalog,
+      zones,
+      candidates,
+      effectiveCategorySlugs,
+      responses,
+      partnerOptions,
+      templates,
+      vehicleProfile,
+    }
   },
 
   head: ({ loaderData }) => ({
@@ -139,13 +162,22 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
 })
 
 function QuoteRequestScreen() {
-  const { result, catalog, zones, candidates, effectiveCategorySlug, responses, partnerOptions } =
-    Route.useLoaderData()
+  const {
+    result,
+    catalog,
+    zones,
+    candidates,
+    effectiveCategorySlugs,
+    responses,
+    partnerOptions,
+    templates,
+    vehicleProfile,
+  } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
-  const setQuoteRubro = (slug: string | undefined) =>
-    navigate({ search: { ...search, quoteRubro: slug }, replace: true, resetScroll: false })
+  const setQuoteRubros = (slugs: Array<string>) =>
+    navigate({ search: { ...search, quoteRubros: slugs }, replace: true, resetScroll: false })
 
   const back = (
     <Link
@@ -180,7 +212,7 @@ function QuoteRequestScreen() {
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 
-      <QuoteTemplates detail={d} responses={responseRows} />
+      <QuoteTemplates detail={d} responses={responseRows} templates={templates} />
 
       <Card className="mb-4">
         <CardContent className="pt-6">
@@ -255,13 +287,14 @@ function QuoteRequestScreen() {
         quoteRequestId={d.id}
         publicNumber={d.publicNumber}
         detail={d}
+        templates={templates}
         pedidoHasLocation={d.locationLatitude !== null && d.locationLongitude !== null}
         catalog={catalog}
         zones={zones}
-        savedCategorySlug={d.rubroCategorySlug}
-        selectedCategorySlug={effectiveCategorySlug}
+        savedCategorySlugs={d.rubroCategorySlugs}
+        selectedCategorySlugs={effectiveCategorySlugs}
         candidates={candidates}
-        onSelectCategory={setQuoteRubro}
+        onChangeCategories={setQuoteRubros}
       />
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
@@ -356,6 +389,13 @@ function QuoteRequestScreen() {
           </CardContent>
         </Card>
       </div>
+
+      {/*
+        Visible siempre que el pedido tenga `vehicleId` — aunque el canal no
+        sea `app` (el operador puede haber vinculado el auto a mano). Sólo
+        lectura: no hay ningún botón acá.
+      */}
+      {d.vehicleId && vehicleProfile ? <QuoteVehicleProfileCard profile={vehicleProfile} /> : null}
 
       <div className="mb-4 grid gap-4 lg:grid-cols-2">
         <Card>

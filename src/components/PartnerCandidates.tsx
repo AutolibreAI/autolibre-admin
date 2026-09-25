@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import { Check, MapPin, MessageCircle, Save, Send } from 'lucide-react'
-import { listPartnerCandidatesFn } from '~/fn/partners'
-import { addQuoteRequestInternalNoteFn, setQuoteRequestRubroFn } from '~/fn/quote-requests'
+import { addQuoteRequestInternalNoteFn, setQuoteRequestRubrosFn } from '~/fn/quote-requests'
 import {
   canonicalWhatsAppDigits,
   isRemoteModality,
@@ -10,42 +9,48 @@ import {
   type PartnerCandidate,
 } from '~/lib/partners'
 import { quotePublicCode, readableQuoteRequestError, type QuoteRequestDetail } from '~/lib/quote-requests'
-import { QUOTE_TEMPLATES, renderQuoteTemplate, whatsAppMessageUrl } from '~/lib/quote-templates'
+import { renderQuoteTemplate, whatsAppMessageUrl, type QuoteMessageTemplate } from '~/lib/quote-templates'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
 import { Chip, FilterGroup } from '~/components/Filters'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
+import { MultiSelect } from '~/components/MultiSelect'
 import { cn } from '~/lib/utils'
 import type { ServiceFamily } from '~/lib/catalog'
 
 /**
  * "Me entró este pedido: ¿a qué taller se lo mando?" —
- * `.claude/plans/partners-derivacion.md`, Fase 2.
+ * `.claude/plans/partners-derivacion.md`, Fase 2. Multiselect de rubros desde
+ * la 016 (`.claude/plans/pedidos-ficha-2026-09-25.md`): un pedido puede pedir
+ * más de una cosa, y el candidato correcto es el que cubre el MÁXIMO de
+ * rubros pedidos — `listPartnerCandidates` ya ordena por eso.
  *
  * Dos escrituras separadas, y son a propósito distintas en forma:
  *
- *  - **Clasificar el rubro** es DATO: `ops.set_quote_request_rubro` (013).
- *    Habilita "¿qué rubros nos piden más?" con un `group by`.
+ *  - **Clasificar los rubros** es DATO: `ops.set_quote_request_rubros` (016,
+ *    reemplaza a la 013 de un solo rubro). Habilita "¿qué rubros nos piden
+ *    más?" con un `group by`.
  *  - **Registrar la derivación** es NOTA INTERNA:
  *    `ops.add_quote_request_internal_note` (011), la misma escritura que ya
  *    usa el hilo de notas de la ficha. NO hay una tabla de derivaciones — el
  *    costo de esa decisión (no se puede saber "cuánto le mandamos a cada
  *    taller" con una consulta) está anotado en el plan, §2.
  *
- * Elegir un rubro en el selector sólo cambia qué se está MIRANDO (viaja en el
- * search param `quoteRubro`, vía `onSelectCategory`) — no persiste nada hasta
- * que se aprieta "Guardar clasificación". Filtrar para mirar no es clasificar.
+ * Elegir rubros en el selector sólo cambia qué se está MIRANDO (viaja en el
+ * search param `quoteRubros`, vía `onChangeCategories`) — no persiste nada
+ * hasta que se aprieta "Guardar clasificación". Filtrar para mirar no es
+ * clasificar.
  *
  * ── Zona y "solo aliados" — filtros de CLIENTE, sin search param ────────────
  *
- * `.claude/plans/cambios-2026-09-17.md`, punto C. A diferencia de `quoteRubro`,
- * que cambia la CONSULTA (el loader vuelve a pedir candidatos de ese rubro),
+ * `.claude/plans/cambios-2026-09-17.md`, punto C. A diferencia de
+ * `quoteRubros`, que cambia la CONSULTA (el loader vuelve a pedir candidatos),
  * zona y aliado sólo PODAN lo que ya vino — como mucho 46 filas. Van en
  * `useState`, no en la URL: cero round-trips, cero search param nuevo (cero
  * riesgo de colisión en `FullSearchSchema`), y el filtro es de trabajo dentro
  * de una ficha que ya se abrió — que un link pegado no lo reproduzca no cuesta
- * nada.
+ * nada. Zona usa el mismo `MultiSelect` que el selector de rubros (antes eran
+ * chips sueltas, que no escalaban a las ~30 zonas del directorio).
  */
 
 const MIN_LOCATED_SHARE = 0.5
@@ -59,32 +64,33 @@ interface PartnerCandidatesProps {
    * vehículo, la descripción y la localidad de ESTE pedido.
    */
   detail: QuoteRequestDetail
+  /** Las plantillas vigentes (semilla o editadas) — de acá sale `cotizacion_red`. */
+  templates: Array<QuoteMessageTemplate>
   /** El pedido tiene coordenadas (`location_source = 'device'`). */
   pedidoHasLocation: boolean
   catalog: Array<ServiceFamily>
-  /** Las zonas que hoy declaran los partners, para los chips de zona. */
+  /** Las zonas que hoy declaran los partners, para el selector de zona. */
   zones: Array<string>
   /** Lo que hay guardado en `ops.quote_request_rubro`, si algo. */
-  savedCategorySlug: string | null
-  /** El rubro efectivo que se está mirando: `quoteRubro` de la URL, o el guardado. */
-  selectedCategorySlug: string | null
+  savedCategorySlugs: Array<string>
+  /** Los rubros efectivos que se están mirando: `quoteRubros` de la URL, o los guardados. */
+  selectedCategorySlugs: Array<string>
   candidates: Array<PartnerCandidate>
-  onSelectCategory: (slug: string | undefined) => void
+  onChangeCategories: (slugs: Array<string>) => void
 }
-
-const COTIZACION_RED_TEMPLATE = QUOTE_TEMPLATES.find((t) => t.id === 'cotizacion_red')!
 
 export function PartnerCandidates({
   quoteRequestId,
   publicNumber,
   detail,
+  templates,
   pedidoHasLocation,
   catalog,
   zones,
-  savedCategorySlug,
-  selectedCategorySlug,
+  savedCategorySlugs,
+  selectedCategorySlugs,
   candidates,
-  onSelectCategory,
+  onChangeCategories,
 }: PartnerCandidatesProps) {
   const router = useRouter()
   const [savingRubro, setSavingRubro] = useState(false)
@@ -93,12 +99,19 @@ export function PartnerCandidates({
   const [onlyFounding, setOnlyFounding] = useState(false)
 
   const categories = catalog.map((f) => ({ slug: f.slug, name: f.name }))
-  const dirty = selectedCategorySlug !== null && selectedCategorySlug !== savedCategorySlug
+  const savedSet = new Set(savedCategorySlugs)
+  const selectedSet = new Set(selectedCategorySlugs)
+  const dirty =
+    selectedSet.size !== savedSet.size || selectedCategorySlugs.some((s) => !savedSet.has(s))
 
   // Mismo texto para todos los candidatos — sólo cambia el destinatario. Se
   // arma una vez acá, no por fila, y sin `responses`: la plantilla «red» no
   // usa presupuestos, así que pedirlos de nuevo sería una consulta de más.
-  const quoteMessage = renderQuoteTemplate(COTIZACION_RED_TEMPLATE, detail)
+  // Si la plantilla todavía no llegó del loader (no debería pasar: la semilla
+  // siempre está), no hay mensaje que armar y el botón "Pedir cotización" no
+  // se ofrece — ver `CandidateRow`.
+  const cotizacionRedTemplate = templates.find((t) => t.id === 'cotizacion_red') ?? null
+  const quoteMessage = cotizacionRedTemplate ? renderQuoteTemplate(cotizacionRedTemplate, detail) : null
 
   /**
    * Zona por CONTENCIÓN, igual que el filtro del listado y el tablero de
@@ -114,12 +127,11 @@ export function PartnerCandidates({
   })
 
   async function saveRubro() {
-    if (!selectedCategorySlug) return
     setSavingRubro(true)
     setRubroError(null)
     try {
-      await setQuoteRequestRubroFn({
-        data: { quoteRequestId, categorySlug: selectedCategorySlug },
+      await setQuoteRequestRubrosFn({
+        data: { quoteRequestId, categorySlugs: selectedCategorySlugs },
       })
       await router.invalidate()
     } catch (cause) {
@@ -146,27 +158,18 @@ export function PartnerCandidates({
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
-            <label
-              htmlFor="quote-rubro"
-              className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
-            >
-              Rubro del pedido
-            </label>
-            <Select
-              value={selectedCategorySlug ?? undefined}
-              onValueChange={(v) => onSelectCategory(v)}
-            >
-              <SelectTrigger id="quote-rubro" className="w-64 shadow-none">
-                <SelectValue placeholder="Elegí un rubro…" />
-              </SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c.slug} value={c.slug}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Rubros del pedido
+            </span>
+            <MultiSelect
+              label="Rubros del pedido"
+              options={categories.map((c) => ({ value: c.slug, label: c.name }))}
+              selected={selectedCategorySlugs}
+              onChange={onChangeCategories}
+              placeholder="Elegí uno o más rubros…"
+              searchPlaceholder="Buscar rubro…"
+              className="w-64"
+            />
           </div>
 
           {dirty ? (
@@ -174,7 +177,7 @@ export function PartnerCandidates({
               <Save className="size-3.5" aria-hidden />
               {savingRubro ? 'Guardando…' : 'Guardar clasificación'}
             </Button>
-          ) : selectedCategorySlug && selectedCategorySlug === savedCategorySlug ? (
+          ) : selectedCategorySlugs.length > 0 ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <Check className="size-3.5 text-status-green" aria-hidden />
               clasificación guardada
@@ -188,34 +191,28 @@ export function PartnerCandidates({
           </p>
         ) : null}
 
-        {!selectedCategorySlug ? (
+        {selectedCategorySlugs.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Elegí un rubro para ver qué partners activos lo cubren.
+            Elegí uno o más rubros para ver qué partners activos los cubren.
           </p>
         ) : (
           <div className="space-y-4">
             {candidates.length > 0 ? (
               <div className="flex flex-wrap items-end gap-4">
-                <FilterGroup
-                  label="Zona"
-                  onClear={zoneFilter.length > 0 ? () => setZoneFilter([]) : undefined}
-                >
-                  {zones.map((zone) => (
-                    <Chip
-                      key={zone}
-                      active={zoneFilter.includes(zone)}
-                      onClick={() =>
-                        setZoneFilter(
-                          zoneFilter.includes(zone)
-                            ? zoneFilter.filter((z) => z !== zone)
-                            : [...zoneFilter, zone],
-                        )
-                      }
-                    >
-                      {zone}
-                    </Chip>
-                  ))}
-                </FilterGroup>
+                <div className="space-y-1.5">
+                  <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Zona
+                  </span>
+                  <MultiSelect
+                    label="Zona"
+                    options={zones.map((z) => ({ value: z, label: z }))}
+                    selected={zoneFilter}
+                    onChange={setZoneFilter}
+                    placeholder="Todas"
+                    searchPlaceholder="Buscar zona…"
+                    className="w-48"
+                  />
+                </div>
 
                 <FilterGroup label="Aliado">
                   <Chip active={onlyFounding} onClick={() => setOnlyFounding(!onlyFounding)}>
@@ -243,7 +240,9 @@ export function PartnerCandidates({
             ) : null}
 
             {candidates.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No hay partners activos con este rubro.</p>
+              <p className="text-sm text-muted-foreground">
+                No hay partners activos con {selectedCategorySlugs.length === 1 ? 'este rubro' : 'estos rubros'}.
+              </p>
             ) : visibleCandidates.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Ningún candidato con este filtro{zoneFilterActive ? ' de zona / aliado' : ''}.
@@ -294,8 +293,12 @@ function CandidateRow({
   candidate: PartnerCandidate
   quoteRequestId: string
   publicNumber: number
-  /** El texto de la plantilla «Pedir cotización — red», ya renderizado para este pedido. */
-  quoteMessage: string
+  /**
+   * El texto de la plantilla «Pedir cotización — red», ya renderizado para
+   * este pedido. `null` si la plantilla todavía no llegó del loader (no
+   * debería pasar: la semilla siempre está) — sin texto no hay botón.
+   */
+  quoteMessage: string | null
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -306,7 +309,8 @@ function CandidateRow({
   // Mismo criterio de teléfono que el resto del repo: sin la forma canónica
   // (`549` + 10 dígitos) no hay link — adivinar la característica le
   // escribiría a otra persona.
-  const quoteUrl = whatsAppMessageUrl(canonicalWhatsAppDigits(c.whatsapp ?? ''), quoteMessage)
+  const quoteUrl =
+    quoteMessage !== null ? whatsAppMessageUrl(canonicalWhatsAppDigits(c.whatsapp ?? ''), quoteMessage) : null
 
   async function registerReferral() {
     setBusy(true)
@@ -348,6 +352,15 @@ function CandidateRow({
             {c.coverageZone}
             {c.hours ? ` · ${c.hours}` : ''}
           </div>
+          {c.matchedCategories.length > 0 ? (
+            <div className="flex flex-wrap gap-1 pt-1">
+              {c.matchedCategories.map((cat) => (
+                <Badge key={cat.slug} variant="outline" className="border-brand/30 bg-brand-soft text-brand">
+                  {cat.name}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
           {c.matchedServices.length > 0 ? (
             <div className="flex flex-wrap gap-1 pt-1">
               {c.matchedServices.map((s) => (

@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
 import { formatQuoteAmount, type QuoteResponse } from '~/lib/quote-responses'
 import { formatDate } from '~/lib/format'
@@ -139,6 +140,134 @@ if (templatesWithoutCodigo.length > 0) {
   throw new Error(
     `QUOTE_TEMPLATES sin {{codigo}}: ${templatesWithoutCodigo.map((t) => t.id).join(', ')}`,
   )
+}
+
+// ── Plantillas EDITABLES — `ops.quote_message_template_version` (016 → 017) ──
+//
+// Las 4 de arriba quedan como SEMILLA en código. Si un `template_key` no
+// tiene ninguna versión guardada en `ops`, el panel usa la semilla — la
+// primera edición crea la versión 1 y desde ahí la base manda para esa
+// clave. Una plantilla nueva ("Nueva plantilla" en la UI) nace directo en
+// `ops`, sin semilla. `~/server/quote-message-templates.repo.ts` hace el
+// merge; acá sólo viven los tipos y la validación, universales.
+
+export interface QuoteMessageTemplate extends QuoteTemplate {
+  /** `false` = viene de la semilla en código, nadie la editó todavía. */
+  isCustomized: boolean
+  /** La versión vigente en `ops`, si `isCustomized`. `null` para una semilla sin editar. */
+  currentVersionId: string | null
+  updatedAt: string | null
+}
+
+export interface QuoteMessageTemplateVersion {
+  id: string
+  templateKey: string
+  title: string
+  audience: QuoteTemplateAudience
+  content: string
+  archived: boolean
+  actorEmail: string | null
+  createdAt: string
+}
+
+/**
+ * Qué `{{variables}}` puede usar cada audiencia, y por qué: `vehiculo_taller`
+ * no tiene sentido en un mensaje a la persona (ya sabe qué auto tiene) y
+ * `vehiculo_completo`/`intro`/`presupuestos` no existen para un mensaje al
+ * taller (la lógica de "qué talleres respondieron" es del lado de la
+ * persona). Validar por audiencia da un error más preciso que validar contra
+ * la unión de las dos listas.
+ */
+export const TEMPLATE_VARIABLES: Record<QuoteTemplateAudience, ReadonlyArray<{ key: string; label: string }>> = {
+  persona: [
+    { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio' },
+    { key: 'patente', label: 'Patente tipeada por la persona' },
+    { key: 'vehiculo', label: 'El auto, frase corta ("el Nissan Note (PNZ450)")' },
+    { key: 'vehiculo_completo', label: 'El auto completo, o un aviso si falta' },
+    { key: 'pedido', label: 'La descripción del pedido' },
+    { key: 'zona', label: 'La dirección/zona de la persona' },
+    { key: 'intro', label: 'El párrafo de presupuestos, redactado según la cantidad' },
+    { key: 'presupuestos', label: 'El bloque numerado con lo que contestó cada taller' },
+  ],
+  taller: [
+    { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio' },
+    { key: 'vehiculo_taller', label: 'El auto completo (marca, modelo, versión, año), sin patente' },
+    { key: 'pedido', label: 'La descripción del pedido' },
+    { key: 'localidad', label: 'La línea de zona — desaparece entera sin dato' },
+  ],
+}
+
+/** Los `{{xxx}}` que aparecen en un texto, sin duplicados. */
+function extractTemplateVariables(content: string): Array<string> {
+  const found = new Set<string>()
+  for (const m of content.matchAll(/\{\{(\w+)\}\}/g)) found.add(m[1]!)
+  return [...found]
+}
+
+/** Las que aparecen en `content` y NO están en la lista de esa audiencia. */
+export function unknownTemplateVariables(content: string, audience: QuoteTemplateAudience): Array<string> {
+  const known = new Set(TEMPLATE_VARIABLES[audience].map((v) => v.key))
+  return extractTemplateVariables(content).filter((k) => !known.has(k))
+}
+
+/**
+ * Guardar (alta o edición) una versión — `ops.save_quote_message_template`
+ * (017). `templateKey` ausente = plantilla nueva; presente = nueva versión de
+ * esa clave, sea semilla o ya editada antes.
+ *
+ * Las dos validaciones de contenido que el SP no puede hacer (no conoce
+ * `TEMPLATE_VARIABLES`, vive en código) van acá, con el mismo mensaje que
+ * mostraría el form.
+ */
+export const saveQuoteMessageTemplateSchema = z
+  .object({
+    templateKey: z.string().trim().min(1).max(60).optional(),
+    title: z.string().trim().min(1, 'Falta el título.').max(120),
+    audience: z.enum(['persona', 'taller']),
+    content: z.string().trim().min(1, 'Falta el texto del mensaje.').max(4000),
+  })
+  .superRefine((d, ctx) => {
+    if (!d.content.includes('{{codigo}}')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['content'],
+        message: 'El mensaje tiene que incluir {{codigo}} — es la única forma de trazar el pedido después.',
+      })
+    }
+    const unknown = unknownTemplateVariables(d.content, d.audience)
+    if (unknown.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['content'],
+        message: `No existen estas variables para "${d.audience}": ${unknown.map((k) => `{{${k}}}`).join(', ')}.`,
+      })
+    }
+  })
+export type SaveQuoteMessageTemplateInput = z.infer<typeof saveQuoteMessageTemplateSchema>
+
+export const listQuoteMessageTemplateVersionsSchema = z.object({
+  templateKey: z.string().trim().min(1).max(60),
+})
+export type ListQuoteMessageTemplateVersionsInput = z.infer<typeof listQuoteMessageTemplateVersionsSchema>
+
+/** Sentinela del handler cuando `ops.quote_message_template_version` no existe en esta base. */
+export const QUOTE_MESSAGE_TEMPLATES_UNAVAILABLE = 'QUOTE_MESSAGE_TEMPLATES_UNAVAILABLE'
+
+export function readableQuoteMessageTemplateError(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause)
+
+  if (raw.includes(QUOTE_MESSAGE_TEMPLATES_UNAVAILABLE))
+    return 'Falta aplicar la migración 017 en esta base (pnpm db:migrate). No se aplicó nada.'
+  if (raw.includes('TITLE_REQUIRED')) return 'Falta el título.'
+  if (raw.includes('INVALID_AUDIENCE')) return 'Esa audiencia no existe. Recargá la pantalla.'
+  if (raw.includes('CONTENT_REQUIRED')) return 'Falta el texto del mensaje.'
+  if (raw.includes('MISSING_CODIGO_PLACEHOLDER'))
+    return 'El mensaje tiene que incluir {{codigo}} en algún lugar.'
+  if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED'))
+    return 'Tu sesión no corresponde a un usuario de AutoLibre. Volvé a iniciar sesión.'
+  if (raw === 'FORBIDDEN') return 'Tu rol no tiene permiso para esta acción.'
+  if (raw === 'UNAUTHENTICATED') return 'Tu sesión expiró. Volvé a iniciar sesión.'
+  return 'No pudimos guardar. No se aplicó nada — es una sola operación en la base.'
 }
 
 /**

@@ -2,6 +2,8 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { quoteResponsesAvailable } from './quote-responses.repo'
+import { mapTaskRow, type TaskRow } from './users.repo'
+import { lookupDtc } from './dtc-catalog'
 import { METRICS_TZ, type GrowthUnit } from '~/lib/ops'
 import {
   QUOTE_UNCONTACTED_AFTER_HOURS,
@@ -20,8 +22,9 @@ import {
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
   type QuoteSortKey,
-  type SetQuoteRequestRubroInput,
+  type SetQuoteRequestRubrosInput,
 } from '~/lib/quote-requests'
+import type { QuoteVehicleProfile } from '~/lib/quote-vehicle-profile'
 
 /**
  * Pedidos de presupuesto.
@@ -752,7 +755,6 @@ interface DetailRow extends ListRow {
 
 interface RubroRow {
   category_slug: string
-  service_slug: string | null
 }
 
 /**
@@ -798,13 +800,14 @@ export async function findQuoteRequestDetail(
   if (!r) return null
 
   /**
-   * El rubro clasificado vive en `ops`, no en `quote_requests` — otra
-   * consulta y no un LEFT JOIN en la de arriba: es opcional (la mayoría de los
-   * pedidos todavía no se clasificó) y este repo no necesita mezclar sus
-   * columnas con el SELECT compartido de lista/detalle. → migración 013.
+   * Los rubros clasificados viven en `ops`, no en `quote_requests` — otra
+   * consulta y no un LEFT JOIN en la de arriba: son opcionales (la mayoría de
+   * los pedidos todavía no se clasificó) y este repo no necesita mezclar sus
+   * columnas con el SELECT compartido de lista/detalle. → migración 016
+   * (reemplaza a la 013 de un solo rubro).
    */
-  const rubro = await sqlOne<RubroRow>(
-    `select category_slug, service_slug from ops.quote_request_rubro where quote_request_id = $1`,
+  const rubros = await sql<RubroRow>(
+    `select category_slug from ops.quote_request_rubro where quote_request_id = $1 order by category_slug`,
     [id],
   )
 
@@ -823,8 +826,7 @@ export async function findQuoteRequestDetail(
     locationLongitude: toNum(r.location_longitude),
     locationLocality: r.location_locality,
     catalogShortLabel: r.catalog_short_label,
-    rubroCategorySlug: rubro?.category_slug ?? null,
-    rubroServiceSlug: rubro?.service_slug ?? null,
+    rubroCategorySlugs: rubros.map((row) => row.category_slug),
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.
@@ -913,7 +915,8 @@ export async function closeQuoteRequest(
        p_closed_reason     => $4,
        p_outcome           => $5,
        p_outcome_note      => $6,
-       p_note              => $7
+       p_internal_note     => $7,
+       p_note              => $8
      ) AS q`,
     [
       input.quoteRequestId,
@@ -922,6 +925,7 @@ export async function closeQuoteRequest(
       blankToNull(input.closedReason),
       input.outcome ?? null,
       blankToNull(input.outcomeNote),
+      blankToNull(input.internalNote),
       blankToNull(input.auditNote),
     ],
   )
@@ -947,35 +951,35 @@ export async function addQuoteRequestInternalNote(
   return toWriteResult(row?.q, input.quoteRequestId)
 }
 
-// ── Escritura: clasificar el rubro (migración 013) ──────────────────────────
+// ── Escritura: clasificar los rubros (migración 016) ────────────────────────
 
 /**
- * Clasificar (o reclasificar) el rubro de un pedido, vía
- * `ops.set_quote_request_rubro`. Es un UPSERT sobre una tabla PROPIA de `ops`
- * — no toca `quote_requests` — así que no pasa por `assertQuoteRequestsAvailable`
- * con el mismo peso que las transiciones de la 011: el SP igual verifica que
- * el pedido exista (`QUOTE_REQUEST_NOT_FOUND`), pero la tabla de destino de
- * esta escritura es nuestra y no depende del deploy del backend.
+ * Reemplazar el CONJUNTO de rubros de un pedido, vía
+ * `ops.set_quote_request_rubros` (016, reemplaza a la 013 de un solo rubro).
+ * Es un DELETE + INSERT sobre una tabla PROPIA de `ops` — no toca
+ * `quote_requests` — así que no pasa por `assertQuoteRequestsAvailable` con
+ * el mismo peso que las transiciones de la 011: el SP igual verifica que el
+ * pedido exista (`QUOTE_REQUEST_NOT_FOUND`), pero la tabla de destino de esta
+ * escritura es nuestra y no depende del deploy del backend.
  */
-export async function setQuoteRequestRubro(
-  input: SetQuoteRequestRubroInput,
+export async function setQuoteRequestRubros(
+  input: SetQuoteRequestRubrosInput,
   actorId: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ categorySlug: string; serviceSlug: string | null }> {
+): Promise<{ categorySlugs: Array<string> }> {
   void opts.signal
 
-  const row = await sqlOne<{ r: { category_slug: string; service_slug: string | null } }>(
-    `SELECT ops.set_quote_request_rubro(
+  const row = await sqlOne<{ r: { category_slugs: Array<string> } }>(
+    `SELECT ops.set_quote_request_rubros(
        p_quote_request_id => $1,
-       p_category_slug    => $2,
-       p_actor_id         => $3,
-       p_service_slug     => $4,
-       p_note             => $5
+       p_actor_id         => $2,
+       p_category_slugs   => $3::text[],
+       p_note             => $4
      ) AS r`,
-    [input.quoteRequestId, input.categorySlug, actorId, input.serviceSlug ?? null, input.auditNote ?? null],
+    [input.quoteRequestId, actorId, input.categorySlugs, input.auditNote ?? null],
   )
   if (!row) throw new Error(`QUOTE_REQUEST_NOT_FOUND:${input.quoteRequestId}`)
-  return { categorySlug: row.r.category_slug, serviceSlug: row.r.service_slug }
+  return { categorySlugs: row.r.category_slugs }
 }
 
 // ── Escritura: cargar un pedido a mano ──────────────────────────────────────
@@ -1039,4 +1043,114 @@ export async function createQuoteRequest(
   )
   if (!row) throw new Error('QUOTE_REQUEST_CREATE_FAILED')
   return { id: row.q.id, publicNumber: toInt(row.q.public_number) }
+}
+
+// ── Vehículo vinculado: la tarjeta de sólo lectura de la ficha ─────────────
+//
+// `.claude/plans/pedidos-ficha-2026-09-25.md`, Fase 4. No cuelga de
+// `quote_requests` — es pura lectura de `vehicles` y lo que cuelga de un
+// `vehicle_id`, así que no necesita `quoteRequestsAvailability()`.
+
+interface VehicleProfileRow {
+  vin: string | null
+  vehicle_engine_number: string | null
+  reg_card_engine_number: string | null
+  insurance_engine_number: string | null
+  odometer_km: number | string | null
+  /** NULL si `vehicle_last_dtc_scans` no tiene fila — "nunca se escaneó". */
+  lds_vehicle_id: string | null
+  dtc_scanned_at: Date | string | null
+  /** El array de `session_dtc_snapshots.codes` para esa sesión. `NULL` si el snapshot no existe. */
+  dtc_codes: Array<string> | null
+}
+
+/**
+ * El vehículo de un pedido, para la tarjeta «Vehículo» de sólo lectura.
+ *
+ * ── El motor: `vehicles` → cédula → seguro, en ESE orden ────────────────────
+ *
+ * Relevado el 2026-09-25 contra los 8 pedidos `app` de producción (los únicos
+ * con `vehicle_id` real): `vehicles.engine_number` vacío en los 8, la cédula
+ * más reciente lo tenía en 4, el seguro más reciente en 7. Se muestra el
+ * primero que aparece, CON la fuente — mostrarlo sin decir de dónde salió
+ * dejaría creer que es un dato más confiable (el de `vehicles`) cuando en la
+ * práctica siempre viene de un documento.
+ *
+ * ── Los DTCs activos usan `session_dtc_snapshots`, NO `diagnostic_dtcs` ────
+ *
+ * Mismo criterio que `.claude/rules/scan-detections.md` y el que se corrigió
+ * el mismo día en `listUserVehicleSummaries` (`users.repo.ts`): `diagnostic_dtcs`
+ * sólo tiene fila para los códigos que alguien BUSCÓ, no para todos los que
+ * trajo la sesión.
+ */
+export async function findQuoteVehicleProfile(
+  vehicleId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteVehicleProfile> {
+  void opts.signal
+
+  const [row, taskRows] = await Promise.all([
+    sqlOne<VehicleProfileRow>(
+      `select
+         nullif(btrim(v.vin), '') as vin,
+         nullif(btrim(v.engine_number), '') as vehicle_engine_number,
+         (select nullif(btrim(r.engine_number), '')
+            from registration_cards r
+           where r.vehicle_id = v.id and coalesce(btrim(r.engine_number), '') <> ''
+           order by r.archived asc, r.created_at desc limit 1) as reg_card_engine_number,
+         (select nullif(btrim(i.engine_number), '')
+            from insurances i
+           where i.vehicle_id = v.id and coalesce(btrim(i.engine_number), '') <> ''
+           order by i.archived asc, i.created_at desc limit 1) as insurance_engine_number,
+         case when coalesce(v.odometer_value, 0) > 0 then v.odometer_value end as odometer_km,
+         lds.vehicle_id as lds_vehicle_id,
+         lds.scanned_at as dtc_scanned_at,
+         sds.codes as dtc_codes
+       from vehicles v
+       left join vehicle_last_dtc_scans lds on lds.vehicle_id = v.id
+       left join session_dtc_snapshots sds on sds.session_id = lds.session_id
+       where v.id = $1`,
+      [vehicleId],
+    ),
+    sql<TaskRow>(
+      `select o.id, v.plate as vehicle_plate, o.name, o.item_type::text as item_type,
+              o.due_date, o.performed_at, o.archived, o.created_at
+         from maintenance_occurrences o
+         join vehicles v on v.id = o.vehicle_id
+        where o.vehicle_id = $1
+        order by coalesce(o.performed_at, o.due_date, o.created_at) desc`,
+      [vehicleId],
+    ),
+  ])
+
+  let engineNumber: string | null = null
+  let engineNumberSource: QuoteVehicleProfile['engineNumberSource'] = null
+  if (row?.vehicle_engine_number) {
+    engineNumber = row.vehicle_engine_number
+    engineNumberSource = 'vehicle'
+  } else if (row?.reg_card_engine_number) {
+    engineNumber = row.reg_card_engine_number
+    engineNumberSource = 'registration_card'
+  } else if (row?.insurance_engine_number) {
+    engineNumber = row.insurance_engine_number
+    engineNumberSource = 'insurance'
+  }
+
+  // `lds_vehicle_id` NULL ⇒ nunca se escaneó: ni fecha ni códigos. Con fila
+  // en `vehicle_last_dtc_scans` pero sin snapshot (o con `codes` vacío), la
+  // fecha SÍ está — "se escaneó, cero códigos" es distinto de "nunca".
+  const dtcCodes =
+    row?.lds_vehicle_id && row.dtc_codes
+      ? row.dtc_codes.map((code) => ({ code, title: lookupDtc(code)?.title ?? null }))
+      : []
+
+  return {
+    vin: row?.vin ?? null,
+    engineNumber,
+    engineNumberSource,
+    odometerKm: toIntOrNull(row?.odometer_km),
+    dtcCodes,
+    dtcScannedAt: row?.lds_vehicle_id ? toIso(row.dtc_scanned_at) : null,
+    tasks: taskRows.map(mapTaskRow),
+  }
 }
