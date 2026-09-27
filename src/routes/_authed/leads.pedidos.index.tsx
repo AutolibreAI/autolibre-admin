@@ -393,7 +393,11 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
       </TableCell>
 
       <TableCell>
-        <span className="font-mono font-semibold tracking-wider">{row.plate}</span>
+        {row.plate ? (
+          <span className="font-mono font-semibold tracking-wider">{row.plate}</span>
+        ) : (
+          <Muted>sin patente</Muted>
+        )}
         {row.vehicleId ? (
           <>
             {row.catalogLabel ? <div className="text-xs text-muted-foreground">{row.catalogLabel}</div> : null}

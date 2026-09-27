@@ -39,6 +39,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~
  * que el formulario pide elegir el que más se parezca — default `whatsapp`,
  * el más cercano a un contacto directo — y lo dice en el texto de ayuda.
  *
+ * ── Casi nada es obligatorio, a propósito ───────────────────────────────────
+ *
+ * Sólo teléfono y qué necesita: son las dos columnas NOT NULL que la persona
+ * siempre da. La patente y el vehículo muchas veces no llegan en el primer
+ * mensaje —sobre todo por WhatsApp— y se completan después desde la ficha
+ * (`QuoteRequestEditor`, migración 018). Pedirlos acá obligaba a inventar una
+ * patente para poder cargar el pedido.
+ *
  * ── Sin idempotencia, a propósito ───────────────────────────────────────────
  *
  * A diferencia de `BroadcastComposer` (que manda push a decenas de personas y
@@ -56,6 +64,7 @@ export function QuoteRequestComposer() {
   const [contactPhone, setContactPhone] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [plate, setPlate] = useState('')
+  const [vehicleText, setVehicleText] = useState('')
   const [description, setDescription] = useState('')
   const [declaredAmount, setDeclaredAmount] = useState('')
 
@@ -65,7 +74,7 @@ export function QuoteRequestComposer() {
 
   const inFlight = useRef(false)
 
-  const canSubmit = contactPhone.trim() !== '' && plate.trim() !== '' && description.trim() !== ''
+  const canSubmit = contactPhone.trim() !== '' && description.trim() !== ''
 
   function reset() {
     setChannel('whatsapp')
@@ -73,6 +82,7 @@ export function QuoteRequestComposer() {
     setContactPhone('')
     setContactEmail('')
     setPlate('')
+    setVehicleText('')
     setDescription('')
     setDeclaredAmount('')
     setError(null)
@@ -102,8 +112,9 @@ export function QuoteRequestComposer() {
         data: {
           channel,
           contactPhone: contactPhone.trim(),
-          plate: plate.trim(),
           description: description.trim(),
+          plate: plate.trim() === '' ? undefined : plate.trim(),
+          vehicleText: vehicleText.trim() === '' ? undefined : vehicleText.trim(),
           contactName: contactName.trim() === '' ? undefined : contactName.trim(),
           contactEmail: contactEmail.trim() === '' ? undefined : contactEmail.trim(),
           declaredAmount: amount,
@@ -151,6 +162,9 @@ export function QuoteRequestComposer() {
               <div className="rounded-md border border-status-green/30 bg-status-green-bg p-3 text-sm">
                 <p className="font-medium text-status-green">
                   {quotePublicCode(created.publicNumber)} cargado.
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Lo que falte (patente, vehículo, zona) se completa desde la ficha, con «Editar datos».
                 </p>
                 <Link
                   to="/leads/pedidos/$quoteRequestId"
@@ -245,13 +259,35 @@ export function QuoteRequestComposer() {
               />
             </section>
 
+            <section className="space-y-1.5">
+              <label
+                htmlFor="qrc-vehicle"
+                className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
+              >
+                Vehículo <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
+              </label>
+              <Input
+                id="qrc-vehicle"
+                value={vehicleText}
+                disabled={busy}
+                autoComplete="off"
+                maxLength={200}
+                placeholder="Peugeot 208 1.6 2019"
+                onChange={(e) => setVehicleText(e.currentTarget.value)}
+                className="shadow-none"
+              />
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Como lo cuente la persona: marca, modelo, versión y año, lo que haya.
+              </p>
+            </section>
+
             <section className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label
                   htmlFor="qrc-plate"
                   className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
                 >
-                  Patente
+                  Patente <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
                 </label>
                 <Input
                   id="qrc-plate"
@@ -259,7 +295,6 @@ export function QuoteRequestComposer() {
                   disabled={busy}
                   autoComplete="off"
                   placeholder="AB123CD"
-                  aria-required
                   onChange={(e) => setPlate(e.currentTarget.value)}
                   className="font-mono uppercase shadow-none"
                 />

@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import { growthSearchSchema } from '~/lib/ops'
 import {
+  QUOTE_EDIT_UNAVAILABLE,
   QUOTE_REQUESTS_UNAVAILABLE,
   addQuoteRequestInternalNoteSchema,
   closeQuoteRequestSchema,
@@ -10,6 +11,7 @@ import {
   quoteRequestIdSchema,
   quoteRequestSearchSchema,
   setQuoteRequestRubrosSchema,
+  updateQuoteRequestSchema,
 } from '~/lib/quote-requests'
 import {
   addQuoteRequestInternalNote,
@@ -21,8 +23,10 @@ import {
   markQuoteRequestContacted,
   quoteRequestSeries,
   quoteRequestStatusSummary,
+  quoteEditAvailable,
   quoteRequestsAvailability,
   setQuoteRequestRubros,
+  updateQuoteRequest,
 } from '~/server/quote-requests.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -165,9 +169,20 @@ export const setQuoteRequestRubrosFn = createServerFn({ method: 'POST' })
   })
 
 /**
- * Cargar un pedido a mano (migración 012) — llegó por teléfono, en persona, o
- * referido, así que nunca pasó por el POST público de app/web/whatsapp. El
- * actor sale de la sesión, NUNCA del payload, igual que las transiciones.
+ * El alta y la edición llaman a las firmas de la 018. Sin esa migración
+ * aplicada, `ops.create_quote_request` todavía tiene la firma de la 012 y
+ * `update_quote_request` no existe: sin este chequeo, la llamada volvería con
+ * el texto de Postgres ("function … does not exist").
+ */
+async function assertQuoteEditAvailable(signal: AbortSignal | undefined): Promise<void> {
+  if (!(await quoteEditAvailable({ signal }))) throw new Error(QUOTE_EDIT_UNAVAILABLE)
+}
+
+/**
+ * Cargar un pedido a mano (migración 012, firma de la 018) — llegó por
+ * teléfono, en persona, o referido, así que nunca pasó por el POST público de
+ * app/web/whatsapp. El actor sale de la sesión, NUNCA del payload, igual que
+ * las transiciones.
  */
 export const createQuoteRequestFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
@@ -175,5 +190,21 @@ export const createQuoteRequestFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }): Promise<{ id: string; publicNumber: number }> => {
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
+    await assertQuoteEditAvailable(signal)
     return createQuoteRequest(data, context.user.id, { signal })
+  })
+
+/**
+ * Editar los datos de un pedido ya creado (migración 018): contacto, patente,
+ * vehículo escrito, descripción, monto y ubicación tipeada. Mismos dos guards
+ * que el alta.
+ */
+export const updateQuoteRequestFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(updateQuoteRequestSchema)
+  .handler(async ({ data, context }): Promise<QuoteRequestWriteResult> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    await assertQuoteEditAvailable(signal)
+    return updateQuoteRequest(data, context.user.id, { signal })
   })
