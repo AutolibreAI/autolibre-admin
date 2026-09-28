@@ -1,6 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { BookOpen, DatabaseZap } from 'lucide-react'
+import { useEffect } from 'react'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { BookOpen, DatabaseZap, FilePlus2, Upload } from 'lucide-react'
 import {
+  hasPendingKnowledgeDocument,
   knowledgeRelevanceLabel,
   knowledgeStatusLabel,
   type KnowledgeDocument,
@@ -9,6 +11,8 @@ import {
 } from '~/lib/knowledge-documents'
 import { listKnowledgeDocumentsFn } from '~/fn/knowledge-documents'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { KnowledgeDocumentUploader } from '~/components/KnowledgeDocumentUploader'
+import { Button } from '~/components/ui/button'
 import { Badge } from '~/components/ui/badge'
 import { formatBytes, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
@@ -46,8 +50,31 @@ export const Route = createFileRoute('/_authed/conocimiento')({
   component: KnowledgePage,
 })
 
+/**
+ * Cada cuánto se vuelve a preguntar mientras haya algo `pending`.
+ *
+ * La ingesta de un markdown son segundos (trocear + vectorizar), así que 5 s
+ * alcanza para ver el cambio sin recargar a mano, y cuesta una consulta chica
+ * por tick. Se APAGA sola cuando no queda nada pendiente: un sondeo permanente
+ * sobre una pantalla que nadie mira es carga gratis contra la misma base que
+ * sirve a la app.
+ */
+const PENDING_POLL_MS = 5_000
+
 function KnowledgePage() {
   const listing = Route.useLoaderData()
+  const router = useRouter()
+  const pending = listing.availability.available && hasPendingKnowledgeDocument(listing.chains)
+
+  // Antes del return temprano de abajo: un hook no puede quedar detrás de un
+  // `if`. El efecto sólo corre en el browser, así que no toca el SSR.
+  useEffect(() => {
+    if (!pending) return
+    const timer = window.setInterval(() => {
+      void router.invalidate()
+    }, PENDING_POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [pending, router])
 
   if (!listing.availability.available) {
     return (
@@ -66,8 +93,27 @@ function KnowledgePage() {
       <PageHeader
         title="Conocimiento"
         subtitle={`${formatInt(chains.length)} ${chains.length === 1 ? 'documento público' : 'documentos públicos'} · ${formatInt(readyCount)} en uso por el asistente`}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <>
+            <SsrTag>ssr: full</SsrTag>
+            <KnowledgeDocumentUploader
+              trigger={(open) => (
+                <Button size="sm" className="gap-1.5" onClick={open}>
+                  <FilePlus2 className="size-3.5" aria-hidden />
+                  Subir documento
+                </Button>
+              )}
+            />
+          </>
+        }
       />
+
+      {pending ? (
+        <p className="mb-3 text-xs text-muted-foreground" role="status">
+          Hay documentos procesándose: la pantalla se actualiza sola cada {PENDING_POLL_MS / 1000}{' '}
+          segundos.
+        </p>
+      ) : null}
 
       {chains.length === 0 ? (
         <EmptyKnowledge />
@@ -95,8 +141,11 @@ function EmptyKnowledge() {
       <p className="mt-3 text-sm font-medium">Todavía no hay documentos públicos de conocimiento</p>
       <p className="mx-auto mt-1 max-w-prose text-sm text-muted-foreground">
         Un documento público es texto de referencia —códigos de falla, normativa, guías— que el
-        asistente de IA puede citar al contestarle a cualquier usuario. Sin ninguno, el asistente
-        contesta sólo con lo que sabe el modelo y con los datos del auto de cada persona.
+        asistente de IA puede citar al contestarle a cualquier usuario. Sin ninguno cargado, el
+        asistente no tiene material propio que citar.
+      </p>
+      <p className="mx-auto mt-2 max-w-prose text-sm text-muted-foreground">
+        Se cargan con «Subir documento», arriba a la derecha: un archivo markdown de hasta 1 MB.
       </p>
     </div>
   )
@@ -187,6 +236,7 @@ function ChainCard({ chain }: { chain: KnowledgeDocumentChain }) {
             {formatInt(total)} {total === 1 ? 'subida' : 'subidas'}
           </p>
         </div>
+        <NewVersionAction chain={chain} />
       </div>
 
       <div className="mt-3">
@@ -265,5 +315,60 @@ function DocumentLine({
         </p>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * "Subir nueva versión" — sólo sobre una cadena con versión EN USO.
+ *
+ * Dos casos donde no se ofrece, y los dos los rechazaría el backend igual:
+ *
+ *  - Sin `current`: no hay nada `ready` que reemplazar (el backend exige que
+ *    la anterior esté lista; si no, 400 `INVALID_STATE_TRANSITION`). Una cadena
+ *    cuya primera subida falló se arregla subiendo un documento nuevo.
+ *  - Con una versión nueva `pending`: el índice único parcial permite UN
+ *    sucesor no fallido, así que una segunda sería un 409. Se muestra el botón
+ *    deshabilitado CON el motivo, no se esconde: que desaparezca se lee como
+ *    un bug.
+ *
+ * Un sucesor `failed` NO bloquea: el backend deja reintentar, y es justo el
+ * caso para el que existe el botón.
+ */
+function NewVersionAction({ chain }: { chain: KnowledgeDocumentChain }) {
+  const { current } = chain
+  if (!current) return null
+
+  const inProgress = chain.inFlight.some((d) => d.status === 'pending')
+
+  if (inProgress) {
+    return (
+      <div className="flex max-w-[260px] flex-col items-end gap-1">
+        <Button
+          size="sm"
+          variant="outline"
+          className="gap-1.5"
+          disabled
+          title="Ya hay una versión nueva procesándose. Esperá a que termine (o falle) para subir otra."
+        >
+          <Upload className="size-3.5" aria-hidden />
+          Subir nueva versión
+        </Button>
+        <p className="text-right text-xs text-muted-foreground">
+          Ya hay una versión nueva procesándose: esperá a que termine para subir otra.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <KnowledgeDocumentUploader
+      supersedes={{ documentId: current.id, title: current.title }}
+      trigger={(open) => (
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={open}>
+          <Upload className="size-3.5" aria-hidden />
+          Subir nueva versión
+        </Button>
+      )}
+    />
   )
 }
