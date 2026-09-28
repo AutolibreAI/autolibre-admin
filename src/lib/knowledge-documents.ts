@@ -139,6 +139,8 @@ export interface KnowledgeDocumentChain {
   /** El id de la primera versión: estable mientras la cadena crece. */
   rootId: string
   title: string
+  /** Igual en toda la cadena: el backend exige que una versión nueva conserve su scope. */
+  relevance: string
   current: KnowledgeDocument | null
   inFlight: Array<KnowledgeDocument>
   history: Array<KnowledgeDocument>
@@ -261,6 +263,7 @@ export function groupKnowledgeChains(docs: ReadonlyArray<KnowledgeDocument>): Ar
         rootId: root.id,
         // El título de lo que hoy sirve; sin eso, el de la versión más nueva.
         title: current?.title ?? (mainLine[mainLine.length - 1] ?? root).title,
+        relevance: root.relevance,
         current,
         inFlight,
         history,

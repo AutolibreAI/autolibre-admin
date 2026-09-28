@@ -10,6 +10,7 @@ import {
   Activity,
   BarChart3,
   Bell,
+  BookOpen,
   Car,
   Coins,
   FileText,
@@ -180,6 +181,15 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * más.
    */
   { to: "/chats", label: "Chats de IA", icon: MessageSquare },
+  /**
+   * `Conocimiento` va pegada a `Chats de IA` porque es la otra mitad del mismo
+   * asistente: los chats son lo que el asistente CONTESTÓ; esto es lo que puede
+   * CITAR al contestar — los documentos públicos del RAG (`knowledge/` del
+   * backend). Lee por SQL y escribe por HTTP (`POST
+   * /knowledge-documents/markdown`), igual que el catálogo de manuales.
+   * → `.claude/rules/knowledge-documents.md`
+   */
+  { to: "/conocimiento", label: "Conocimiento", icon: BookOpen },
   /**
    * `Notificaciones` cierra el bloque de dominio: espeja el bounded context
    * `notifications/` del backend, y va acá y no junto a `Operación` por eso —
