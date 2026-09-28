@@ -215,16 +215,13 @@ function AnsweredForm({
   run: RunFn
   loadedProposals: number
 }) {
-  const countId = useId()
   // Siembra con lo que haya cargado en la tarjeta de Presupuestos, pero SÓLO
   // como valor inicial: el operador lo puede corregir, y lo que viaja es lo
   // que quede escrito. Con cero cargados arranca vacío en vez de en "0" —
   // mandar un cero que nadie escribió diría "llamamos y no conseguimos nada".
   const [count, setCount] = useState(loadedProposals > 0 ? String(loadedProposals) : '')
 
-  // Sólo dígitos: `Number('')` es 0, y un campo vacío mandado como cero diría
-  // "no conseguimos nada" sin que nadie lo haya escrito.
-  const valid = /^\d+$/.test(count.trim())
+  const valid = isValidProposalsCount(count)
 
   return (
     <form
@@ -248,31 +245,7 @@ function AnsweredForm({
           declarar si contrató.
         </p>
       </div>
-      <div className="space-y-1">
-        <label htmlFor={countId} className="block text-xs text-muted-foreground">
-          Propuestas que se le pasaron
-        </label>
-        <Input
-          id={countId}
-          type="number"
-          inputMode="numeric"
-          min={0}
-          step={1}
-          value={count}
-          onChange={(e) => {
-            const value = e.currentTarget.value
-            setCount(value)
-          }}
-          placeholder="0"
-          className="w-28 text-xs tabular-nums"
-        />
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Cero es válido: llamamos y no conseguimos nada.
-          {loadedProposals > 0
-            ? ` Viene sembrado con los ${loadedProposals} presupuestos cargados arriba; corregilo si le pasaste otra cantidad.`
-            : ''}
-        </p>
-      </div>
+      <ProposalsCountField value={count} onChange={setCount} loadedProposals={loadedProposals} />
       <Button type="submit" size="sm" disabled={busy || !valid} className="gap-1.5">
         <CheckCheck className="size-3.5" aria-hidden />
         {busy ? 'Guardando…' : 'Marcar respondido'}
@@ -290,7 +263,6 @@ function AnsweredForm({
  * se confirma es exactamente lo que viaja.
  */
 function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy: boolean; run: RunFn }) {
-  const noteId = useId()
   const [code, setCode] = useState<OperatorCloseReason | null>(null)
   // `null` = "Sin preguntar": no se sabe cómo terminó. NO es `no_response`.
   const [outcome, setOutcome] = useState<QuoteRequestOutcome | null>(null)
@@ -327,49 +299,14 @@ function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy
       </div>
 
       <fieldset disabled={confirming || busy} className="space-y-3 disabled:opacity-60">
-        <FilterGroup label="Motivo">
-          {OPERATOR_CLOSE_REASONS.map((r) => (
-            <Chip key={r} active={code === r} onClick={() => setCode(r)}>
-              {quoteCloseReasonLabel(r)}
-            </Chip>
-          ))}
-        </FilterGroup>
-
-        <FilterGroup label="Resultado (según el operador)">
-          <Chip active={outcome === null} onClick={() => setOutcome(null)}>
-            Sin preguntar
-          </Chip>
-          {QUOTE_REQUEST_OUTCOMES.map((o) => (
-            <Chip key={o} active={outcome === o} onClick={() => setOutcome(o)}>
-              {quoteOutcomeLabel(o)}
-            </Chip>
-          ))}
-        </FilterGroup>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          «Sin preguntar» es que no se sabe; «No respondió» es que se le preguntó y no contestó. Lo que declara la
-          persona desde la app va aparte y esto no lo toca.
-        </p>
-
-        <div className="space-y-1">
-          <label htmlFor={noteId} className="block text-xs text-muted-foreground">
-            Nota para el hilo (opcional) — la persona nunca la ve
-          </label>
-          <Textarea
-            id={noteId}
-            value={note}
-            onChange={(e) => {
-              const value = e.currentTarget.value
-              setNote(value)
-            }}
-            maxLength={2000}
-            rows={2}
-            className="text-xs"
-          />
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Se agrega al hilo de notas internas en el mismo momento que el cierre: un pedido cerrado no admite
-            notas nuevas, así que las dos cosas viajan juntas.
-          </p>
-        </div>
+        <CloseFields
+          code={code}
+          onCode={setCode}
+          outcome={outcome}
+          onOutcome={setOutcome}
+          note={note}
+          onNote={setNote}
+        />
       </fieldset>
 
       {confirming && code ? (
@@ -403,6 +340,129 @@ function CloseForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy
         </Button>
       )}
     </form>
+  )
+}
+
+// ── Campos compartidos con el tablero ────────────────────────────────────────
+//
+// El tablero de `/leads/pedidos` (`QuoteBoard`) mueve estados con los MISMOS
+// SPs, y pide los mismos datos en su recuadro de confirmación. Los campos
+// viven acá, una sola vez: si «Sin preguntar» se explicara distinto en la
+// ficha y en el tablero, uno de los dos estaría mal.
+
+/**
+ * Sólo dígitos: `Number('')` es 0, y un campo vacío mandado como cero diría
+ * "no conseguimos nada" sin que nadie lo haya escrito.
+ */
+export const isValidProposalsCount = (count: string) => /^\d+$/.test(count.trim())
+
+export function ProposalsCountField({
+  value,
+  onChange,
+  loadedProposals,
+}: {
+  value: string
+  onChange: (value: string) => void
+  /** Cuántos presupuestos hay cargados; `undefined` donde no se sabe (el tablero). */
+  loadedProposals?: number
+}) {
+  const countId = useId()
+  return (
+    <div className="space-y-1">
+      <label htmlFor={countId} className="block text-xs text-muted-foreground">
+        Propuestas que se le pasaron
+      </label>
+      <Input
+        id={countId}
+        type="number"
+        inputMode="numeric"
+        min={0}
+        step={1}
+        value={value}
+        onChange={(e) => {
+          const next = e.currentTarget.value
+          onChange(next)
+        }}
+        placeholder="0"
+        className="w-28 text-xs tabular-nums"
+      />
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Cero es válido: llamamos y no conseguimos nada.
+        {loadedProposals !== undefined && loadedProposals > 0
+          ? ` Viene sembrado con los ${loadedProposals} presupuestos cargados arriba; corregilo si le pasaste otra cantidad.`
+          : ''}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Motivo, resultado y nota del cierre. Controlado: quien lo monta es dueño del
+ * estado y de la confirmación. `null` en `outcome` = «Sin preguntar», que NO
+ * es `no_response`.
+ */
+export function CloseFields({
+  code,
+  onCode,
+  outcome,
+  onOutcome,
+  note,
+  onNote,
+}: {
+  code: OperatorCloseReason | null
+  onCode: (code: OperatorCloseReason) => void
+  outcome: QuoteRequestOutcome | null
+  onOutcome: (outcome: QuoteRequestOutcome | null) => void
+  note: string
+  onNote: (note: string) => void
+}) {
+  const noteId = useId()
+  return (
+    <>
+      <FilterGroup label="Motivo">
+        {OPERATOR_CLOSE_REASONS.map((r) => (
+          <Chip key={r} active={code === r} onClick={() => onCode(r)}>
+            {quoteCloseReasonLabel(r)}
+          </Chip>
+        ))}
+      </FilterGroup>
+
+      <FilterGroup label="Resultado (según el operador)">
+        <Chip active={outcome === null} onClick={() => onOutcome(null)}>
+          Sin preguntar
+        </Chip>
+        {QUOTE_REQUEST_OUTCOMES.map((o) => (
+          <Chip key={o} active={outcome === o} onClick={() => onOutcome(o)}>
+            {quoteOutcomeLabel(o)}
+          </Chip>
+        ))}
+      </FilterGroup>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        «Sin preguntar» es que no se sabe; «No respondió» es que se le preguntó y no contestó. Lo que declara la
+        persona desde la app va aparte y esto no lo toca.
+      </p>
+
+      <div className="space-y-1">
+        <label htmlFor={noteId} className="block text-xs text-muted-foreground">
+          Nota para el hilo (opcional) — la persona nunca la ve
+        </label>
+        <Textarea
+          id={noteId}
+          value={note}
+          onChange={(e) => {
+            const next = e.currentTarget.value
+            onNote(next)
+          }}
+          maxLength={2000}
+          rows={2}
+          className="text-xs"
+        />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Se agrega al hilo de notas internas en el mismo momento que el cierre: un pedido cerrado no admite
+          notas nuevas, así que las dos cosas viajan juntas.
+        </p>
+      </div>
+    </>
   )
 }
 

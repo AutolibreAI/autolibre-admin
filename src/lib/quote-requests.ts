@@ -247,7 +247,17 @@ export const QUOTE_SORT_KEYS = [
 ] as const
 export type QuoteSortKey = (typeof QUOTE_SORT_KEYS)[number]
 
+/**
+ * Lista (la tabla) o tablero (una columna por estado, arrastrando la tarjeta
+ * para moverla). Calificado (`quoteView`, no `view`): un nombre genérico es un
+ * nombre que otra pantalla va a querer. En tablero el filtro de estado NO
+ * aplica —las columnas SON el estado— y el loader pide todos.
+ */
+export const QUOTE_VIEWS = ['lista', 'tablero'] as const
+export type QuoteView = (typeof QUOTE_VIEWS)[number]
+
 export const quoteRequestSearchSchema = z.object({
+  quoteView: z.enum(QUOTE_VIEWS).catch('lista').default('lista'),
   /** Código `AL-n`, patente, teléfono, email, nombre, descripción o email de la cuenta. */
   q: z.string().trim().max(120).optional(),
   quoteStatus: z.enum(QUOTE_STATUS_FILTERS).catch('open').default('open'),
@@ -399,6 +409,32 @@ export type AddQuoteRequestInternalNoteInput = z.infer<typeof addQuoteRequestInt
 export interface QuoteRequestWriteResult {
   id: string
   status: string
+}
+
+/**
+ * Qué movimiento acepta cada estado — el ESPEJO de las guardas de los SPs de
+ * la 011 (`ops._assert_quote_request_status`), para que el tablero no ofrezca
+ * soltar una tarjeta donde la base la va a rechazar:
+ *
+ * - `received` → `contacted` (`mark_quote_request_contacted`)
+ * - `contacted` → `answered` (`mark_quote_request_answered`)
+ * - cualquier abierto → `closed` (`close_quote_request`)
+ *
+ * `received` → `answered` NO está: el SP de respondido exige `contacted`. Y
+ * ninguno retrocede, ni sale de `closed` — por eso TODO movimiento es
+ * irreversible y el tablero pide confirmación siempre. Si este mapa y los SP
+ * divergen, el SP gana (la UI no es el guard) y la tarjeta vuelve con un error.
+ */
+export const QUOTE_REQUEST_TRANSITIONS: Record<QuoteRequestStatus, ReadonlyArray<QuoteRequestStatus>> = {
+  received: ['contacted', 'closed'],
+  contacted: ['answered', 'closed'],
+  answered: ['closed'],
+  closed: [],
+}
+
+export function canMoveQuoteRequest(from: string, to: string): boolean {
+  const allowed = (QUOTE_REQUEST_TRANSITIONS as Record<string, ReadonlyArray<string> | undefined>)[from]
+  return allowed?.includes(to) ?? false
 }
 
 /** Sentinela del handler cuando `quote_requests` no existe o le faltan columnas. */

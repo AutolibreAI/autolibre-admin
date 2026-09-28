@@ -24,8 +24,8 @@ en `src/fn/ops.ts`.
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
 regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
 las migraciones 011 y 012. Seguros, Multas y las dos pestañas "todavía no" no
-escriben nada. Pedidos sí: la ficha mueve estados y el listado carga pedidos a
-mano (ver Pedidos, abajo).
+escriben nada. Pedidos sí: la ficha y el tablero mueven estados y el listado
+carga pedidos a mano (ver Pedidos, abajo).
 
 ## `/leads` es un layout, no una pantalla
 
@@ -610,6 +610,59 @@ las plantillas, la lectura de `location_address` y Pedidos como pestaña default
 Si vuelve la idea de acciones rápidas en la fila, llaman a los MISMOS SPs que la
 ficha. Un segundo camino de escritura para la misma transición es justo lo que
 se sacó.
+
+### El tablero (`quoteView=tablero`) — desde el 2026-09-27
+
+Alcance: `src/components/QuoteBoard.tsx`, `src/components/ui/dialog.tsx`,
+`QUOTE_VIEWS` / `QUOTE_REQUEST_TRANSITIONS` / `canMoveQuoteRequest` de
+`~/lib/quote-requests`, y `CloseFields` / `ProposalsCountField` /
+`isValidProposalsCount`, extraídos de `QuoteRequestActions.tsx`.
+
+La otra vista de `/leads/pedidos`: una columna por estado (Recibido ·
+Contactado · Respondido · Cerrado) y la tarjeta se ARRASTRA a otra columna para
+moverla. Es el "acciones rápidas en la fila" que la sección de arriba dejaba
+abierto, y cumple su condición: **llama a los MISMOS SPs que la ficha**
+(`markQuoteRequestContactedFn` / `markQuoteRequestAnsweredFn` /
+`closeQuoteRequestFn`). Si aparece un cuarto camino para mover un pedido, está
+mal.
+
+- **`quoteView`, calificado** (no `view`). En tablero el filtro de estado se
+  esconde y el loader pide `quoteStatus: 'all'`: las columnas SON el estado.
+  Los demás filtros (texto, canal, resultado, sin contactar) siguen valiendo, y
+  el orden dentro de cada columna es el `sort`/`dir` de la lista.
+- **`QUOTE_REQUEST_TRANSITIONS` es un ESPEJO de las guardas de los SPs**
+  (`ops._assert_quote_request_status`): `received → contacted`,
+  `contacted → answered`, cualquier abierto `→ closed`. `received → answered`
+  NO está (el SP exige `contacted`), ni ningún retroceso, ni nada desde
+  `closed`. Mientras se arrastra, las columnas que no aceptan la tarjeta se
+  apagan y dicen por qué. Si el espejo y el SP divergen, gana el SP: el error
+  vuelve legible y la tarjeta no se movió.
+- **Todo movimiento pide confirmación.** El pedido original era "si es
+  irreversible, preguntar", y en este dominio lo son TODOS: ningún SP
+  retrocede. Soltar no escribe — abre un recuadro «¿Estás seguro?» con Sí / No
+  que pide, en el mismo lugar, lo que la transición necesita: la cantidad de
+  propuestas para respondido; motivo, resultado y nota para el hilo para
+  cerrar. Son los campos de la ficha, extraídos a componentes compartidos:
+  si «Sin preguntar» se explicara distinto en los dos lados, uno estaría mal.
+- **Sin movimiento optimista.** La tarjeta cambia de columna recién cuando la
+  base confirma y el loader se relee. «No» o un error no dejan nada que
+  deshacer. Un `INVALID_QUOTE_REQUEST_TRANSITION` (la persona canceló desde la
+  app) relee el tablero y deja el error en el recuadro.
+- **«Propuestas» arranca VACÍO en el tablero**, no sembrado como en la ficha:
+  el listado no trae cuántos presupuestos hay cargados en
+  `ops.quote_request_response`, y sembrar con un número que no se leyó sería
+  inventarlo. Mismo criterio: un campo vacío nunca viaja como cero.
+- **Arrastre HTML5 nativo, sin librería.** No anda con teclado ni en táctil.
+  Hubo un «Mover a…» por tarjeta como alternativa y **se sacó a pedido el
+  2026-09-27** (no se usaba): para mover sin arrastrar está la ficha.
+- **Un click en la tarjeta abre la ficha.** Es el link del `AL-n` ESTIRADO
+  sobre la tarjeta (`after:absolute after:inset-0`), no un `onClick` sobre el
+  `<article>`: sigue siendo un link real (Tab, botón del medio). Lleva
+  `draggable={false}` —un link es arrastrable por sí mismo y arrastraría la
+  URL— y el navegador no dispara `click` al terminar un arrastre, así que
+  soltar una tarjeta no navega.
+- **La nota interna suelta sigue en la ficha.** El tablero sólo mueve estados;
+  la única nota que escribe es la del cierre, que viaja atómica con él (016).
 
 ### Cargar un pedido a mano (`<QuoteRequestComposer/>`) — desde el 2026-09-15
 

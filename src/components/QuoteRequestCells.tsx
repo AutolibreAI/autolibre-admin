@@ -1,4 +1,5 @@
 import { AlertTriangle, MessageCircle } from 'lucide-react'
+import { formatInt } from '~/lib/format'
 import { Badge } from '~/components/ui/badge'
 import { quoteStatusLabel, quoteWhatsAppUrl, type QuoteRequestListItem } from '~/lib/quote-requests'
 
@@ -95,4 +96,14 @@ export function QuoteWhatsAppLink({
       Escribir por WhatsApp
     </a>
   )
+}
+
+/**
+ * "hace 5 h" / "hace 3 d". Lectura del reloj de Postgres (`ageHours` viene del
+ * SELECT), no del navegador: la pantalla es SSR completo y restar contra
+ * `new Date()` daría otro string al hidratar. Compartido por la lista y el
+ * tablero.
+ */
+export function quoteAgeLabel(hours: number): string {
+  return hours < 48 ? `hace ${formatInt(hours)} h` : `hace ${formatInt(Math.floor(hours / 24))} d`
 }
