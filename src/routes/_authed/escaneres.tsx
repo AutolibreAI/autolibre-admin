@@ -1,7 +1,7 @@
 import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
 
 /**
- * `/escaneres` — la sección de escáneres OBD, en tres pestañas.
+ * `/escaneres` — la sección de escáneres OBD, en cuatro pestañas.
  *
  * Antes era una sola pantalla (la matriz de compatibilidad). Ahora:
  *
@@ -14,8 +14,11 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  *  - **Detecciones** — cada fila un código DTC o un tipo de anomalía, agregado
  *    sobre los escaneos que trajeron datos: cuántas veces, en cuántos autos,
  *    en cuántos modelos. → `.claude/rules/scan-detections.md`
+ *  - **Comparar** — escaneos de autos iguales o parecidos, PID por PID: el
+ *    valor normal de un modelo y qué cambia con DTCs, km o mantenimiento.
+ *    → `.claude/rules/scan-compare.md`
  *
- * Las dos son SOLO LECTURA: un escaneo es un hecho que pasó, no un estado que el
+ * Las cuatro son SOLO LECTURA: un escaneo es un hecho que pasó, no un estado que el
  * admin mueva. Mismo patrón de layout que `/vehiculos` y `/leads`.
  *
  * SSR heredado (`true`): este layout es sólo la barra de pestañas y un
@@ -30,6 +33,7 @@ const TABS = [
   { to: '/escaneres/compatibilidad', label: 'Compatibilidad' },
   { to: '/escaneres/sesiones', label: 'Sesiones' },
   { to: '/escaneres/detecciones', label: 'Detecciones' },
+  { to: '/escaneres/comparar', label: 'Comparar' },
 ] as const
 
 function EscaneresLayout() {

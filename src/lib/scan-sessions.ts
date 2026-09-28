@@ -296,8 +296,59 @@ export interface ScanAiDiagnostic {
   createdAt: string
 }
 
+/** Otro escaneo del MISMO vehículo — para navegar la historia del auto desde la ficha. */
+export interface ScanVehicleSession {
+  id: string
+  startedAt: string
+  bucket: SessionBucket
+  totalReadings: number
+  dtcCount: number
+  hasAnalysis: boolean
+}
+
+/**
+ * El último mantenimiento HECHO (`performed_at` cargado, no archivado) antes
+ * del día del escaneo. Es contexto para leer un PID ("¿le cambiaron el filtro
+ * de aire antes de este LTFT?"), no una causa: la pantalla no los relaciona.
+ */
+export interface ScanMaintenanceRef {
+  name: string | null
+  serviceSlug: string | null
+  /** `YYYY-MM-DD`, armado en SQL: es un `date`, y pasarlo por `Date` corre el día. */
+  performedAt: string
+  odometerAtService: number | null
+  workshop: string | null
+}
+
+/** Un código del snapshot con su título del catálogo local (puede no tenerlo). */
+export interface ScanDtcCode {
+  code: string
+  title: string | null
+  system: string | null
+}
+
 /** Todo lo que el panel sabe de UNA sesión — la fila más lo que cuelga de ella. */
 export interface ScanSessionDetail extends ScanSessionRow {
+  /** El catálogo del auto — lo que usa el link "comparar con autos iguales". */
+  catalogId: string | null
+  /** Del spec, cuando está cargado (en muchos catálogos no). */
+  fuelType: string | null
+  transmission: string | null
+  /**
+   * `vehicles.odometer_value`: el km ACTUAL del auto, no el del día del
+   * escaneo — la base no guarda el km por sesión. `null` o `0` = no cargado.
+   */
+  vehicleOdometerKm: number | null
+  /**
+   * TODOS los códigos del snapshot con su título. `dtcDetails` sólo trae los
+   * que además tienen fila en `diagnostic_dtcs` (los que alguien buscó).
+   */
+  dtcCodeInfo: Array<ScanDtcCode>
+  /** Todos los escaneos del mismo vehículo, el actual incluido, del más nuevo al más viejo. */
+  vehicleSessions: Array<ScanVehicleSession>
+  lastMaintenance: ScanMaintenanceRef | null
+  /** Cuántos mantenimientos hechos tiene el auto hasta el día del escaneo. */
+  maintenanceBeforeCount: number
   /** `driving_sessions.created_at` — cuándo se creó la fila, distinto de `startedAt`. */
   createdAt: string
   chunkSize: number

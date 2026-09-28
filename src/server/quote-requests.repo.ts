@@ -156,15 +156,21 @@ const uncontactedPredicate = (alias: string, param: string) =>
     and ${alias}created_at < now() - make_interval(hours => ${param}::int))`
 
 /**
- * "No es un duplicado" — compartido entre `quoteRequestPulse()` y
- * `quoteRequestSeries()`. Verificado el 2026-09-17 contra producción: 15 de 17
- * pedidos son duplicados que el operador marcó a mano. Si esta condición
- * divergiera entre la card de Inicio y la serie de `/metricas`, "pedidos de
- * esta semana" contaría distinto en las dos pantallas. Sin alias — las dos
- * consultas que la usan tienen una sola tabla en scope en el punto donde se
- * filtra.
+ * "Es un pedido REAL" — no está cerrado como `duplicate`. El operador usa ese
+ * código para dos cosas: el duplicado de verdad (la persona reenvió, doble
+ * submit) y **los pedidos de PRUEBA que manda el propio equipo** (dato de
+ * producto del 2026-09-25). Así que ningún número que se use para medir los
+ * cuenta: la card "Pedidos totales", la serie de `/metricas`, el resumen de
+ * `/leads/pedidos` y el feed de `/actividad` importan ESTE predicado.
+ *
+ * Al 2026-09-25 en producción: 25 de 32. Si divergiera entre dos pantallas,
+ * "pedidos de esta semana" contaría distinto en cada una sin ningún error que
+ * lo delate. `alias` con el punto incluido (`'qr.'`) o vacío.
  */
-const NOT_DUPLICATE_PREDICATE = `close_reason_code is distinct from 'duplicate'`
+export const notDuplicatePredicate = (alias = '') =>
+  `${alias}close_reason_code is distinct from 'duplicate'`
+
+const NOT_DUPLICATE_PREDICATE = notDuplicatePredicate()
 
 /**
  * ── LEFT en las cuatro patas ───────────────────────────────────────────────
@@ -416,6 +422,8 @@ export async function listQuoteRequests(
 
   if (search.quoteUncontacted) where.push('uncontacted')
 
+  if (!search.quoteShowDuplicates) where.push(NOT_DUPLICATE_PREDICATE)
+
   const rows = await sql<ListRow>(
     `
     select * from (
@@ -449,6 +457,7 @@ export async function quoteRequestStatusSummary(
 
   const row = await sqlOne<{
     total: number | string
+    duplicates: number | string
     received: number | string
     contacted: number | string
     answered: number | string
@@ -456,20 +465,24 @@ export async function quoteRequestStatusSummary(
     cancelled_by_user: number | string
     uncontacted: number | string
   }>(
+    // Todo contador va con el corte de pedido REAL; los duplicados se cuentan
+    // aparte. Un solo SELECT, un solo snapshot: total = suma de los cuatro.
     `select
-       count(*)::int as total,
-       count(*) filter (where status = 'received')::int as received,
-       count(*) filter (where status = 'contacted')::int as contacted,
-       count(*) filter (where status = 'answered')::int as answered,
-       count(*) filter (where status = 'closed')::int as closed,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE})::int as total,
+       count(*) filter (where not (${NOT_DUPLICATE_PREDICATE}))::int as duplicates,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'received')::int as received,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'contacted')::int as contacted,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'answered')::int as answered,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'closed')::int as closed,
        count(*) filter (where close_reason_code = 'cancelled_by_user')::int as cancelled_by_user,
-       count(*) filter (where ${uncontactedPredicate('', '$1')})::int as uncontacted
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and ${uncontactedPredicate('', '$1')})::int as uncontacted
      from quote_requests`,
     [QUOTE_UNCONTACTED_AFTER_HOURS],
   )
 
   return {
     total: toInt(row?.total),
+    duplicates: toInt(row?.duplicates),
     byStatus: {
       received: toInt(row?.received),
       contacted: toInt(row?.contacted),

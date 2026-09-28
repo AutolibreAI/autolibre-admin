@@ -35,6 +35,8 @@ import { z } from 'zod'
  * | `assistant_proposals` (5) | La propone la IA. Aceptarla sí es del usuario, pero con 5 filas todavía no vale una rama. |
  * | `partner_applications` (14) | Es un taller, no un usuario de la app — la columna "quién" quedaría vacía. Tiene `/solicitudes`. |
  * | `recommendation_impressions`, `leads` | 0 filas en producción. |
+ * | `conversations` SIN mensajes (125 de 228) | Abrir el asistente sin escribir no es algo que la persona hizo. Decidido el 2026-09-25; tampoco se listan en `/chats`. |
+ * | `quote_requests` cerrados como `duplicate` (25 de 32) | El operador marca así los duplicados Y los pedidos de prueba del equipo. Mismo corte que la card "Pedidos totales". Decidido el 2026-09-25. |
  *
  * Si mañana una de esas se vuelve importante, es una rama más en
  * `activity-feed.repo.ts` + una entrada acá. Eso es todo.
@@ -223,8 +225,6 @@ export const ACTIVITY_OUTCOMES: Record<string, { label: string; tone: OutcomeTon
   sin_datos: { label: 'sin datos', tone: 'warn' },
   fallado: { label: 'falló', tone: 'warn' },
   pendiente: { label: 'pendiente', tone: 'muted' },
-  // conversations
-  sin_mensajes: { label: 'sin mensajes', tone: 'muted' },
   // document_status
   active: { label: 'vigente', tone: 'ok' },
   expired: { label: 'vencido', tone: 'warn' },

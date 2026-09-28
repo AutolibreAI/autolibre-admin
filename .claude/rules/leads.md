@@ -298,6 +298,24 @@ esta semana" contaría distinto en la card de Inicio y en el gráfico de
 `/metricas`, del mismo conjunto de filas — misma clase de acoplamiento que
 `INTERNAL_PREDICATE` entre `ops.repo.ts` y `ops.v_ai_usage`.
 
+### Duplicado = "no es un pedido real", y ningún número de medición lo cuenta — desde el 2026-09-25
+
+Dato de producto: `close_reason_code = 'duplicate'` es cómo el equipo descarta
+los duplicados de verdad **y los pedidos de PRUEBA que manda él mismo**. Por eso
+el predicado se exportó como `notDuplicatePredicate(alias)` y lo usan TODOS los
+números: la card "Pedidos totales", la serie de `/metricas`, el feed de
+`/actividad` y, desde esta fecha, el resumen de `/leads/pedidos`.
+
+- `quoteRequestStatusSummary()` cuenta cada estado SIN duplicados y trae
+  `duplicates` aparte. Cuadre: Recibidos + Contactados + Respondidos + Cerrados
+  = la card de Inicio (7 al 2026-09-25, con 25 descartados). El subtítulo dice
+  "de N pedidos reales (M descartados como duplicado o prueba)".
+- El listado los esconde salvo `quoteShowDuplicates` (chip "Incluir duplicados
+  / prueba", sólo visible si hay alguno). Son filas que el operador tiene que
+  poder encontrar, pero no pedidos.
+- `cancelled_by_user` y `duplicate` son disjuntos (una sola columna), así que
+  el "N cancelados por el usuario" del tile de Cerrados no cambia.
+
 ### `QuoteRequest` ≠ `Lead`
 
 El aggregate es `QuoteRequest` (bounded context `quotes/`, tabla

@@ -13,8 +13,11 @@ import type {
   ScanEvidenceValue,
   ScanMetric,
   ScanNotEvaluable,
+  ScanDtcCode,
+  ScanMaintenanceRef,
   ScanSessionDetail,
   ScanSessionRow,
+  ScanVehicleSession,
   ScanSessionSearch,
   ScanSessionSortKey,
   ScanTelemetryAnalysis,
@@ -303,6 +306,10 @@ interface DetailRow {
   vehicle_id: string
   plate: string
   alias: string | null
+  odometer_value: number | string | null
+  catalog_id: string | null
+  fuel_type: string | null
+  transmission: string | null
   brand: string | null
   model: string | null
   trim: string | null
@@ -362,6 +369,24 @@ interface TelemetryRow {
   metrics: Record<string, ScanMetric> | null
 }
 
+interface VehicleSessionRow {
+  id: string
+  started_at: Date | string
+  status: string
+  total_readings: number | string
+  dtc_count: number | string
+  has_analysis: boolean
+}
+
+interface MaintenanceRow {
+  name: string | null
+  service_slug: string | null
+  performed_at: string
+  odometer_at_service: number | string | null
+  workshop: string | null
+  done_before: number | string
+}
+
 interface AiDiagnosticRow {
   id: string
   text: string | null
@@ -405,7 +430,8 @@ export async function getScanSessionDetail(
 ): Promise<ScanSessionDetail | null> {
   void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
 
-  const [row, chunkRows, dtcRows, telemetryRow, aiRows] = await Promise.all([
+  const [row, chunkRows, dtcRows, telemetryRow, aiRows, vehicleSessionRows, maintenanceRow] =
+    await Promise.all([
     sqlOne<DetailRow>(
       `
       select
@@ -417,7 +443,8 @@ export async function getScanSessionDetail(
         ds.created_at,
         extract(epoch from (ds.ended_at - ds.started_at))::int as duration_s,
         u.id as user_id, u.email as user_email, u.name as user_name,
-        v.id as vehicle_id, v.plate, v.alias,
+        v.id as vehicle_id, v.plate, v.alias, v.odometer_value,
+        vc.id as catalog_id, vcs.fuel_type::text as fuel_type, vcs.transmission::text as transmission,
         vc.brand, vc.model, vc.trim, vc.year,
         ds.scanner_type::text                  as scanner_type,
         ds.scanner_firmware,
@@ -461,6 +488,32 @@ export async function getScanSessionDetail(
               failure_reason, prompt_tokens, completion_tokens,
               embedding_tokens, embedding_model, rag_docs_used, created_at
        from ai_diagnostics where session_id = $1 order by created_at`,
+      [sessionId],
+    ),
+    // Los otros escaneos del MISMO auto. Se resuelve el vehiculo por
+    // subconsulta para no serializar esta consulta detras de la principal.
+    sql<VehicleSessionRow>(
+      `select ds2.id, ds2.started_at, ds2.status::text as status, ds2.total_readings,
+              coalesce((select array_length(s.codes, 1) from session_dtc_snapshots s
+                         where s.session_id = ds2.id limit 1), 0) as dtc_count,
+              exists (select 1 from driving_telemetry_analysis t where t.session_id = ds2.id) as has_analysis
+         from driving_sessions ds2
+        where ds2.vehicle_id = (select vehicle_id from driving_sessions where id = $1)
+        order by ds2.started_at desc`,
+      [sessionId],
+    ),
+    // El ultimo mantenimiento HECHO hasta el dia del escaneo, en hora de Buenos
+    // Aires (performed_at es la fecha que tipeo la persona, en su zona).
+    // done_before viaja en la misma fila como ventana, no como otra consulta.
+    sqlOne<MaintenanceRow>(
+      `select mo.name, mo.service_slug, to_char(mo.performed_at, 'YYYY-MM-DD') as performed_at,
+              mo.odometer_at_service, mo.workshop, count(*) over ()::int as done_before
+         from maintenance_occurrences mo
+         join driving_sessions ds3 on ds3.id = $1 and ds3.vehicle_id = mo.vehicle_id
+        where not mo.archived and mo.performed_at is not null
+          and mo.performed_at <= (ds3.started_at at time zone 'America/Argentina/Buenos_Aires')::date
+        order by mo.performed_at desc, mo.created_at desc
+        limit 1`,
       [sessionId],
     ),
   ])
@@ -538,6 +591,30 @@ export async function getScanSessionDetail(
     createdAt: toIso(r.created_at) as string,
   }))
 
+  const dtcCodeInfo: Array<ScanDtcCode> = dtcCodes.map((code) => {
+    const info = lookupDtc(code)
+    return { code, title: info?.title ?? null, system: info?.system ?? null }
+  })
+
+  const vehicleSessions: Array<ScanVehicleSession> = vehicleSessionRows.map((r) => ({
+    id: r.id,
+    startedAt: toIso(r.started_at) as string,
+    bucket: sessionBucket(r.status, toInt(r.total_readings)),
+    totalReadings: toInt(r.total_readings),
+    dtcCount: toInt(r.dtc_count),
+    hasAnalysis: r.has_analysis,
+  }))
+
+  const lastMaintenance: ScanMaintenanceRef | null = maintenanceRow
+    ? {
+        name: maintenanceRow.name,
+        serviceSlug: maintenanceRow.service_slug,
+        performedAt: maintenanceRow.performed_at,
+        odometerAtService: toNum(maintenanceRow.odometer_at_service),
+        workshop: maintenanceRow.workshop,
+      }
+    : null
+
   const anomalies: Array<ScanAnomaly> = (telemetry?.anomalies ?? []).map((a) => ({
     type: a.type,
     severity: a.severity,
@@ -586,5 +663,13 @@ export async function getScanSessionDetail(
     dtcDetails,
     telemetry,
     aiDiagnostics,
+    catalogId: row.catalog_id,
+    fuelType: row.fuel_type,
+    transmission: row.transmission,
+    vehicleOdometerKm: toNum(row.odometer_value),
+    dtcCodeInfo,
+    vehicleSessions,
+    lastMaintenance,
+    maintenanceBeforeCount: toInt(maintenanceRow?.done_before),
   }
 }
