@@ -59,6 +59,9 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 > sobra, estaría mal: se saltearía el filtro de preferencias (`announcement` silenciado) y las
 > invariantes de `Notification.create()`. Son dos las pantallas que escriben por HTTP, y un solo
 > cliente: `src/server/backend.ts`. → `.claude/rules/notifications.md`
+>
+> **El 2026-09-28, tercera vez**: `POST /knowledge-documents/markdown` (`AdminGuard`) para los
+> documentos públicos del RAG, desde `/conocimiento`. → `.claude/rules/knowledge-documents.md`
 
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
 > El que manda es el `-hex`. Si una ruta te lleva al otro, estás mirando el lugar equivocado.
@@ -108,7 +111,7 @@ migra Drizzle desde `autolibre-backend-hex` — este runner no lo toca. Y `ops.s
 | Var | Para qué | Si falta |
 |---|---|---|
 | `POSTGRES_DATABASE_URL` | Todo el SQL del panel | Falla en la primera consulta, no al arrancar |
-| `AUTOLIBRE_BACKEND_URL` | Subir manuales y mandar notificaciones ad-hoc, contra el backend hex. **Con el prefijo `/api/v1` incluido** | En dev usa `http://localhost:3005/api/v1`; en producción **falla** — adivinar una URL de producción es peor que fallar |
+| `AUTOLIBRE_BACKEND_URL` | Subir manuales, mandar notificaciones ad-hoc y subir documentos de conocimiento, contra el backend hex. **Con el prefijo `/api/v1` incluido** | En dev usa `http://localhost:3005/api/v1`; en producción **falla** — adivinar una URL de producción es peor que fallar |
 
 Las dos fallan en el **primer uso**, nunca al cargar el módulo. En Vercel el entry serverless
 importa todos los handlers de ruta por adelantado, así que un `throw` en scope de módulo se lleva
@@ -172,7 +175,7 @@ src/
 │   └── middleware.ts        # request/function middleware (sesión, roles)
 ├── server/                  # SERVER-ONLY. Acceso a datos y secretos.
 │   ├── db.ts                #   pool de pg — todo el SQL pasa por acá
-│   ├── backend.ts           #   el ÚNICO cliente HTTP al backend hex (manuales + notificaciones ad-hoc)
+│   ├── backend.ts           #   el ÚNICO cliente HTTP al backend hex (manuales, notificaciones ad-hoc, conocimiento)
 │   └── session.ts           #   Clerk (quién) + users.role (qué puede)
 ├── lib/                     # Contratos compartidos: types, schemas de search, format, cn
 ├── components/
@@ -220,6 +223,7 @@ pantalla no va todavía.
 | `/escaneres/comparar` | `'data-only'` | **La consulta que nadie arma**: abrir el `metrics` de N escaneos del mismo modelo y compararlos a ojo — "¿cuál es el LTFT normal de un Vento 2.5?". Elegís un modelo y cuán parecidos (exacto / misma versión cualquier año / mismo modelo), después autos, escaneos y PIDs (multiselect); un gráfico de RANGO por PID con el valor típico por escaneo y por auto, agrupable por auto, DTCs, mantenimiento previo, año, km, caja o combustible. Las curvas en el tiempo no: están en DigitalOcean y no se tocan (decidido el 2026-09-25). Excluye lecturas dudosas (valores físicamente imposibles) con el conteo a la vista → `.claude/rules/scan-compare.md` |
 | `/chats` | `true` | El `select * from conversations c join conversation_messages m on m.conversation_id = c.id where c.user_id = '…'` que hoy sería la única forma de ver de qué habló un usuario con el asistente — con lo que ese select no contesta solo: si es de diagnóstico o general (deriva de `vehicle_id`), con qué modelo, y cuántos mensajes mandó cada lado. Desde el 2026-09-25 las conversaciones SIN mensajes no se listan nunca (125 de 228 eran ruido) |
 | `/chats/:id` | `true` | El chat completo, en orden — hoy inexistente como pantalla, sólo reconstruible mensaje por mensaje en DBeaver |
+| `/conocimiento` | `true` | El `curl -F file=@guia.md … POST /knowledge-documents/markdown` con un token de Clerk copiado a mano, más el `select id, title, status, failure_reason from knowledge_documents` para saber si la ingesta terminó, y —desde la 0102 del backend— seguir `supersedes_document_id` a mano para saber qué versión usa HOY el asistente. Lista los documentos PÚBLICOS del RAG agrupados en cadenas de versiones (en uso · en curso/fallida · historial), con refresco automático mientras haya alguno `pending`. **Escribe por HTTP** (tercera pantalla que lo hace): "Subir documento" y "Subir nueva versión" (`supersedesDocumentId`), markdown ≤ 1 MB, sólo `relevance = global`. Retirar un documento sin reemplazo no tiene endpoint en el backend → `.claude/rules/knowledge-documents.md` |
 | `/documentos` | `true` | Los `select * from insurances / registration_cards / driver_licenses / vehicle_inspections where user_id = '…'` sueltos que hoy hacen falta para auditar lo que el OCR extrajo de un documento, más el cruce contra `vehicles` (patente OCR vs patente real, VIN, marca) que nadie corre. **Read-only**: editar necesita un SP de `ops` con auditoría, y mostrar el archivo necesita un endpoint admin en el backend — las dos cosas son un paso aparte |
 | `/documentos/:tipo/:id` | `true` | Todos los campos que el OCR extrajo de un documento, contrastados campo por campo contra el vehículo. Los `:tipo` son `seguro`/`cedula`/`registro`/`vtv` |
 | `/notificaciones` | `true` | Layout de 3 pestañas (Historial · Envíos · Reglas). **NO redirige**: el índice ES el historial, porque `/usuarios/:id` y `/operacion` ya linkeaban a la raíz con search params. → `.claude/rules/notifications.md` |
@@ -340,6 +344,18 @@ el backend filtra a quien silenció `announcement` y arma cada fila con `Notific
 Lo que esto **no** habilita: ningún `INSERT INTO notifications` desde el panel, y ningún
 `broadcastId` generado en el servidor (es la clave de idempotencia; lo genera el cliente, una vez
 por campaña). → `.claude/rules/notifications.md`
+
+### 4c. Los documentos de conocimiento del RAG se suben por HTTP contra el backend hex
+
+**Decidido el 2026-09-28.** Tercera excepción a la decisión 1, mismo cliente y misma identidad. El
+grep da positivo: `POST /knowledge-documents/markdown` bajo `AdminGuard`. Un `INSERT` sería
+imposible: el markdown va a Spaces, el backend valida UTF-8 y `rag:skip` antes de subir, y la
+ingesta corre asincrónica del otro lado. La lectura (estado y cadena de versiones) sí es SQL.
+
+A diferencia de los manuales, **el archivo SÍ pasa por el server function** (`FormData` como `data`
+de un server fn POST): el backend corta en 1MB y el techo de 4.5MB de Vercel no llega a morder. Si
+el backend sube su límite por encima de ~4MB, hay que pasar a subida directa.
+→ `.claude/rules/knowledge-documents.md`
 
 ## ⚠ Riesgo abierto: admins `native` heredados
 
@@ -525,6 +541,7 @@ renderiza filas en blanco el día que aparece un valor que no conoce.
 | `users.md` | El expediente del usuario: por qué el censo es de 29 relaciones y no de 42, por qué el cero SE MUESTRA acá y se esconde en Inicio, y las dos escrituras que se decidió no hacer |
 | `vehicles.md` | La sección Vehículos (antes `/catalogo`): las 2 pestañas (Catálogo y Flota se fusionaron el 2026-09-17), por qué el listado NO deduplica, por qué Catálogo agrupa por modelo y no por spec, el universo superconjunto (210 modelos, incluidos los 30 sin auto), el color de "Manuales" por dos columnas, los predicados compartidos con `fines.repo`/`users.repo`/`scanners.repo`, y `vehicle_tax_debts` vacía en producción. Desde el 2026-09-28 también el listado con todas las columnas ordenables y filtrables, y la ficha `/vehiculos/:vehicleId`: qué se portó de la rama `listado-vehiculos` y qué se corrigió al portarlo (DTC desde los snapshots, documentos por fecha y no por `status`, search params calificados, chats sin vacíos, censo con guard) |
 | `vehicle-manuals.md` | Manuales de vehículos: por qué el manual cuelga del CATÁLOGO y no del spec, la subida directa a Spaces en cuatro llamadas (y por qué proxear el archivo era el error), el token de Clerk contra el backend, y las cuatro trampas (descarga acotada al dueño, el límite de plataforma que sólo aparece en producción, el doble salto `vehicles`→`specs`→`catalogs`, y la ausencia de UNIQUE) |
+| `knowledge-documents.md` | Conocimiento (`/conocimiento`): los documentos PÚBLICOS del RAG. Lee por SQL y escribe por HTTP (`POST /knowledge-documents/markdown`); por qué acá el archivo SÍ se proxea (`FormData` como input de un server fn, 1MB del backend contra 4.5MB de Vercel); la cadena de versiones de la 0102 (varios sucesores `failed`, a lo sumo uno no fallido, `superseded_by` derivado con subconsulta escalar, `groupKnowledgeChains` puro con `current`/`inFlight`/`history`); cuándo NO se ofrece "nueva versión" (sin `current`, o con un sucesor `pending`); el sondeo cada 5 s que se apaga solo; `<!-- rag:skip -->`; el modo `detailed` de `backendError` (opt-in para no romper el `BACKEND_ERROR:404` de los manuales); y que retirar un documento sin reemplazo no tiene endpoint |
 | `chats.md` | Chats de IA: por qué `type` y `title` no son columnas y cómo se derivan, por qué el modelo es texto libre y no un enum, por qué `q` va en el `where` de afuera, y las tres patas `LEFT` del join al vehículo |
 | `feedback.md` | Feedback: por qué salió de `ACTIVITY_DETAIL_KINDS` y adónde linkea ahora, por qué no hay ventana por default, los search params calificados, y el botón "Responder" con `BroadcastComposer` (`presetRecipient`/`trigger`) |
 | `documents.md` | Documentos OCR (`/documentos`): el predicado "es OCR" (`file_id IS NOT NULL`, + `source='manual'` para VTV), por qué el filtro de tipo se llama `kind` y no `type`, `mismatch` vs `missing` como flags separados, y por qué la pantalla es read-only y sin preview del archivo |
