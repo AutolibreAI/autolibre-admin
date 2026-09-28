@@ -595,28 +595,6 @@ const DETAIL_NO_VEHICLE_COLS = `
  * impide un click que lleva a una pantalla vacía.
  */
 const DETAIL_QUERIES: Record<ActivityDetailKind, string> = {
-  vehiculo: `
-    select v.id as id, v.created_at as occurred_at,
-      ${DETAIL_USER_COLS}, ${DETAIL_VEHICLE_COLS},
-      case when v.archived then 'archivado' end as outcome,
-      ${fields([
-        ['Patente', 'v.plate'],
-        ['Alias', `nullif(btrim(v.alias), '')`],
-        ['Modelo del catálogo', VEHICLE_LABEL],
-        ['Motor / caja', `nullif(concat_ws(' · ', vcs.engine, vcs.fuel_type, vcs.transmission), '')`],
-        ['VIN', `nullif(btrim(v.vin), '')`],
-        ['Nº de motor', `nullif(btrim(v.engine_number), '')`],
-        ['Color', `nullif(btrim(v.color), '')`],
-        ['Kilometraje', `case when coalesce(v.odometer_value, 0) > 0 then v.odometer_value end`],
-        ['Patentado en', 'v.registered_at', 'date'],
-        ['Última actualización', 'v.updated_at', 'datetime'],
-      ])} as fields
-    from vehicles v
-    join users u on u.id = v.user_id
-    ${CATALOG_JOINS}
-    where v.id = $1
-  `,
-
   mantenimiento: `
     select mo.id as id, mo.created_at as occurred_at,
       ${DETAIL_USER_COLS}, ${DETAIL_VEHICLE_COLS},

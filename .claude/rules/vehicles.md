@@ -174,6 +174,107 @@ tres consultas (`listVehicles`, `listCatalogUsers`, `listUserVehicleSummaries`)
 toman la radicación del MISMO `locationJoin`, y el cuadre del listado sigue
 siendo `count(*) from vehicles` (el join es 1:1 por `UNIQUE (plate)`).
 
+## Lo que vino de la rama `listado-vehiculos` — portado el 2026-09-28
+
+La rama `origin/listado-vehiculos` (2026-09-04) armaba `/vehiculos` como un
+listado con ficha, antes de que la sección fuera un layout de pestañas. No se
+mergeó: habría pisado Catálogo, la radicación y el listado actual. Se PORTARON
+sus dos features —el listado con todas las columnas ordenables y filtrables, y
+la ficha `/vehiculos/:vehicleId`— sobre lo que hay hoy.
+
+Alcance nuevo: `src/server/vehicle-detail.repo.ts`,
+`src/routes/_authed/vehiculos.$vehicleId.tsx`, `RangeFilter` en
+`src/components/Filters.tsx`, `listVehicleFacets` y el `listVehicles` ampliado.
+
+### Lo que se CORRIGIÓ al portar — no volver a la versión de la rama
+
+1. **Los DTC salen de `session_dtc_snapshots.codes`, nunca de `diagnostic_dtcs`.**
+   La rama calculaba "inactivos" con `diagnostic_dtcs`, que sólo tiene los
+   códigos que alguien BUSCÓ. Es el error que ya corrigieron
+   `scan-detections.md` y la ficha de pedidos. De paso se arregló el
+   `active_dtc_count` del listado, que tenía el mismo bug.
+   - **Activos** = el snapshot del ÚLTIMO escaneo (`vehicle_last_dtc_scans`).
+     `null` = nunca se escaneó; `[]` = se escaneó y vino limpio.
+   - **Inactivos** = aparecieron en algún snapshot del auto y no están en el
+     último. Nunca `null`.
+   - El título, de `lookupDtc` (`dtc-codes.json`), no de
+     `standard_description` (100% NULL en producción).
+2. **Vigente/vencido se decide por `expiration_date`, no por `status`.** La
+   rama filtraba seguro y VTV por `document_status`, que es justo lo que
+   `leads.md` (Seguros) prohíbe. Mismo corte que `ExpiryCell`.
+3. **Search params calificados `vehicle*`.** La rama tenía `brand`, `model`,
+   `vtv`, `scans`… pelados, y `model` ya lo usa `/chats`: habría roto el
+   typecheck de otra pantalla (`notifications.md`). El chip `vtvExpired` se
+   reemplazó por `vehicleVtv=expired` — eran dos controles para lo mismo.
+4. **Los chats sin mensajes no cuentan** (ni en la columna, ni en la última
+   actividad, ni en la ficha). `chats.md`.
+5. **El estado de un aviso es `DERIVED_STATE`** importado de
+   `notifications.repo.ts`. La rama mostraba `status` crudo, que no dice si
+   le llegó. La columna del listado es "avisos SIN LEER" (`status <> 'read'`),
+   dicho así, y no "alertas activas": el dominio no tiene ese estado.
+6. **El censo es de 27, no de 21**, y lleva guard de existencia por tabla.
+   Relevado contra `pg_constraint` el 2026-09-28: desde la rama se sumaron
+   `leads`, `quote_requests`, `vehicle_data_queries`, `vehicle_audit_logs` y
+   `knowledge_documents` (+ fragmentos). Un `count(*)` contra una tabla que no
+   existe explota la sentencia ENTERA al planificarse, así que primero se
+   pregunta con `to_regclass` y la que falta sale `null` — la pantalla dice
+   "no existe", no un cero que mentiría.
+7. **`RangeFilter` confirma al salir del campo o con Enter**, no por tecla:
+   la rama navegaba en cada tecla, y cada navegación relanza el loader.
+8. **Marca y modelo son multiselect** (`MultiSelect`), no un select único.
+
+### Lo que se mantuvo de la rama, a propósito
+
+- **`''` en un rango es "sin tope", nunca `0`.** Un campo vacío leído como
+  cero excluiría todo y el filtro "funcionaría" a simple vista.
+- **`array_length` de un array vacío es `NULL`**: todo filtro u orden por
+  cantidad de DTC lleva `coalesce(…, 0)`. El orden de activos usa `-1` para
+  "nunca", así `null` ≠ `0` también al ordenar.
+- **"Última actividad" es del AUTO**: el `greatest()` de su último escaneo,
+  chat con mensajes y tarea. No es `lastSignalSql`, que es del USUARIO.
+- **Filtros rápidos arriba, el resto en `<details>`** («Más filtros»), que se
+  abre solo si ya hay alguno activo — si no, un link pegado filtraría sin
+  mostrar por qué.
+
+### La ficha (`/vehiculos/:vehicleId`)
+
+Misma estructura que `/usuarios/:id`: quién es → documentos → el censo
+(incluso en cero) → el detalle. Reusa en vez de copiar: `MaintenanceTasks` +
+`mapTaskRow` (tareas), `ExpiryCell` y `LocationCell`, `SESSION_BUCKET_LABELS`
+(el corte "sirvió"), `NOTIFICATION_STATE_*`. Si "vencida" o "entregada" se
+vieran distinto acá que en su pantalla dueña, una de las dos estaría mal.
+
+- **Documentos**: el link a `/documentos/:tipo/:id` sale sólo si el documento
+  pasó por OCR (`file_id` cargado; la VTV además `source = 'manual'`). Esa
+  pantalla no muestra los demás (`documents.md`), así que el link daría una
+  ficha vacía.
+- **Multas**: `null` (nunca consultadas) ≠ consultadas sin multas, mismo gate
+  que `/usuarios` (`vehicle_fine_syncs`).
+- **Quién linkea acá**: la patente en `/vehiculos/listado`, en el desplegable
+  de Catálogo, en `/usuarios` (toggle y ficha), en la ficha de un pedido, y
+  `/actividad` (`vehiculo` salió de `ACTIVITY_DETAIL_KINDS`, ver
+  `activity-feed.md`).
+- **`adminMiddleware`**: devuelve VIN, número de motor y el teléfono del
+  dueño. Es lo más sensible de la sección.
+- **Ni una escritura.** Si aparece un `UPDATE`/`INSERT` en
+  `vehicle-detail.repo.ts`, está mal.
+
+### Cómo se verificó
+
+`tmp/probe-vehiculos.mjs` y `tmp/probe-vehiculos-cuadre.mjs` cargan los
+módulos reales con vite (`cacheDir` propio, ver `vehicle-location.md`). Contra
+DEV (`autolibre_ai_hex`, 4433 autos) el 2026-09-28: los 26 órdenes en las dos
+direcciones, todos los filtros juntos, las 1000 fichas del listado sin una
+falla, uuid inexistente → 404, y los cuadres del filtro contra SQL crudo
+(DTC activos 144 = 144, avisos sin leer 464 = 464).
+
+**Trampa de DEV que casi da un falso positivo**: 210 de 356 filas de
+`session_dtc_snapshots` apuntan a vehículos que NO existen (datos sembrados,
+sin FK). Un control que arranca de los snapshots cuenta 198 autos "con DTC
+inactivos"; arrancando de `vehicles`, como el listado, son 1. El listado está
+bien: el control tiene que partir de `vehicles`. Y las 3258 "marcas" de DEV
+son marcas sembradas (`DBG-…`), no un bug de `listVehicleFacets`.
+
 ## `vehicle_tax_debts` está VACÍA en producción
 
 La columna "Deuda patente" del listado lee de `vehicle_tax_debts`
@@ -201,8 +302,9 @@ links: el orden ES la URL) y filtrables:
   desc`: con 166 de 210 modelos empatados en 1 auto, ordenar por flota da un
   orden arbitrario a partir de la fila 15, y esta pantalla sigue siendo de
   ENTRADA (se llega buscando un modelo).
-- **Listado**: buscar (patente/alias/modelo/dueño), Estado, Tipo, "VTV vencida",
-  "con deuda de multas". Sort por 10 columnas.
+- **Listado**: buscar (patente/alias/modelo/dueño), Estado, Tipo, Alertas,
+  Radicación, Provincia, y «Más filtros» (marca, modelo, rangos, documentos,
+  escaneos). Sort por las 26 columnas — ver "Lo que vino de la rama".
 
 ### ⚠ El filtro de tipo se llama `vehicleType`, NO `type`
 

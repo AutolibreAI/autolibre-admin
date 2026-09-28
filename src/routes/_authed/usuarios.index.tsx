@@ -631,7 +631,13 @@ function VehicleSummaryTableRow({ vehicle: v }: { vehicle: UserVehicleSummary })
   return (
     <tr className={cn('border-b border-border/50 last:border-b-0', v.archived && 'opacity-60')}>
       <td className="px-2 py-1.5">
-        <span className="font-mono font-semibold tracking-wider">{v.plate}</span>
+        <Link
+          to="/vehiculos/$vehicleId"
+          params={{ vehicleId: v.id }}
+          className="rounded outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background font-mono font-semibold tracking-wider text-brand"
+        >
+          {v.plate}
+        </Link>
         <div className="text-muted-foreground">
           {v.brand} {v.model} <span className="tabular-nums">{v.year}</span>
         </div>

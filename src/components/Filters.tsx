@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '~/lib/utils'
 import type { ReactNode } from 'react'
@@ -86,5 +87,97 @@ export function Chip({
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * Un rango [desde, hasta] para una columna numérica o de fecha. Vino de la rama
+ * `listado-vehiculos` (2026-09-04), con dos cambios al portarlo el 2026-09-28:
+ *
+ * - **Confirma al salir del campo o con Enter, no por tecla.** La versión
+ *   original navegaba en cada tecla, y cada navegación relanza el loader: tipear
+ *   "150000" eran seis consultas de 1000 filas. El borrador vive en estado
+ *   local y se re-sincroniza si la URL cambia desde afuera («Limpiar todo»).
+ * - Sigue valiendo lo que la rama decía: **`''` es "sin tope", nunca `0`.** Un
+ *   campo vacío leído como cero excluiría todo y el filtro "funcionaría" a
+ *   simple vista. `onCommit` entrega `undefined` para vacío.
+ *
+ * Los dos extremos son independientes: cargar uno solo filtra de un lado.
+ */
+export function RangeFilter({
+  label,
+  type,
+  min,
+  max,
+  onCommit,
+  unit,
+}: {
+  label: string
+  type: 'number' | 'date'
+  min: string | number | undefined
+  max: string | number | undefined
+  onCommit: (next: { min: string | undefined; max: string | undefined }) => void
+  /** Texto chico al lado del label ("km", "min"). */
+  unit?: string
+}) {
+  const toText = (v: string | number | undefined) => (v === undefined ? '' : String(v))
+  const [draftMin, setDraftMin] = useState(toText(min))
+  const [draftMax, setDraftMax] = useState(toText(max))
+
+  useEffect(() => setDraftMin(toText(min)), [min])
+  useEffect(() => setDraftMax(toText(max)), [max])
+
+  const commit = () => {
+    const next = { min: draftMin.trim() || undefined, max: draftMax.trim() || undefined }
+    if (next.min === (toText(min) || undefined) && next.max === (toText(max) || undefined)) return
+    onCommit(next)
+  }
+
+  const inputClass = cn(
+    'h-8 rounded-md border border-border bg-card px-2 text-sm tabular-nums text-foreground outline-none',
+    'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+    type === 'number' ? 'w-24' : 'w-[9.5rem]',
+  )
+
+  return (
+    <div className="space-y-1.5">
+      <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+        {unit ? <span className="ml-1 normal-case tracking-normal text-muted-foreground/70">({unit})</span> : null}
+      </span>
+      <div className="flex items-center gap-1.5">
+        <input
+          type={type}
+          inputMode={type === 'number' ? 'numeric' : undefined}
+          min={type === 'number' ? 0 : undefined}
+          value={draftMin}
+          onChange={(e) => setDraftMin(e.currentTarget.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit()
+          }}
+          placeholder="Desde"
+          aria-label={`${label}, desde`}
+          className={inputClass}
+        />
+        <span className="text-muted-foreground" aria-hidden>
+          –
+        </span>
+        <input
+          type={type}
+          inputMode={type === 'number' ? 'numeric' : undefined}
+          min={type === 'number' ? 0 : undefined}
+          value={draftMax}
+          onChange={(e) => setDraftMax(e.currentTarget.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit()
+          }}
+          placeholder="Hasta"
+          aria-label={`${label}, hasta`}
+          className={inputClass}
+        />
+      </div>
+    </div>
   )
 }

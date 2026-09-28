@@ -139,13 +139,13 @@ export const ACTIVITY_KIND_SHORT: Record<ActivityKind, string> = {
  * Esta lista es el RESTO — lo que hoy no tiene dueño en el panel. Ahí sí hace
  * falta una ficha, porque si no el click no lleva a ningún lado.
  *
- * **Corolario operativo**: el día que exista, por ejemplo, una ficha de
- * vehículo, `vehiculo` sale de esta lista y entra en `ownerHref()`. Los dos
- * lugares se tocan juntos, y el tipo lo obliga (`ActivityDetailKind` es el
- * parámetro de la ruta y la clave de `DETAIL_QUERIES`).
+ * **Corolario operativo**: el día que un tipo gana pantalla dueña, sale de
+ * esta lista y entra como `case` en `ActivityLink`. Los dos lugares se tocan
+ * juntos, y el tipo lo obliga (`ActivityDetailKind` es el parámetro de la ruta
+ * y la clave de `DETAIL_QUERIES`). Pasó con `feedback` el 2026-09-23 y con
+ * `vehiculo` el 2026-09-28, cuando apareció `/vehiculos/:vehicleId`.
  */
 export const ACTIVITY_DETAIL_KINDS = [
-  'vehiculo',
   'mantenimiento',
   'plan_mantenimiento',
   'consulta_multas',
@@ -193,7 +193,7 @@ export const ACTIVITY_TARGET_LABELS: Record<ActivityKind, string> = {
   registro: 'Ver el documento',
   vtv: 'Ver el documento',
   pedido: 'Ver el pedido',
-  vehiculo: 'Ver el detalle',
+  vehiculo: 'Ver el vehículo',
   mantenimiento: 'Ver el detalle',
   plan_mantenimiento: 'Ver el detalle',
   consulta_multas: 'Ver el detalle',

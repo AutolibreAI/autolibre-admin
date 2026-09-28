@@ -16,6 +16,7 @@ import type {
   FleetSearch,
   FleetSortKey,
   FleetSummary,
+  VehicleFacets,
   VehicleListRow,
   VehicleSearch,
   VehicleSortKey,
@@ -68,6 +69,7 @@ interface ListRow extends LocationQueryColumns {
   user_email: string
   vtv_expires_at: Date | string | null
   insurance_expires_at: Date | string | null
+  registration_card_loaded_at: Date | string | null
   fine_consulted_at: Date | string | null
   fine_count: number | string
   fine_debt_amount: number | string | null
@@ -76,28 +78,111 @@ interface ListRow extends LocationQueryColumns {
   tasks_pending: number | string
   scans_ok: number | string
   scans_total: number | string
+  last_scan_at: Date | string | null
+  scan_minutes_total: number | string
   diagnostic_chat_count: number | string
-  active_dtc_count: number | string | null
+  unread_alert_count: number | string
+  distance_since_dtc_clear_km: number | string | null
+  active_dtc_codes: Array<string> | null
+  inactive_dtc_codes: Array<string> | null
   active_anomaly_count: number | string | null
+  last_activity_at: Date | string | null
 }
 
 /**
  * Mapa cerrado `VehicleSortKey → columna`. Los dos valores del `ORDER BY` salen
  * de un enum de zod y de este `Record` — nunca de texto suelto. Mismo patrón
  * que `listUsers` y `listFineDebtors`.
+ *
+ * Los dos DTC ordenan por CANTIDAD, con `coalesce(…, 0)`: `array_length` de un
+ * array VACÍO es `NULL` en Postgres, no `0`, y sin el `coalesce` un auto
+ * escaneado y limpio se iría al fondo junto con los que nunca se escanearon.
+ * Activos va con `-1` para "nunca" — así `null` ≠ `0` también al ordenar.
  */
 const LIST_SORT_COLUMNS: Record<Exclude<VehicleSortKey, 'location'>, string> = {
   plate: 'plate',
   owner: 'user_email',
   model: 'model_sort',
+  year: 'year',
   type: 'vehicle_type',
   odometer: 'odometer_km',
+  dtcClearKm: 'distance_since_dtc_clear_km',
   vtv: 'vtv_expires_at',
+  insurance: 'insurance_expires_at',
+  registrationCard: 'registration_card_loaded_at',
   fineDebt: 'fine_debt_amount',
   fineCount: 'fine_count',
+  taxDebt: 'tax_debt_amount',
+  tasksPast: 'tasks_past',
   tasksPending: 'tasks_pending',
+  scans: 'scans_total',
+  lastScanAt: 'last_scan_at',
+  scanMinutes: 'scan_minutes_total',
+  activeDtc: `case when active_dtc_codes is null then -1
+                   else coalesce(array_length(active_dtc_codes, 1), 0) end`,
+  inactiveDtc: 'coalesce(array_length(inactive_dtc_codes, 1), 0)',
+  anomalies: 'active_anomaly_count',
+  chats: 'diagnostic_chat_count',
+  alerts: 'unread_alert_count',
+  lastActivity: 'last_activity_at',
   createdAt: 'created_at',
 }
+
+/** `>=` / `< +1 día` de un `date` contra una columna: el `to` incluye el día entero. */
+function pushDateRange(
+  where: Array<string>,
+  params: Array<unknown>,
+  column: string,
+  from: string | undefined,
+  to: string | undefined,
+) {
+  if (from) {
+    params.push(from)
+    where.push(`${column} >= $${params.length}::date`)
+  }
+  if (to) {
+    params.push(to)
+    where.push(`${column} < $${params.length}::date + 1`)
+  }
+}
+
+/** Los dos extremos son independientes: cargar uno solo filtra de un lado. */
+function pushIntRange(
+  where: Array<string>,
+  params: Array<unknown>,
+  column: string,
+  min: number | undefined,
+  max: number | undefined,
+) {
+  if (min !== undefined) {
+    params.push(min)
+    where.push(`${column} >= $${params.length}`)
+  }
+  if (max !== undefined) {
+    params.push(max)
+    where.push(`${column} <= $${params.length}`)
+  }
+}
+
+/**
+ * Vigente / vencido / no cargado, por `expiration_date` contra hoy — NUNCA por
+ * `status` (ver `VEHICLE_DOCUMENT_FILTERS`). Mismo corte que `ExpiryCell`.
+ */
+function pushDocumentFilter(
+  where: Array<string>,
+  column: string,
+  value: VehicleSearch['vehicleVtv'],
+) {
+  if (value === 'valid') where.push(`${column} >= current_date`)
+  else if (value === 'expired') where.push(`${column} < current_date`)
+  else if (value === 'missing') where.push(`${column} is null`)
+}
+
+/**
+ * "Chat con mensajes": el corte de `/chats` y `/actividad` (`chats.md`). Una
+ * conversación abierta sin escribir nada no es uso.
+ */
+const CHAT_HAS_MESSAGES = `exists (select 1 from conversation_messages cm where cm.conversation_id = c.id)`
 
 /**
  * Cada auto cargado, uno por fila, SIN deduplicar por patente.
@@ -142,10 +227,51 @@ export async function listVehicles(
     )
   }
 
-  if (search.vtvExpired) {
-    outerWhere.push('vtv_expires_at IS NOT NULL AND vtv_expires_at < current_date')
-  }
   if (search.fineDebt) outerWhere.push('fine_debt_amount > 0')
+
+  if (search.vehicleBrands.length) {
+    params.push(search.vehicleBrands)
+    outerWhere.push(`brand = any($${params.length}::text[])`)
+  }
+  if (search.vehicleModels.length) {
+    params.push(search.vehicleModels)
+    outerWhere.push(`model = any($${params.length}::text[])`)
+  }
+  pushIntRange(outerWhere, params, 'year', search.vehicleYearMin, search.vehicleYearMax)
+  pushDateRange(outerWhere, params, 'created_at', search.vehicleCreatedFrom, search.vehicleCreatedTo)
+
+  if (search.vehicleNeverActive) outerWhere.push('last_activity_at is null')
+  pushDateRange(outerWhere, params, 'last_activity_at', search.vehicleActivityFrom, search.vehicleActivityTo)
+
+  if (search.vehicleScans === 'ok') outerWhere.push('scans_ok > 0')
+  else if (search.vehicleScans === 'failures') outerWhere.push('scans_total > 0 and scans_ok = 0')
+  else if (search.vehicleScans === 'never') outerWhere.push('scans_total = 0')
+  pushDateRange(outerWhere, params, 'last_scan_at', search.vehicleLastScanFrom, search.vehicleLastScanTo)
+  pushIntRange(outerWhere, params, 'scan_minutes_total', search.vehicleScanMinutesMin, search.vehicleScanMinutesMax)
+
+  pushIntRange(outerWhere, params, 'diagnostic_chat_count', search.vehicleChatsMin, search.vehicleChatsMax)
+  pushIntRange(outerWhere, params, 'tasks_past', search.vehiclePastTasksMin, search.vehiclePastTasksMax)
+  pushIntRange(outerWhere, params, 'tasks_pending', search.vehiclePendingTasksMin, search.vehiclePendingTasksMax)
+
+  if (search.vehicleWithAlerts) outerWhere.push('unread_alert_count > 0')
+
+  pushDocumentFilter(outerWhere, 'insurance_expires_at', search.vehicleInsurance)
+  pushDocumentFilter(outerWhere, 'vtv_expires_at', search.vehicleVtv)
+  if (search.vehicleRegistrationCard === 'loaded') outerWhere.push('registration_card_loaded_at is not null')
+  else if (search.vehicleRegistrationCard === 'missing') outerWhere.push('registration_card_loaded_at is null')
+
+  pushIntRange(outerWhere, params, 'odometer_km', search.vehicleOdometerMin, search.vehicleOdometerMax)
+  pushIntRange(
+    outerWhere,
+    params,
+    'distance_since_dtc_clear_km',
+    search.vehicleDtcClearKmMin,
+    search.vehicleDtcClearKmMax,
+  )
+
+  // `coalesce(array_length(…), 0)`: el array vacío da NULL, no 0.
+  if (search.vehicleWithActiveDtc) outerWhere.push('coalesce(array_length(active_dtc_codes, 1), 0) > 0')
+  if (search.vehicleWithInactiveDtc) outerWhere.push('coalesce(array_length(inactive_dtc_codes, 1), 0) > 0')
 
   // Radicación: la tabla clasificada entra como `unnest` de arrays (ver
   // `locationJoin`), así que región y provincia se filtran como columnas.
@@ -184,6 +310,9 @@ export async function listVehicles(
         (select i.expiration_date from insurances i
           where i.vehicle_id = v.id
           order by i.archived asc, i.created_at desc limit 1) as insurance_expires_at,
+        (select r.created_at from registration_cards r
+          where r.vehicle_id = v.id
+          order by r.archived asc, r.created_at desc limit 1) as registration_card_loaded_at,
 
         vfs.last_synced_at as fine_consulted_at,
         (select count(*)::int from fines f
@@ -204,17 +333,43 @@ export async function listVehicles(
         (select count(*)::int from maintenance_occurrences o
           where o.vehicle_id = v.id and o.performed_at is null) as tasks_pending,
 
-        (select count(*) filter (
-                  where d.status::text = 'completed' and coalesce(d.total_readings, 0) > 0)::int
-           from driving_sessions d where d.vehicle_id = v.id) as scans_ok,
-        (select count(*)::int from driving_sessions d where d.vehicle_id = v.id) as scans_total,
+        (select count(*) filter (where ${OK})::int
+           from driving_sessions ds where ds.vehicle_id = v.id) as scans_ok,
+        (select count(*)::int from driving_sessions ds where ds.vehicle_id = v.id) as scans_total,
+        (select max(ds.started_at) from driving_sessions ds where ds.vehicle_id = v.id) as last_scan_at,
+        (select coalesce(round(sum(extract(epoch from (ds.ended_at - ds.started_at))) / 60), 0)::int
+           from driving_sessions ds
+          where ds.vehicle_id = v.id and ds.ended_at is not null) as scan_minutes_total,
 
-        (select count(*)::int from conversations c where c.vehicle_id = v.id) as diagnostic_chat_count,
+        (select count(*)::int from conversations c
+          where c.vehicle_id = v.id and ${CHAT_HAS_MESSAGES}) as diagnostic_chat_count,
 
+        (select count(*)::int from notifications n
+          where n.vehicle_id = v.id and n.status::text <> 'read') as unread_alert_count,
+
+        v.current_distance_since_dtc_clear_km as distance_since_dtc_clear_km,
+
+        -- DTCs: activos = el snapshot del ultimo escaneo; inactivos = los que
+        -- aparecieron en algun snapshot de este auto y no estan en ese. Sale de
+        -- session_dtc_snapshots.codes y NO de diagnostic_dtcs (esa tabla solo
+        -- tiene los codigos que alguien busco).
         case when lds.vehicle_id is null then null
-             else (select count(*)::int from diagnostic_dtcs dd where dd.session_id = lds.session_id)
-        end as active_dtc_count,
+             else coalesce(snap.codes, array[]::text[]) end as active_dtc_codes,
+        array(
+          select distinct code
+            from session_dtc_snapshots s2, unnest(s2.codes) as code
+           where s2.vehicle_id = v.id
+             and code <> all(coalesce(snap.codes, array[]::text[]))
+           order by code
+        ) as inactive_dtc_codes,
         jsonb_array_length(dta.anomalies) as active_anomaly_count,
+
+        greatest(
+          (select max(ds.started_at) from driving_sessions ds where ds.vehicle_id = v.id),
+          (select max(c.created_at) from conversations c
+            where c.vehicle_id = v.id and ${CHAT_HAS_MESSAGES}),
+          (select max(o.created_at) from maintenance_occurrences o where o.vehicle_id = v.id)
+        ) as last_activity_at,
 
         ${location.columns}
 
@@ -224,6 +379,7 @@ export async function listVehicles(
       join users u on u.id = v.user_id
       left join vehicle_fine_syncs vfs on vfs.vehicle_id = v.id
       left join vehicle_last_dtc_scans lds on lds.vehicle_id = v.id
+      left join session_dtc_snapshots snap on snap.session_id = lds.session_id
       left join driving_telemetry_analysis dta on dta.id = (
         select a.id from driving_telemetry_analysis a
          where a.vehicle_id = v.id order by a.created_at desc limit 1
@@ -256,6 +412,7 @@ export async function listVehicles(
       userEmail: r.user_email,
       vtvExpiresAt: toIso(r.vtv_expires_at),
       insuranceExpiresAt: toIso(r.insurance_expires_at),
+      registrationCardLoadedAt: toIso(r.registration_card_loaded_at),
       fineConsultedAt: toIso(r.fine_consulted_at),
       fineCount: toInt(r.fine_count),
       fineDebtAmount: toIntOrNull(r.fine_debt_amount),
@@ -264,12 +421,42 @@ export async function listVehicles(
       tasksPending: toInt(r.tasks_pending),
       scansOk: toInt(r.scans_ok),
       scansTotal: toInt(r.scans_total),
+      lastScanAt: toIso(r.last_scan_at),
+      scanMinutesTotal: toInt(r.scan_minutes_total),
       diagnosticChatCount: toInt(r.diagnostic_chat_count),
-      activeDtcCount: toIntOrNull(r.active_dtc_count),
+      unreadAlertCount: toInt(r.unread_alert_count),
+      distanceSinceDtcClearKm: toIntOrNull(r.distance_since_dtc_clear_km),
+      activeDtcCodes: r.active_dtc_codes,
+      inactiveDtcCodes: r.inactive_dtc_codes ?? [],
       activeAnomalyCount: toIntOrNull(r.active_anomaly_count),
+      lastActivityAt: toIso(r.last_activity_at),
       location: mapLocation(r),
     }),
   )
+}
+
+/**
+ * Las opciones de los multiselect de marca y modelo: las de los autos
+ * CARGADOS, no del catálogo entero — un modelo que nadie eligió sería una
+ * opción que siempre da cero filas. Mismo criterio que `listDistinctChatModels`:
+ * la lista sale de los datos, nunca se hardcodea. Una sentencia, un snapshot.
+ */
+export async function listVehicleFacets(
+  opts: { signal?: AbortSignal } = {},
+): Promise<VehicleFacets> {
+  void opts.signal
+  const row = await sqlOne<{ brands: Array<string> | null; models: Array<string> | null }>(
+    `select
+       array(select distinct vc.brand from vehicles v
+               join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+               join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
+              order by 1) as brands,
+       array(select distinct vc.model from vehicles v
+               join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+               join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
+              order by 1) as models`,
+  )
+  return { brands: row?.brands ?? [], models: row?.models ?? [] }
 }
 
 // ── Métricas de flota ──────────────────────────────────────────────────────

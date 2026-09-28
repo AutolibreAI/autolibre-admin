@@ -369,7 +369,13 @@ function QuoteRequestScreen() {
             <Field label="Vehículo vinculado por el operador">
               {d.vehicleId ? (
                 <div className="text-sm">
-                  <span className="font-mono font-semibold tracking-wider">{d.vehiclePlate ?? '—'}</span>
+                  <Link
+                    to="/vehiculos/$vehicleId"
+                    params={{ vehicleId: d.vehicleId }}
+                    className="rounded outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background font-mono font-semibold tracking-wider text-brand"
+                  >
+                    {d.vehiclePlate ?? 'ver el vehículo'}
+                  </Link>
                   {d.vehicleArchived ? (
                     <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">archivado</span>
                   ) : null}
