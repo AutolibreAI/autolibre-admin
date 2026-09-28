@@ -327,17 +327,30 @@ function introSentence(n: number, vehicle: string, request: string): string {
 }
 
 /**
- * Cómo se nombra el auto en el mensaje.
+ * Cómo se nombra el auto en el mensaje, del dato más firme al más flojo:
  *
- * Con catálogo: `el Nissan Note (PNZ450)`. Sin catálogo —porque el operador no
- * vinculó el vehículo, o el vehículo no resuelve a un modelo— cae en `el auto
- * patente PNZ450`, que es cierto y se lee bien. **No deja un `[corchete]`**: la
- * patente siempre está (es NOT NULL y la tipeó la persona), así que no hay nada
- * que completar a mano.
+ * 1. Con catálogo (vehículo vinculado): `el Nissan Note (PNZ450)`.
+ * 2. Con vehículo ESCRITO (migración 018): `el Peugeot 208 2019 (AB123CD)`,
+ *    tal cual lo cargó el operador — sin Title Case: ya lo escribió una
+ *    persona, no viene gritado del catálogo.
+ * 3. Sólo patente: `el auto patente PNZ450`.
+ * 4. Nada: `tu auto`.
+ *
+ * **No deja un `[corchete]`**: la frase va en el medio de un párrafo, y "tu
+ * auto" es cierto y se lee bien. La patente pasó a ser opcional en la 018, así
+ * que ya no se puede asumir que está.
  */
 function vehiclePhrase(detail: QuoteRequestDetail): string {
-  const model = detail.catalogShortLabel
-  return model ? `el ${titleCaseModel(model)} (${detail.plate})` : `el auto patente ${detail.plate}`
+  const plate = detail.plate ? ` (${detail.plate})` : ''
+  if (detail.catalogShortLabel) return `el ${titleCaseModel(detail.catalogShortLabel)}${plate}`
+  if (detail.vehicleText) return `el ${detail.vehicleText}${plate}`
+  if (detail.plate) return `el auto patente ${detail.plate}`
+  return 'tu auto'
+}
+
+/** Sin patente, un aviso a completar — Apertura confirma lo que tenemos, y ahí sí falta. */
+function plateValue(detail: QuoteRequestDetail): string {
+  return detail.plate ?? '[patente — todavía no la pasó]'
 }
 
 /**
@@ -346,8 +359,8 @@ function vehiclePhrase(detail: QuoteRequestDetail): string {
  * — y si falta el vehículo hay que decirlo, no taparlo con la patente.
  */
 function fullVehicleValue(detail: QuoteRequestDetail): string {
-  if (!detail.vehicleId) return '[sin vehículo vinculado]'
-  return detail.catalogLabel ?? '[vehículo vinculado sin modelo de catálogo]'
+  if (detail.vehicleId) return detail.catalogLabel ?? '[vehículo vinculado sin modelo de catálogo]'
+  return detail.vehicleText ?? '[sin vehículo cargado]'
 }
 
 /** `null` (WhatsApp, o un pedido `typed` sin dirección) → aviso, no un vacío. */
@@ -358,11 +371,13 @@ function zoneValue(detail: QuoteRequestDetail): string {
 /**
  * Cómo se nombra el auto en las plantillas que van al TALLER: `Suzuki Fun 1.4
  * 2007` — versión y año incluidos (el taller cotiza sobre eso), patente
- * afuera (no la necesita, y es dato de la persona). Sin vehículo vinculado o
- * sin catálogo, un corchete a completar — nunca se adivina el auto.
+ * afuera (no la necesita, y es dato de la persona). Sin catálogo cae en el
+ * vehículo escrito (018); sin ninguno de los dos, un corchete a completar —
+ * nunca se adivina el auto.
  */
 function workshopVehiclePhrase(detail: QuoteRequestDetail): string {
-  return detail.catalogLabel ? titleCaseModel(detail.catalogLabel) : '[marca modelo versión año]'
+  if (detail.catalogLabel) return titleCaseModel(detail.catalogLabel)
+  return detail.vehicleText ?? '[marca modelo versión año]'
 }
 
 /**
@@ -447,7 +462,7 @@ export function renderQuoteTemplate(
 
   const values: Record<string, string> = {
     codigo: quotePublicCode(detail.publicNumber),
-    patente: detail.plate,
+    patente: plateValue(detail),
     vehiculo: vehiclePhrase(detail),
     vehiculo_completo: fullVehicleValue(detail),
     vehiculo_taller: workshopVehiclePhrase(detail),

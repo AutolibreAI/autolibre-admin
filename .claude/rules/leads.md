@@ -9,7 +9,8 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `leads.pedidos.$quoteRequestId.tsx`, `src/lib/quote-requests.ts`,
 `src/server/quote-requests.repo.ts`, `src/fn/quote-requests.ts`,
 `src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
-`src/components/QuoteRequestActions.tsx`, `src/lib/quote-templates.ts`,
+`src/components/QuoteRequestActions.tsx`, `src/components/QuoteRequestEditor.tsx`,
+`src/lib/quote-templates.ts`,
 `src/components/QuoteTemplates.tsx`, `src/components/QuoteRequestComposer.tsx`,
 `migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`),
 `src/components/PartnerCandidates.tsx`, `migrations/013_ops_rubro_de_pedido.sql`
@@ -1224,6 +1225,45 @@ para el mismo auto.
 `src/components/MaintenanceTasks.tsx` (renombrado `MaintenanceTasks` en el
 export) para que las dos pantallas compartan la forma — si "vencida" se ve
 distinto en una de las dos, una está mal.
+
+### Editar los datos de un pedido (`<QuoteRequestEditor/>`) — desde el 2026-09-27
+
+El pedido casi nunca llega completo: por WhatsApp la persona escribe "necesito
+un service" y el auto, la patente y la zona los va soltando en la charla. Hasta
+acá la ficha no tenía dónde anotarlos (sólo el hilo de notas, que las plantillas
+y los candidatos no leen), y el alta a mano exigía una patente que muchas veces
+no hay.
+
+Migración 018 (`ops-write-actions.md`). Tres cambios:
+
+- **La patente es opcional en «Cargar pedido».** La base ya lo permitía
+  (`plate` nullable); la exigía nuestro SP. Se normaliza a mayúsculas sin
+  separadores (`AB 123 CD` → `AB123CD`), porque la columna es `varchar(7)`.
+  Con cuenta de AutoLibre la base SÍ la exige, y la edición no deja vaciarla.
+- **Vehículo escrito** (`vehicleText`, `ops.quote_request_vehicle_text`): lo que
+  cuenta la persona, para cuando no hay `vehicle_id`. No es el vehículo
+  VINCULADO (eso sigue sin picker, ver "Sin vincular usuario ni vehículo"). Las
+  plantillas lo usan en este orden: catálogo del vinculado → escrito → patente
+  → "tu auto" (`vehiclePhrase`); para el taller, catálogo → escrito →
+  corchete. Sin patente, `{{patente}}` sale como corchete a completar.
+- **«Editar datos»** en el header de la ficha: contacto, patente, vehículo
+  escrito, descripción, monto declarado y zona. Reemplazo completo — vaciar un
+  opcional lo borra. Se siembra con la ficha al abrir.
+
+Lo que NO edita, y el formulario lo dice:
+
+- **La zona que vino del GPS del teléfono** (`location_source = 'device'`, 28 de
+  33 pedidos al 2026-09-27): cambiarla obligaría a borrar las coordenadas con
+  las que `PartnerCandidates` ordena por cercanía. Se muestra de sólo lectura.
+  Los pedidos sin zona (WhatsApp) o con zona tipeada sí se editan, y una zona
+  tipeada exige dirección (la localidad sola no alcanza: CHECK del backend).
+- **`raw_submission`**: lo que mandó la persona queda intacto al pie de la
+  ficha. Corregir la descripción de un pedido de la app no pierde el original.
+- **Canal, cuenta, vehículo vinculado y estado.** El canal es un hecho (o una
+  aproximación ya elegida en el alta), la cuenta la pone la app, el vínculo al
+  vehículo es otra feature, y el estado lo mueven los SP de la 011.
+
+Un pedido cerrado también se edita: los datos no son el estado.
 
 ## Cómo verificar un cambio acá
 

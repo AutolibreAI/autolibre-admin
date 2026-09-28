@@ -23,6 +23,7 @@ import {
   type QuoteRequestsAvailability,
   type QuoteSortKey,
   type SetQuoteRequestRubrosInput,
+  type UpdateQuoteRequestInput,
 } from '~/lib/quote-requests'
 import type { QuoteVehicleProfile } from '~/lib/quote-vehicle-profile'
 
@@ -102,6 +103,8 @@ const READ_COLUMNS = [
   'location_latitude',
   'location_longitude',
   'location_locality',
+  'location_source',
+  'location_province',
 ] as const
 
 /**
@@ -117,6 +120,20 @@ const READ_COLUMNS = [
  * error de relación inexistente dentro de una transacción la aborta, y un
  * catch que se traga errores de SQL termina tragándose también los reales.
  */
+/**
+ * ¿Está aplicada la migración 018 (vehículo escrito + edición)? Se mira la
+ * tabla y no la función: las dos llegan en la misma migración, que el runner
+ * aplica en UNA transacción. Mismo patrón que `quoteResponsesAvailable()`.
+ */
+export async function quoteEditAvailable(opts: { signal?: AbortSignal } = {}): Promise<boolean> {
+  void opts.signal
+
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('ops.quote_request_vehicle_text') is not null as ok`,
+  )
+  return row?.ok === true
+}
+
 export async function quoteRequestsAvailability(
   opts: { signal?: AbortSignal } = {},
 ): Promise<QuoteRequestsAvailability> {
@@ -263,7 +280,7 @@ interface ListRow {
   user_id: string | null
   user_email: string | null
   user_name: string | null
-  plate: string
+  plate: string | null
   vehicle_id: string | null
   vehicle_plate: string | null
   vehicle_archived: boolean | null
@@ -762,6 +779,8 @@ interface DetailRow extends ListRow {
    * en la misma situación que `location_address`.
    */
   location_locality: string | null
+  location_source: string | null
+  location_province: string | null
   /** `MARCA MODELO`, sin versión ni año. Para el mensaje, no para la tarjeta. */
   catalog_short_label: string | null
 }
@@ -797,6 +816,8 @@ export async function findQuoteRequestDetail(
             qr.location_latitude,
             qr.location_longitude,
             qr.location_locality,
+            qr.location_source::text as location_source,
+            qr.location_province,
             -- Sólo marca y modelo, para nombrar el auto en el mensaje que se
             -- le manda a la persona ("para el Nissan Note"). El catalog_label
             -- de arriba trae además versión y año, que en una tarjeta del
@@ -824,6 +845,23 @@ export async function findQuoteRequestDetail(
     [id],
   )
 
+  /**
+   * El vehículo escrito (018) también vive en `ops`, y con el mismo criterio
+   * que los rubros va en su propia consulta. Pero ésta puede no tener tabla:
+   * sin la 018 aplicada, `ops.quote_request_vehicle_text` no existe y un
+   * SELECT directo explotaría al planificarse. `to_regclass` primero, igual
+   * que `quoteResponsesAvailable()` de la 015.
+   */
+  const editAvailable = await quoteEditAvailable()
+  const vehicleText = editAvailable
+    ? ((
+        await sqlOne<{ vehicle_text: string }>(
+          `select vehicle_text from ops.quote_request_vehicle_text where quote_request_id = $1`,
+          [id],
+        )
+      )?.vehicle_text ?? null)
+    : null
+
   return {
     ...mapListRow(r),
     updatedAt: toIso(r.updated_at) ?? '',
@@ -840,6 +878,10 @@ export async function findQuoteRequestDetail(
     locationLocality: r.location_locality,
     catalogShortLabel: r.catalog_short_label,
     rubroCategorySlugs: rubros.map((row) => row.category_slug),
+    vehicleText,
+    locationSource: r.location_source,
+    locationProvince: r.location_province,
+    editAvailable,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.
@@ -1020,8 +1062,8 @@ export async function setQuoteRequestRubros(
  * de `/leads/pedidos` cuando `router.invalidate()` lo vuelve a correr.
  *
  * Parámetros NOMBRADOS, igual que las transiciones: cuatro opcionales de texto
- * seguidos se cruzan por posición sin que nada avise. Es la misma forma que
- * usa el bloque de integración de `012_ops_crear_pedido.test.sql`.
+ * seguidos se cruzan por posición sin que nada avise. La firma es la de la
+ * 018 (patente opcional + `p_vehicle_text`); la de la 012 ya no existe.
  */
 export async function createQuoteRequest(
   input: CreateQuoteRequestInput,
@@ -1030,32 +1072,94 @@ export async function createQuoteRequest(
 ): Promise<{ id: string; publicNumber: number }> {
   void opts.signal
 
+  // SQL copiado LITERAL en la integración de `018_ops_editar_pedido.test.sql`
+  // (`PREPARE p018_create`). Si se toca uno, se toca el otro.
   const row = await sqlOne<{ q: { id: string; public_number: number } }>(
     `SELECT ops.create_quote_request(
        p_actor_id        => $1,
        p_channel         => $2,
        p_contact_phone   => $3,
-       p_plate           => $4,
-       p_description     => $5,
-       p_contact_name    => $6,
-       p_contact_email   => $7,
-       p_declared_amount => $8,
-       p_note            => $9
+       p_description     => $4,
+       p_plate           => $5,
+       p_vehicle_text    => $6,
+       p_contact_name    => $7,
+       p_contact_email   => $8,
+       p_declared_amount => $9,
+       p_note            => $10
      ) AS q`,
     [
       actorId,
       input.channel,
       input.contactPhone,
-      input.plate,
       input.description,
-      input.contactName ?? null,
-      input.contactEmail ?? null,
+      blankToNull(input.plate),
+      blankToNull(input.vehicleText),
+      blankToNull(input.contactName),
+      blankToNull(input.contactEmail),
       input.declaredAmount ?? null,
-      input.note ?? null,
+      blankToNull(input.note),
     ],
   )
   if (!row) throw new Error('QUOTE_REQUEST_CREATE_FAILED')
   return { id: row.q.id, publicNumber: toInt(row.q.public_number) }
+}
+
+// ── Escritura: editar los datos de un pedido (migración 018) ────────────────
+
+/**
+ * Contacto, patente, vehículo escrito, descripción, monto declarado y
+ * ubicación tipeada, vía `ops.update_quote_request` (018). Reemplazo
+ * COMPLETO: `''` y `null` viajan como NULL y el SP borra ese campo.
+ *
+ * El backend no tiene un camino admin para editar un pedido (último `grep`:
+ * 2026-09-15, `leads.md`), y el vehículo escrito ni siquiera tiene columna en
+ * `quote_requests` — vive en `ops`. Por eso es un SP y no HTTP. Si un
+ * `UPDATE quote_requests` aparece suelto en este archivo, está mal: el SP
+ * lockea la fila y escribe `ops.action_log` en la misma sentencia.
+ *
+ * SQL copiado LITERAL en `018_ops_editar_pedido.test.sql` (`PREPARE
+ * p018_update`). Si se toca uno, se toca el otro.
+ */
+export async function updateQuoteRequest(
+  input: UpdateQuoteRequestInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<SpRow>(
+    `SELECT ops.update_quote_request(
+       p_quote_request_id  => $1,
+       p_actor_id          => $2,
+       p_contact_phone     => $3,
+       p_description       => $4,
+       p_contact_name      => $5,
+       p_contact_email     => $6,
+       p_plate             => $7,
+       p_vehicle_text      => $8,
+       p_declared_amount   => $9,
+       p_location_address  => $10,
+       p_location_locality => $11,
+       p_location_province => $12,
+       p_note              => $13
+     ) AS q`,
+    [
+      input.quoteRequestId,
+      actorId,
+      input.contactPhone,
+      input.description,
+      blankToNull(input.contactName),
+      blankToNull(input.contactEmail),
+      blankToNull(input.plate),
+      blankToNull(input.vehicleText),
+      input.declaredAmount,
+      blankToNull(input.locationAddress),
+      blankToNull(input.locationLocality),
+      blankToNull(input.locationProvince),
+      null,
+    ],
+  )
+  return toWriteResult(row?.q, input.quoteRequestId)
 }
 
 // ── Vehículo vinculado: la tarjeta de sólo lectura de la ficha ─────────────

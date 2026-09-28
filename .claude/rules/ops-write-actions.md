@@ -20,7 +20,10 @@ Alcance: `migrations/007_ops_acciones_admin.sql`, las funciones `setPartner*` de
 `src/components/PartnerCandidates.tsx`/`QuoteRequestActions.tsx`. La 017 suma
 `migrations/017_ops_plantillas_de_mensaje.sql` y su `.test.sql`,
 `src/server/quote-message-templates.repo.ts`, `src/fn/quote-message-templates.ts` y el editor
-de `src/components/QuoteTemplates.tsx` (`.claude/plans/pedidos-ficha-2026-09-25.md`).
+de `src/components/QuoteTemplates.tsx` (`.claude/plans/pedidos-ficha-2026-09-25.md`). La 018 suma
+`migrations/018_ops_editar_pedido.sql` y su `.test.sql`, `updateQuoteRequest` +
+`quoteEditAvailable` de `src/server/quote-requests.repo.ts`, `updateQuoteRequestFn` de
+`src/fn/quote-requests.ts` y `src/components/QuoteRequestEditor.tsx`.
 
 ## La regla que esto reemplaza, y por qué
 
@@ -1141,3 +1144,90 @@ en la primera versión de una clave, el título anterior en la segunda), que
 editar una plantilla de SEMILLA (`template_key = 'apertura'`) le cree su
 primera fila sin que el SP sepa ni le importe que es una semilla, y la
 integración con parámetros nombrados.
+
+---
+
+# Migración 018 — editar un pedido, y cargarlo sin patente
+
+Alcance: `migrations/018_ops_editar_pedido.sql` y su `.test.sql`, `createQuoteRequest` /
+`updateQuoteRequest` / `quoteEditAvailable` de `src/server/quote-requests.repo.ts`,
+`createQuoteRequestFn` / `updateQuoteRequestFn` de `src/fn/quote-requests.ts`,
+`src/components/QuoteRequestComposer.tsx` y `src/components/QuoteRequestEditor.tsx`. La UI está en
+`leads.md`, "Editar los datos de un pedido".
+
+## Qué cambia
+
+1. **`ops.create_quote_request`: la patente pasa a ser opcional** y se suma `p_vehicle_text`.
+   `quote_requests.plate` es NULLABLE en producción (relevado el 2026-09-27; `varchar(7)`, con
+   `chk_quote_requests_plate_not_blank` y `chk_quote_requests_user_has_plate`). La 012 la exigía
+   porque cuando se escribió la columna era NOT NULL. **No toca el backend**: deja de exigir algo
+   que la base ya no exige. DROP + CREATE con la firma exacta de la 012 (trampa de la 009), y
+   `p_description` sube delante de `p_plate` porque un parámetro con default no puede ir antes de
+   uno sin default.
+2. **`ops.quote_request_vehicle_text`**: el vehículo ESCRITO ("Peugeot 208 1.6 2019"). Tabla de
+   `ops` por el mismo motivo que la 015: `quote_requests` no tiene columna para esto y nada de la
+   app lo lee. Sin FK. El `UPDATE … FROM` del backfill está en la cabecera de la migración.
+3. **`ops.update_quote_request`**: contacto, patente, vehículo escrito, descripción, monto
+   declarado y ubicación tipeada. Reemplazo COMPLETO (lo que llega es lo que queda; blanco borra).
+
+## El grep al backend NO se pudo correr
+
+`autolibre-backend-hex` no está clonado en esta máquina (mismo estado que la 010). El último grep
+(2026-09-15) no tenía ninguna edición admin de `quote_requests`. **Antes de ampliar este SP:**
+`rg -n "AdminGuard|update\(quoteRequests" ../autolibre-backend-hex/src/quotes`.
+
+## La ubicación: la del GPS no se toca
+
+Un pedido con `location_source = 'device'` trae las coordenadas del teléfono, y
+`chk_quote_requests_location_coordinates_only_device` obliga a borrarlas para pasar a `typed`. El
+SP exige que los tres textos lleguen **iguales** a los que están (`LOCATION_FROM_DEVICE` si no); el
+formulario los muestra de sólo lectura y los manda tal cual. Sin ubicación o con una `typed`, se
+carga o corrige, y `typed` exige dirección (`LOCATION_ADDRESS_REQUIRED`).
+
+Esto es lo que mantiene válida la advertencia de la 011 sobre `_redact_quote_request`: la 018 escribe
+textos de ubicación pero **nunca coordenadas**, así que el redact sigue sacando del log todo lo que
+es GPS.
+
+## Tres detalles que se descubrieron corriendo la suite, no leyéndola
+
+- **`plate` es `varchar(7)`.** "AB 123 CD" (9 caracteres) volvía un 22001 crudo en el alta de la
+  012. `ops._normalize_quote_plate` saca todo lo que no es alfanumérico antes de medir, y lo que
+  sigue pasando de 7 es `INVALID_PLATE`. Zod repite el chequeo contando sólo alfanuméricos.
+- **`INSERT … EXECUTE` no existe.** La integración con `PREPARE` sin tipos captura el resultado con
+  `CREATE TEMP TABLE … AS EXECUTE`, igual que la 011.
+- **Un literal en un `UNION ALL` es `text`, no el enum.** El fixture que inserta dos usuarios con
+  `UNION ALL` necesita `'admin'::user_role`; sin el cast la suite aborta antes del primer caso.
+
+## Guardar sin cambios no loguea
+
+El `UPDATE` lleva `WHERE (…) IS DISTINCT FROM (…)` y el log se escribe sólo si el snapshot
+(sin `updated_at`) cambió. Un "Guardar" sin tocar nada no es un hecho que valga una entrada de
+auditoría. Cambiar SÓLO el vehículo escrito sí cuenta: el `before`/`after` es la fila redactada +
+`vehicle_text`, lo que el operador ve como UN pedido.
+
+## Guardrails
+
+Los 8, con las dos notas de la 015: la tabla de `ops` no tiene trigger, así que su `updated_at` lo
+escribe la función; `quote_requests.updated_at` lo sigue moviendo `trg_quote_requests_updated_at`.
+El alta no lockea (no hay fila previa); la edición toma el `FOR UPDATE` de `_lock_quote_request`
+antes de leer el `before`.
+
+## Se probó — en una réplica local, NO en DEV
+
+`migrations/018_ops_editar_pedido.test.sql`: 66 casos, `BEGIN … ROLLBACK`. **Suma las pruebas del
+alta que vivían en la 012** (esa suite quedó como redirect, igual que 008 → 009 y 013 → 016).
+
+Al 2026-09-27 el `.env` apunta a producción y el Docker de DEV no está levantado, así que la suite
+se corrió en **PGlite** (Postgres 17 en WASM) contra una réplica del schema de `quote_requests`
+relevada de producción ese día: los enums, las columnas y los CHECK copiados de
+`pg_get_constraintdef`, el trigger, y las funciones de 007/011 que la 018 usa, extraídas de sus
+migraciones. Rojo sin la 018 (aborta en el caso 05), 66/66 con la 018. **No reemplaza correrla en
+DEV antes de producción**: la réplica no tiene el resto de `public`.
+
+## Sin la 018 aplicada
+
+El alta y la edición llaman a las firmas nuevas, así que el handler chequea
+`to_regclass('ops.quote_request_vehicle_text')` antes (`QUOTE_EDIT_UNAVAILABLE`), y la ficha
+esconde «Editar datos». La lectura del vehículo escrito también se guarda con ese chequeo.
+**Consecuencia: entre el merge y la aplicación de la 018, "Cargar pedido" no funciona** en esa
+base. En producción la aplica el `vercel-build` antes de buildear, así que no hay ventana.
