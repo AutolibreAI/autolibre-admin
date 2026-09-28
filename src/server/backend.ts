@@ -139,7 +139,11 @@ interface BackendErrorBody {
  * status: sin él, "algo falló" no distingue "el manual ya existe" de "el
  * backend está caído".
  */
-async function backendError(response: Response, what: string): Promise<Error> {
+async function backendError(
+  response: Response,
+  what: string,
+  opts: { detailed?: boolean } = {},
+): Promise<Error> {
   let body: BackendErrorBody | null = null
 
   try {
@@ -164,6 +168,31 @@ async function backendError(response: Response, what: string): Promise<Error> {
   if (response.status === 401) return new Error('BACKEND_UNAUTHENTICATED')
   if (response.status === 403) return new Error('BACKEND_FORBIDDEN')
   if (response.status === 413) return new Error('BACKEND_PAYLOAD_TOO_LARGE')
+
+  /**
+   * Modo `detailed` — opt-in, lo usa sólo el alta de documentos de
+   * conocimiento (2026-09-28).
+   *
+   * Existe porque ahí 400, 404 y 409 significan cosas DISTINTAS que la UI tiene
+   * que decir distinto (marca `rag:skip` mal puesta vs. "el documento a
+   * reemplazar no existe" vs. "ya hay una versión nueva en curso"), y el 400
+   * trae además un `code` (`INVALID_STATE_TRANSITION`) que el formato genérico
+   * `BACKEND_ERROR:<status>:<msg>` perdía.
+   *
+   * NO se volvió el default a propósito: `readableManualError` ya interpreta
+   * `BACKEND_ERROR:404` como "el objeto no llegó a storage" (el confirm de los
+   * manuales), y cambiar la sentinela para todos rompía esa lectura sin que
+   * `tsc` dijera nada — son strings.
+   */
+  if (opts.detailed) {
+    const detail = message ?? `${what} falló sin explicación`
+    if (response.status === 400) {
+      const code = typeof body?.code === 'string' ? body.code : ''
+      return new Error(`BACKEND_BAD_REQUEST:${code}:${detail}`)
+    }
+    if (response.status === 404) return new Error(`BACKEND_NOT_FOUND:${detail}`)
+    if (response.status === 409) return new Error(`BACKEND_CONFLICT:${detail}`)
+  }
 
   return new Error(
     `BACKEND_ERROR:${response.status}:${message ?? `${what} falló sin explicación`}`,
@@ -442,4 +471,89 @@ export async function broadcastNotification(input: {
   }
 
   if (!response.ok) throw await backendError(response, 'El alta de la notificación')
+}
+
+// ── Documentos de conocimiento (RAG) ─────────────────────────────────────────
+
+/**
+ * El markdown viaja entero en el request, así que el timeout no puede ser el de
+ * los JSON de arriba. 1MB es poco, pero el backend lo sube a Spaces ANTES de
+ * contestar (el 201 sale con el archivo ya guardado y la ingesta encolada).
+ */
+const MARKDOWN_UPLOAD_TIMEOUT_MS = 60_000
+
+/**
+ * Dar de alta un documento PÚBLICO del RAG desde un markdown, o una versión
+ * nueva de uno existente (`supersedesDocumentId`).
+ *
+ * ── Por qué HTTP y no SQL ───────────────────────────────────────────────────
+ *
+ * El grep al backend da POSITIVO: `POST /knowledge-documents/markdown`
+ * (`knowledge/document/presentation/knowledge-document.controller.ts`) bajo
+ * `AdminGuard`. Y un INSERT sería imposible, no sólo de más: el markdown va a
+ * Spaces (fila de `files`), el backend valida UTF-8 y la marca
+ * `<!-- rag:skip -->` ANTES de subir nada, y la ingesta (trocear + vectorizar)
+ * corre asincrónica del otro lado. Es el mismo caso que los manuales.
+ *
+ * ── Por qué ESTE archivo SÍ se proxea, a diferencia de los manuales ─────────
+ *
+ * Los manuales dejaron de pasar por acá porque Vercel corta el cuerpo de una
+ * Serverless Function en 4.5MB (`.claude/rules/vehicle-manuals.md`, trampa 2).
+ * Acá el backend corta en 1MB (`MAX_MARKDOWN_FILE_SIZE_BYTES`), así que el
+ * techo de Vercel no llega a morder, y el endpoint es multipart de un solo
+ * paso — no hay presigned PUT para markdown. Si el backend sube su límite por
+ * encima de ~4MB, esto deja de alcanzar.
+ *
+ * ── El contrato ─────────────────────────────────────────────────────────────
+ *
+ *  - Multipart con `file`, `title`, `relevance` y opcional
+ *    `supersedesDocumentId`. El backend lee TODAS las partes (`parts()`), así
+ *    que el orden no importa; igual el archivo va último, por las dudas.
+ *  - `relevance` es SIEMPRE `'global'`: el panel sólo carga conocimiento
+ *    general. `spec` necesitaría elegir una spec COMPLETA y no hay pantalla
+ *    para eso todavía.
+ *  - Los campos vacíos NO se mandan: el backend valida con
+ *    `forbidNonWhitelisted` y un `supersedesDocumentId=""` es un 400.
+ *  - NO se setea `content-type`: `fetch` arma el boundary del multipart solo.
+ *    Ponerlo a mano sin boundary es un 400 que parece un bug del backend.
+ *  - 201 `{ id }`, en estado `pending`. Lo que pase después se lee de
+ *    Postgres (`knowledge-documents.repo.ts`).
+ *
+ * Errores con `detailed` (ver `backendError`): 400 trae el mensaje del backend
+ * tal cual — es lo que le dice al operador en QUÉ LÍNEA puso mal el
+ * `rag:skip` —, 404 = el documento a reemplazar no existe, 409 = ya fue
+ * reemplazado o ya tiene una versión nueva pendiente/lista, 413 = más de 1MB.
+ */
+export async function uploadMarkdownKnowledgeDocument(input: {
+  file: Blob
+  fileName: string
+  title: string
+  supersedesDocumentId?: string
+}): Promise<{ id: string }> {
+  const token = await bearerToken()
+
+  const form = new FormData()
+  form.append('title', input.title)
+  form.append('relevance', 'global')
+  if (input.supersedesDocumentId) form.append('supersedesDocumentId', input.supersedesDocumentId)
+  form.append('file', input.file, input.fileName)
+
+  const response = await fetch(`${baseUrl()}/knowledge-documents/markdown`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+    signal: AbortSignal.timeout(MARKDOWN_UPLOAD_TIMEOUT_MS),
+  })
+
+  if (!response.ok) {
+    throw await backendError(response, 'El alta del documento', { detailed: true })
+  }
+
+  const body = (await response.json()) as { id?: unknown }
+
+  if (typeof body.id !== 'string') {
+    throw new Error('BACKEND_ERROR:201:El backend no devolvió el id del documento')
+  }
+
+  return { id: body.id }
 }
