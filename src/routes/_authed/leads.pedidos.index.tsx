@@ -287,6 +287,7 @@ function Pedidos() {
                 <Sort label="Vehículo" sortKey="plate" search={search} />
                 <Sort label="Presupuestos" sortKey="responses" search={search} align="right" firstClick="desc" />
                 <TableHead>Descripción</TableHead>
+                <Sort label="Zona" sortKey="location" search={search} />
                 <Sort label="Monto declarado" sortKey="declaredAmount" search={search} align="right" firstClick="desc" />
                 <Sort label="A contacto" sortKey="toContact" search={search} align="right" firstClick="desc" />
                 <Sort label="A respuesta" sortKey="toAnswer" search={search} align="right" firstClick="desc" />
@@ -477,6 +478,19 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
 
       <TableCell className="max-w-[18rem]" title={row.description}>
         <p className="line-clamp-2 text-sm text-muted-foreground">{row.description}</p>
+      </TableCell>
+
+      <TableCell className="max-w-[12rem]">
+        {row.locationAddress || row.locationLocality ? (
+          <div title={row.locationAddress ?? undefined}>
+            {row.locationLocality ? <div className="text-sm">{row.locationLocality}</div> : null}
+            {row.locationAddress ? (
+              <div className="line-clamp-2 text-xs text-muted-foreground">{row.locationAddress}</div>
+            ) : null}
+          </div>
+        ) : (
+          <Muted>sin zona</Muted>
+        )}
       </TableCell>
 
       {/*

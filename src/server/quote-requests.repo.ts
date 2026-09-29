@@ -305,6 +305,8 @@ interface ListRow {
   /** Sólo las trae `listQuoteRequests` (`listExtraColumns`); el detalle las lee aparte. */
   vehicle_text?: string | null
   response_count?: number | string | null
+  location_address?: string | null
+  location_locality?: string | null
 }
 
 /** Campo por campo, nunca un spread de la fila — mismo criterio que `mapCensus`. */
@@ -334,6 +336,8 @@ function mapListRow(r: ListRow): QuoteRequestListItem {
     proposalsCount: toIntOrNull(r.proposals_count),
     responseCount: toIntOrNull(r.response_count),
     vehicleText: r.vehicle_text ?? null,
+    locationAddress: r.location_address ?? null,
+    locationLocality: r.location_locality ?? null,
     contactedAt: toIso(r.contacted_at),
     answeredAt: toIso(r.answered_at),
     closedAt: toIso(r.closed_at),
@@ -371,6 +375,7 @@ const SORT_COLUMNS: Record<QuoteSortKey, string> = {
   declaredAmount: 'declared_amount',
   proposals: 'proposals_count',
   responses: 'response_count',
+  location: 'lower(coalesce(location_locality, location_address))',
   toContact: 'minutes_to_contact',
   toAnswer: 'minutes_to_answer',
   notes: 'note_count',
@@ -411,6 +416,8 @@ export async function listQuoteRequests(
       `coalesce(contact_name, '') ilike ${p}`,
       `coalesce(user_email, '') ilike ${p}`,
       `description ilike ${p}`,
+      `coalesce(location_address, '') ilike ${p}`,
+      `coalesce(location_locality, '') ilike ${p}`,
     ]
     // El teléfono se guarda canónico (`5491125120472`) y el operador lo tipea
     // como lo dicta la persona ("11 2512-0472"). Se compara sólo por dígitos.
@@ -488,6 +495,8 @@ async function listExtraColumns(): Promise<string> {
     ? `(select count(*)::int from ops.quote_request_response rr where rr.quote_request_id = qr.id)`
     : `null::int`
   return `,
+  qr.location_address,
+  qr.location_locality,
   ${vehicleText} as vehicle_text,
   ${responseCount} as response_count`
 }

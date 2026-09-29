@@ -242,6 +242,7 @@ export const QUOTE_SORT_KEYS = [
   'declaredAmount',
   'proposals',
   'responses',
+  'location',
   'toContact',
   'toAnswer',
   'notes',
@@ -649,6 +650,9 @@ export interface QuoteRequestListItem {
    * — `.claude/rules/leads.md`. `null` = la 015 no está aplicada en esta base.
    */
   responseCount: number | null
+  /** Dónde está el auto (`location_address` / `location_locality`). `null` = sin zona. */
+  locationAddress: string | null
+  locationLocality: string | null
   /**
    * El vehículo ESCRITO ("Peugeot 208 1.6 2019") cuando no hay `vehicleId`
    * que vincular — `ops.quote_request_vehicle_text` (018). `null` = no se
