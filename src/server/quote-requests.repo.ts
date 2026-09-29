@@ -23,6 +23,7 @@ import {
   type QuoteRequestsAvailability,
   type QuoteSortKey,
   type SetQuoteRequestRubrosInput,
+  type UpdateQuoteRequestInput,
 } from '~/lib/quote-requests'
 import type { QuoteVehicleProfile } from '~/lib/quote-vehicle-profile'
 
@@ -102,6 +103,8 @@ const READ_COLUMNS = [
   'location_latitude',
   'location_longitude',
   'location_locality',
+  'location_source',
+  'location_province',
 ] as const
 
 /**
@@ -117,6 +120,20 @@ const READ_COLUMNS = [
  * error de relación inexistente dentro de una transacción la aborta, y un
  * catch que se traga errores de SQL termina tragándose también los reales.
  */
+/**
+ * ¿Está aplicada la migración 018 (vehículo escrito + edición)? Se mira la
+ * tabla y no la función: las dos llegan en la misma migración, que el runner
+ * aplica en UNA transacción. Mismo patrón que `quoteResponsesAvailable()`.
+ */
+export async function quoteEditAvailable(opts: { signal?: AbortSignal } = {}): Promise<boolean> {
+  void opts.signal
+
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('ops.quote_request_vehicle_text') is not null as ok`,
+  )
+  return row?.ok === true
+}
+
 export async function quoteRequestsAvailability(
   opts: { signal?: AbortSignal } = {},
 ): Promise<QuoteRequestsAvailability> {
@@ -156,15 +173,21 @@ const uncontactedPredicate = (alias: string, param: string) =>
     and ${alias}created_at < now() - make_interval(hours => ${param}::int))`
 
 /**
- * "No es un duplicado" — compartido entre `quoteRequestPulse()` y
- * `quoteRequestSeries()`. Verificado el 2026-09-17 contra producción: 15 de 17
- * pedidos son duplicados que el operador marcó a mano. Si esta condición
- * divergiera entre la card de Inicio y la serie de `/metricas`, "pedidos de
- * esta semana" contaría distinto en las dos pantallas. Sin alias — las dos
- * consultas que la usan tienen una sola tabla en scope en el punto donde se
- * filtra.
+ * "Es un pedido REAL" — no está cerrado como `duplicate`. El operador usa ese
+ * código para dos cosas: el duplicado de verdad (la persona reenvió, doble
+ * submit) y **los pedidos de PRUEBA que manda el propio equipo** (dato de
+ * producto del 2026-09-25). Así que ningún número que se use para medir los
+ * cuenta: la card "Pedidos totales", la serie de `/metricas`, el resumen de
+ * `/leads/pedidos` y el feed de `/actividad` importan ESTE predicado.
+ *
+ * Al 2026-09-25 en producción: 25 de 32. Si divergiera entre dos pantallas,
+ * "pedidos de esta semana" contaría distinto en cada una sin ningún error que
+ * lo delate. `alias` con el punto incluido (`'qr.'`) o vacío.
  */
-const NOT_DUPLICATE_PREDICATE = `close_reason_code is distinct from 'duplicate'`
+export const notDuplicatePredicate = (alias = '') =>
+  `${alias}close_reason_code is distinct from 'duplicate'`
+
+const NOT_DUPLICATE_PREDICATE = notDuplicatePredicate()
 
 /**
  * ── LEFT en las cuatro patas ───────────────────────────────────────────────
@@ -257,7 +280,7 @@ interface ListRow {
   user_id: string | null
   user_email: string | null
   user_name: string | null
-  plate: string
+  plate: string | null
   vehicle_id: string | null
   vehicle_plate: string | null
   vehicle_archived: boolean | null
@@ -279,6 +302,9 @@ interface ListRow {
   note_count: number | string
   uncontacted: boolean
   entered_manually: boolean
+  /** Sólo las trae `listQuoteRequests` (`listExtraColumns`); el detalle las lee aparte. */
+  vehicle_text?: string | null
+  response_count?: number | string | null
 }
 
 /** Campo por campo, nunca un spread de la fila — mismo criterio que `mapCensus`. */
@@ -306,6 +332,8 @@ function mapListRow(r: ListRow): QuoteRequestListItem {
     description: r.description,
     declaredAmount: toNum(r.declared_amount),
     proposalsCount: toIntOrNull(r.proposals_count),
+    responseCount: toIntOrNull(r.response_count),
+    vehicleText: r.vehicle_text ?? null,
     contactedAt: toIso(r.contacted_at),
     answeredAt: toIso(r.answered_at),
     closedAt: toIso(r.closed_at),
@@ -342,6 +370,7 @@ const SORT_COLUMNS: Record<QuoteSortKey, string> = {
   plate: 'plate',
   declaredAmount: 'declared_amount',
   proposals: 'proposals_count',
+  responses: 'response_count',
   toContact: 'minutes_to_contact',
   toAnswer: 'minutes_to_answer',
   notes: 'note_count',
@@ -416,10 +445,14 @@ export async function listQuoteRequests(
 
   if (search.quoteUncontacted) where.push('uncontacted')
 
+  if (!search.quoteShowDuplicates) where.push(NOT_DUPLICATE_PREDICATE)
+
+  const extra = await listExtraColumns()
+
   const rows = await sql<ListRow>(
     `
     select * from (
-      select ${SELECT_COLUMNS}
+      select ${SELECT_COLUMNS}${extra}
       ${FROM_JOINS}
     ) s
     ${where.length ? `where ${where.join(' and ')}` : ''}
@@ -430,6 +463,33 @@ export async function listQuoteRequests(
   )
 
   return rows.map(mapListRow)
+}
+
+/**
+ * Las dos columnas de `ops` que sólo el listado necesita: el vehículo escrito
+ * (018) y cuántos presupuestos se cargaron (015). Van como subconsultas
+ * ESCALARES, no como JOINs: una fila de `quote_requests` no se multiplica.
+ *
+ * Cada tabla puede no existir en esta base (la migración todavía no corrió), y
+ * referenciar una relación inexistente explota al planificar la sentencia — por
+ * eso se mira con `to_regclass` ANTES y, sin tabla, la columna sale `NULL` en
+ * vez de romper el listado. Mismo criterio que `quoteEditAvailable()`.
+ * `NULL` ≠ `0`: sin la 015 no sabemos cuántos hay; con ella, cero es cero.
+ */
+async function listExtraColumns(): Promise<string> {
+  const row = await sqlOne<{ has_text: boolean; has_resp: boolean }>(
+    `select to_regclass('ops.quote_request_vehicle_text') is not null as has_text,
+            to_regclass('ops.quote_request_response') is not null as has_resp`,
+  )
+  const vehicleText = row?.has_text
+    ? `(select vt.vehicle_text from ops.quote_request_vehicle_text vt where vt.quote_request_id = qr.id)`
+    : `null::text`
+  const responseCount = row?.has_resp
+    ? `(select count(*)::int from ops.quote_request_response rr where rr.quote_request_id = qr.id)`
+    : `null::int`
+  return `,
+  ${vehicleText} as vehicle_text,
+  ${responseCount} as response_count`
 }
 
 // ── Resumen ─────────────────────────────────────────────────────────────────
@@ -449,6 +509,7 @@ export async function quoteRequestStatusSummary(
 
   const row = await sqlOne<{
     total: number | string
+    duplicates: number | string
     received: number | string
     contacted: number | string
     answered: number | string
@@ -456,20 +517,24 @@ export async function quoteRequestStatusSummary(
     cancelled_by_user: number | string
     uncontacted: number | string
   }>(
+    // Todo contador va con el corte de pedido REAL; los duplicados se cuentan
+    // aparte. Un solo SELECT, un solo snapshot: total = suma de los cuatro.
     `select
-       count(*)::int as total,
-       count(*) filter (where status = 'received')::int as received,
-       count(*) filter (where status = 'contacted')::int as contacted,
-       count(*) filter (where status = 'answered')::int as answered,
-       count(*) filter (where status = 'closed')::int as closed,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE})::int as total,
+       count(*) filter (where not (${NOT_DUPLICATE_PREDICATE}))::int as duplicates,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'received')::int as received,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'contacted')::int as contacted,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'answered')::int as answered,
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and status = 'closed')::int as closed,
        count(*) filter (where close_reason_code = 'cancelled_by_user')::int as cancelled_by_user,
-       count(*) filter (where ${uncontactedPredicate('', '$1')})::int as uncontacted
+       count(*) filter (where ${NOT_DUPLICATE_PREDICATE} and ${uncontactedPredicate('', '$1')})::int as uncontacted
      from quote_requests`,
     [QUOTE_UNCONTACTED_AFTER_HOURS],
   )
 
   return {
     total: toInt(row?.total),
+    duplicates: toInt(row?.duplicates),
     byStatus: {
       received: toInt(row?.received),
       contacted: toInt(row?.contacted),
@@ -749,6 +814,8 @@ interface DetailRow extends ListRow {
    * en la misma situación que `location_address`.
    */
   location_locality: string | null
+  location_source: string | null
+  location_province: string | null
   /** `MARCA MODELO`, sin versión ni año. Para el mensaje, no para la tarjeta. */
   catalog_short_label: string | null
 }
@@ -784,6 +851,8 @@ export async function findQuoteRequestDetail(
             qr.location_latitude,
             qr.location_longitude,
             qr.location_locality,
+            qr.location_source::text as location_source,
+            qr.location_province,
             -- Sólo marca y modelo, para nombrar el auto en el mensaje que se
             -- le manda a la persona ("para el Nissan Note"). El catalog_label
             -- de arriba trae además versión y año, que en una tarjeta del
@@ -811,6 +880,23 @@ export async function findQuoteRequestDetail(
     [id],
   )
 
+  /**
+   * El vehículo escrito (018) también vive en `ops`, y con el mismo criterio
+   * que los rubros va en su propia consulta. Pero ésta puede no tener tabla:
+   * sin la 018 aplicada, `ops.quote_request_vehicle_text` no existe y un
+   * SELECT directo explotaría al planificarse. `to_regclass` primero, igual
+   * que `quoteResponsesAvailable()` de la 015.
+   */
+  const editAvailable = await quoteEditAvailable()
+  const vehicleText = editAvailable
+    ? ((
+        await sqlOne<{ vehicle_text: string }>(
+          `select vehicle_text from ops.quote_request_vehicle_text where quote_request_id = $1`,
+          [id],
+        )
+      )?.vehicle_text ?? null)
+    : null
+
   return {
     ...mapListRow(r),
     updatedAt: toIso(r.updated_at) ?? '',
@@ -827,6 +913,10 @@ export async function findQuoteRequestDetail(
     locationLocality: r.location_locality,
     catalogShortLabel: r.catalog_short_label,
     rubroCategorySlugs: rubros.map((row) => row.category_slug),
+    vehicleText,
+    locationSource: r.location_source,
+    locationProvince: r.location_province,
+    editAvailable,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.
@@ -1007,8 +1097,8 @@ export async function setQuoteRequestRubros(
  * de `/leads/pedidos` cuando `router.invalidate()` lo vuelve a correr.
  *
  * Parámetros NOMBRADOS, igual que las transiciones: cuatro opcionales de texto
- * seguidos se cruzan por posición sin que nada avise. Es la misma forma que
- * usa el bloque de integración de `012_ops_crear_pedido.test.sql`.
+ * seguidos se cruzan por posición sin que nada avise. La firma es la de la
+ * 018 (patente opcional + `p_vehicle_text`); la de la 012 ya no existe.
  */
 export async function createQuoteRequest(
   input: CreateQuoteRequestInput,
@@ -1017,32 +1107,101 @@ export async function createQuoteRequest(
 ): Promise<{ id: string; publicNumber: number }> {
   void opts.signal
 
+  // Los diez primeros parámetros son la integración de
+  // `018_ops_editar_pedido.test.sql` (`PREPARE p018_create`); los tres de zona
+  // son de la 019 y van al final, así que esa suite sigue resolviendo.
   const row = await sqlOne<{ q: { id: string; public_number: number } }>(
     `SELECT ops.create_quote_request(
        p_actor_id        => $1,
        p_channel         => $2,
        p_contact_phone   => $3,
-       p_plate           => $4,
-       p_description     => $5,
-       p_contact_name    => $6,
-       p_contact_email   => $7,
-       p_declared_amount => $8,
-       p_note            => $9
+       p_description     => $4,
+       p_plate           => $5,
+       p_vehicle_text    => $6,
+       p_contact_name    => $7,
+       p_contact_email   => $8,
+       p_declared_amount => $9,
+       p_note            => $10,
+       p_location_address  => $11,
+       p_location_locality => $12,
+       p_location_province => $13
      ) AS q`,
     [
       actorId,
       input.channel,
       input.contactPhone,
-      input.plate,
       input.description,
-      input.contactName ?? null,
-      input.contactEmail ?? null,
+      blankToNull(input.plate),
+      blankToNull(input.vehicleText),
+      blankToNull(input.contactName),
+      blankToNull(input.contactEmail),
       input.declaredAmount ?? null,
-      input.note ?? null,
+      blankToNull(input.note),
+      blankToNull(input.locationAddress),
+      blankToNull(input.locationLocality),
+      blankToNull(input.locationProvince),
     ],
   )
   if (!row) throw new Error('QUOTE_REQUEST_CREATE_FAILED')
   return { id: row.q.id, publicNumber: toInt(row.q.public_number) }
+}
+
+// ── Escritura: editar los datos de un pedido (migración 018) ────────────────
+
+/**
+ * Contacto, patente, vehículo escrito, descripción, monto declarado y
+ * ubicación tipeada, vía `ops.update_quote_request` (018). Reemplazo
+ * COMPLETO: `''` y `null` viajan como NULL y el SP borra ese campo.
+ *
+ * El backend no tiene un camino admin para editar un pedido (último `grep`:
+ * 2026-09-15, `leads.md`), y el vehículo escrito ni siquiera tiene columna en
+ * `quote_requests` — vive en `ops`. Por eso es un SP y no HTTP. Si un
+ * `UPDATE quote_requests` aparece suelto en este archivo, está mal: el SP
+ * lockea la fila y escribe `ops.action_log` en la misma sentencia.
+ *
+ * SQL copiado LITERAL en `018_ops_editar_pedido.test.sql` (`PREPARE
+ * p018_update`). Si se toca uno, se toca el otro.
+ */
+export async function updateQuoteRequest(
+  input: UpdateQuoteRequestInput,
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuoteRequestWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<SpRow>(
+    `SELECT ops.update_quote_request(
+       p_quote_request_id  => $1,
+       p_actor_id          => $2,
+       p_contact_phone     => $3,
+       p_description       => $4,
+       p_contact_name      => $5,
+       p_contact_email     => $6,
+       p_plate             => $7,
+       p_vehicle_text      => $8,
+       p_declared_amount   => $9,
+       p_location_address  => $10,
+       p_location_locality => $11,
+       p_location_province => $12,
+       p_note              => $13
+     ) AS q`,
+    [
+      input.quoteRequestId,
+      actorId,
+      input.contactPhone,
+      input.description,
+      blankToNull(input.contactName),
+      blankToNull(input.contactEmail),
+      blankToNull(input.plate),
+      blankToNull(input.vehicleText),
+      input.declaredAmount,
+      blankToNull(input.locationAddress),
+      blankToNull(input.locationLocality),
+      blankToNull(input.locationProvince),
+      null,
+    ],
+  )
+  return toWriteResult(row?.q, input.quoteRequestId)
 }
 
 // ── Vehículo vinculado: la tarjeta de sólo lectura de la ficha ─────────────

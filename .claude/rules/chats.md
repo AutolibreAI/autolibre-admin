@@ -19,11 +19,23 @@ verificable — no es una lectura libre:
   `messages[0]` a ciegas: el invariante es real hoy, pero buscar por autor no
   depende de que se siga cumpliendo.
 
-**48 de las 70 conversaciones de la base no tienen NINGÚN mensaje.** No es un
-caso de borde, es la mayoría. El listado y el detalle lo muestran como
-`"sin mensajes"`, con estilo apagado — no lo esconden y no lo tratan como
-error. Ver también `conv-sin-mensajes` en `deriveUserFlags()` de
-`~/lib/users`, que ya señalaba esto mismo desde la ficha de usuario.
+**Las conversaciones SIN mensajes no se listan — decidido el 2026-09-25.**
+Son la mayoría (125 de 228 en producción; 48 de 70 cuando se escribió esta
+pantalla) y son ruido: abrir el asistente sin escribir no es uso. Hasta esa
+fecha el listado las mostraba detrás de un filtro "Todos"/"Sin mensajes", con
+estilo apagado; los dos valores se sacaron de `CHAT_MESSAGE_FILTERS` y el
+recorte vive en el WHERE **interno** de `listChats` (`exists` sobre
+`conversation_messages`), así que ningún filtro las trae de vuelta. Un link
+viejo con `?messages=all|empty` cae al default por el `.catch`.
+
+Lo mismo en `/actividad` (`activity-feed.md`). El número no se pierde: la
+adopción del chat de `/metricas` ya exigía un mensaje, y
+`conv-sin-mensajes` en `deriveUserFlags()` de `~/lib/users` lo sigue señalando
+en la ficha del usuario. El detalle `/chats/:id` de una vacía sigue
+respondiendo si alguien tiene el uuid — no se linkea desde ningún lado.
+
+Una fila puede tener mensajes y no tener título: sólo contestó la IA. Se muestra
+"sin mensaje del usuario".
 
 ## El modelo es por MENSAJE, no por conversación — pero en la práctica coincide
 

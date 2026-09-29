@@ -420,9 +420,13 @@ function Vehicles({ vehicles }: { vehicles: Array<UserVehicle> }) {
                       caracteres alfanuméricos en la tipografía de texto se leen
                       mal, y confundir un 0 con una O manda a consultar otro auto.
                     */}
-                    <span className="font-mono text-sm font-semibold tracking-wider">
+                    <Link
+                      to="/vehiculos/$vehicleId"
+                      params={{ vehicleId: v.id }}
+                      className="rounded outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background font-mono text-sm font-semibold tracking-wider text-brand"
+                    >
                       {v.plate}
-                    </span>
+                    </Link>
                     {v.alias ? (
                       <span className="text-sm text-muted-foreground">«{v.alias}»</span>
                     ) : null}

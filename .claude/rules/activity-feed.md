@@ -36,6 +36,16 @@ que es la fuente de verdad de esto—:
 - `legal_acceptances` (298) son dos filas por usuario en el mismo segundo que su
   alta: ruido, no un hecho nuevo.
 
+Dos recortes más, decididos el 2026-09-25, que viven en el `where` de su rama:
+
+- **`conversations` SIN mensajes** (125 de 228): abrir el asistente sin
+  escribir no es algo que hizo la persona. Antes entraban con resultado
+  "sin mensajes"; ese resultado ya no existe. Mismo corte que `/chats`.
+- **`quote_requests` cerrados como `duplicate`** (25 de 32): el operador marca
+  así los duplicados Y los pedidos de PRUEBA del equipo. El predicado se
+  IMPORTA de `quote-requests.repo.ts` (`notDuplicatePredicate('qr.')`), el mismo
+  que resta la card "Pedidos totales" — no se recopia.
+
 **Agregar un tipo es una rama en `BRANCHES` + una entrada en `ACTIVITY_KINDS`,
 `ACTIVITY_KIND_LABELS`, `ACTIVITY_KIND_SHORT`, `ACTIVITY_TARGET_LABELS` y
 `KIND_ICONS`.** Los cinco `Record` son cerrados y el compilador los obliga; lo
@@ -197,15 +207,16 @@ un alta de usuario abre su expediente, un feedback abre `/feedback?userId=…`
 Repetir esas pantallas adentro de `/actividad` sería el error que la premisa
 del `CLAUDE.md` prohíbe: una pantalla que no reemplaza ninguna consulta.
 
-`/actividad/:tipo/:id` existe sólo para los siete tipos que **hoy no tienen
-dueño** (`ACTIVITY_DETAIL_KINDS`): vehículo, mantenimiento, plan, consulta de
-multas, consulta de datos, dispositivo y login. Ahí sí reemplaza un
+`/actividad/:tipo/:id` existe sólo para los seis tipos que **hoy no tienen
+dueño** (`ACTIVITY_DETAIL_KINDS`): mantenimiento, plan, consulta de multas,
+consulta de datos, dispositivo y login. Ahí sí reemplaza un
 `select * from <tabla> where id = '…'` más los dos joins que hacen falta para
 entenderlo.
 
-**El día que exista una ficha de vehículo**, `vehiculo` sale de
-`ACTIVITY_DETAIL_KINDS` y entra como `case` en `ActivityLink`. Los dos lugares
-se tocan juntos y el compilador lo exige.
+**`vehiculo` salió de esa lista el 2026-09-28**, cuando apareció
+`/vehiculos/:vehicleId`: entró como `case` en `ActivityLink` y su consulta de
+`DETAIL_QUERIES` se borró. Es el mismo camino que hizo `feedback`. La tarjeta
+«Sobre qué auto» de las fichas que quedan ahora linkea a la del vehículo.
 
 Como el destino cambia según el tipo, **la fila DICE adónde va**
 (`ACTIVITY_TARGET_LABELS`: "Ver el chat", "Ver el escaneo", "Ver el detalle").

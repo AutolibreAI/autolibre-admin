@@ -2,7 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { FAILED, NO_DATA, OK } from './scanners.repo'
-import { quoteRequestsAvailability } from './quote-requests.repo'
+import { notDuplicatePredicate, quoteRequestsAvailability } from './quote-requests.repo'
 import {
   ACTIVITY_KINDS,
   ACTIVITY_LIMIT,
@@ -153,11 +153,11 @@ const BRANCHES: Record<ActivityKind, string> = {
                from conversation_messages m
               where m.conversation_id = c.id and m.author::text = 'user'
               order by m.sent_at limit 1)`,
-    // 48 de 70 conversaciones no tienen NINGÚN mensaje (`chats.md`). No es un
-    // caso de borde: es la mayoría, y se muestra, no se esconde.
-    outcome: `case when not exists (
-        select 1 from conversation_messages m2 where m2.conversation_id = c.id
-      ) then 'sin_mensajes' end`,
+    // Una conversacion SIN mensajes no entra (decidido 2026-09-25): abrir el
+    // asistente sin escribir no es algo que la persona hizo, es ruido — 125 de
+    // 228 en produccion. Mismo corte que /chats y que "uso el chat" de
+    // usageAdoption: al menos un mensaje, de cualquiera de los dos lados.
+    where: `exists (select 1 from conversation_messages m2 where m2.conversation_id = c.id)`,
   }),
 
   escaneo: branch('escaneo', {
@@ -300,6 +300,11 @@ const BRANCHES: Record<ActivityKind, string> = {
       left(btrim(qr.description), 120)
     ), '')`,
     outcome: `qr.status::text`,
+    // Los duplicados NO entran (decidido 2026-09-25): el operador los usa
+    // tambien para descartar los pedidos de PRUEBA que manda el equipo, asi que
+    // no son "algo que hizo una persona". Predicado IMPORTADO, no recopiado: es
+    // el mismo que resta la card "Pedidos totales".
+    where: notDuplicatePredicate('qr.'),
   }),
 
   consulta_multas: branch('consulta_multas', {
@@ -590,28 +595,6 @@ const DETAIL_NO_VEHICLE_COLS = `
  * impide un click que lleva a una pantalla vacía.
  */
 const DETAIL_QUERIES: Record<ActivityDetailKind, string> = {
-  vehiculo: `
-    select v.id as id, v.created_at as occurred_at,
-      ${DETAIL_USER_COLS}, ${DETAIL_VEHICLE_COLS},
-      case when v.archived then 'archivado' end as outcome,
-      ${fields([
-        ['Patente', 'v.plate'],
-        ['Alias', `nullif(btrim(v.alias), '')`],
-        ['Modelo del catálogo', VEHICLE_LABEL],
-        ['Motor / caja', `nullif(concat_ws(' · ', vcs.engine, vcs.fuel_type, vcs.transmission), '')`],
-        ['VIN', `nullif(btrim(v.vin), '')`],
-        ['Nº de motor', `nullif(btrim(v.engine_number), '')`],
-        ['Color', `nullif(btrim(v.color), '')`],
-        ['Kilometraje', `case when coalesce(v.odometer_value, 0) > 0 then v.odometer_value end`],
-        ['Patentado en', 'v.registered_at', 'date'],
-        ['Última actualización', 'v.updated_at', 'datetime'],
-      ])} as fields
-    from vehicles v
-    join users u on u.id = v.user_id
-    ${CATALOG_JOINS}
-    where v.id = $1
-  `,
-
   mantenimiento: `
     select mo.id as id, mo.created_at as occurred_at,
       ${DETAIL_USER_COLS}, ${DETAIL_VEHICLE_COLS},

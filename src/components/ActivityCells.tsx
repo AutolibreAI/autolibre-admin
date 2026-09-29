@@ -93,6 +93,14 @@ export function ActivityLink({
           {children}
         </Link>
       )
+    case 'vehiculo':
+      // Desde el 2026-09-28 el auto tiene ficha propia; antes caía en
+      // `/actividad/vehiculo/:id`, que era un `select *` con dos joins.
+      return (
+        <Link to="/vehiculos/$vehicleId" params={{ vehicleId: id }} className={className}>
+          {children}
+        </Link>
+      )
     case 'feedback':
       return (
         <Link to="/feedback" search={userId ? { userId } : {}} className={className}>

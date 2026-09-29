@@ -1,4 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { Columns3, List } from 'lucide-react'
 import {
   QUOTE_REQUEST_CHANNELS,
   QUOTE_REQUEST_OUTCOMES,
@@ -23,8 +24,14 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
-import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
+import {
+  QuoteStatusBadge,
+  QuoteVehicleWarnings,
+  QuoteWhatsAppLink,
+  quoteAgeLabel,
+} from '~/components/QuoteRequestCells'
 import { QuoteRequestComposer } from '~/components/QuoteRequestComposer'
+import { QuoteBoard } from '~/components/QuoteBoard'
 import { SearchInput } from '~/components/SearchInput'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
@@ -45,12 +52,16 @@ import { cn } from '~/lib/utils'
  * `QuoteRequest` es un aggregate de `quotes/`, NO un `Lead`. Vive bajo `/leads`
  * como línea de captación, igual que Seguros y Multas. → `.claude/rules/leads.md`
  *
- * ── La lista no mueve estados ───────────────────────────────────────────────
+ * ── Lista o tablero (`quoteView`) ─────────────────────────────────────────
  *
- * Marcar contactado / respondido, cerrar y la nota interna viven en la ficha
- * (`QuoteRequestActions`, SPs de `ops` de la 011): respondido y cerrar piden
- * datos que no entran en una celda. Lo único que se escribe desde acá es un
- * pedido NUEVO cargado a mano (`QuoteRequestComposer`, 012). → `.claude/rules/leads.md`
+ * La LISTA no mueve estados: es la tabla, y lo único que escribe es un pedido
+ * NUEVO cargado a mano (`QuoteRequestComposer`, 012).
+ *
+ * El TABLERO (`QuoteBoard`) sí: una columna por estado, y arrastrar la tarjeta
+ * a otra columna corre la MISMA transición que la ficha (SPs de `ops` de la
+ * 011/016), previa confirmación en un recuadro que pide lo que la transición
+ * necesita. Ningún SP retrocede, así que todo movimiento se confirma.
+ * → `.claude/rules/leads.md`
  *
  * ── Es `leads.pedidos.index.tsx` y no `leads.pedidos.tsx` ──────────────────
  *
@@ -75,7 +86,12 @@ export const Route = createFileRoute('/_authed/leads/pedidos/')({
    * `{ availability }` sin tocar `quote_requests`.
    */
   loader: async ({ deps, abortController }) =>
-    listQuoteRequestsFn({ data: deps, signal: abortController.signal }),
+    listQuoteRequestsFn({
+      // En tablero las columnas SON el estado: el filtro de estado no aplica y
+      // se piden todos, cerrados incluidos (la columna «Cerrado» los muestra).
+      data: deps.quoteView === 'tablero' ? { ...deps, quoteStatus: 'all' } : deps,
+      signal: abortController.signal,
+    }),
 
   head: () => ({ meta: [{ title: 'Leads · Pedidos — AutoLibre' }] }),
   component: Pedidos,
@@ -106,18 +122,24 @@ function Pedidos() {
   const setSearch = (next: Partial<QuoteRequestSearch>) =>
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
+  const board = search.quoteView === 'tablero'
   const filtered =
     Boolean(search.q) ||
-    search.quoteStatus !== 'all' ||
+    (!board && search.quoteStatus !== 'all') ||
     search.quoteChannel !== 'all' ||
     search.quoteOutcome !== 'all' ||
-    search.quoteUncontacted
+    search.quoteUncontacted ||
+    search.quoteShowDuplicates
 
   return (
     <>
       <PageHeader
         title="Pedidos de presupuesto"
-        subtitle={`${formatInt(rows.length)} ${filtered ? 'con este filtro' : 'pedidos'} · de ${formatInt(summary.total)} en total`}
+        subtitle={`${formatInt(rows.length)} ${filtered ? 'con este filtro' : 'pedidos'} · de ${formatInt(summary.total)} pedidos reales${
+          summary.duplicates > 0
+            ? ` (${formatInt(summary.duplicates)} descartados como duplicado o prueba)`
+            : ''
+        }`}
         actions={
           <>
             {/* El que llega de forma informal (llamada, en persona, referido) y
@@ -129,14 +151,28 @@ function Pedidos() {
         }
       />
 
-      {/*
-        La fila no mueve estados, y se dice en pantalla: si el operador no lo lee
-        acá, busca en la fila el botón de "marcar contactado" que vive en la ficha.
-      */}
-      <p className="mb-5 max-w-prose text-sm leading-relaxed text-muted-foreground">
-        Marcar contactado / respondido, cerrar y agregar notas internas se hace desde la ficha de cada pedido.
-        Acá sólo se cargan pedidos nuevos a mano.
-      </p>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        {/*
+          Qué escribe cada vista se dice en pantalla: si el operador no lo lee
+          acá, busca en la fila de la lista un botón que vive en el tablero o en
+          la ficha.
+        */}
+        <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
+          {board
+            ? 'Arrastrá una tarjeta a otra columna para cambiarle el estado. Siempre se pide confirmación: ningún cambio de estado se puede deshacer. Un click en la tarjeta abre la ficha del pedido.'
+            : 'Marcar contactado / respondido, cerrar y agregar notas internas se hace desde la ficha de cada pedido o arrastrando la tarjeta en el tablero. Acá sólo se cargan pedidos nuevos a mano.'}
+        </p>
+        <FilterGroup label="Vista">
+          <Chip active={!board} onClick={() => setSearch({ quoteView: 'lista' })}>
+            <List className="size-3.5" aria-hidden />
+            Lista
+          </Chip>
+          <Chip active={board} onClick={() => setSearch({ quoteView: 'tablero' })}>
+            <Columns3 className="size-3.5" aria-hidden />
+            Tablero
+          </Chip>
+        </FilterGroup>
+      </div>
 
       <SummaryTiles summary={summary} />
 
@@ -148,6 +184,8 @@ function Pedidos() {
           onSearch={(q) => setSearch({ q })}
         />
 
+        {/* En tablero no hay filtro de estado: las columnas SON el estado. */}
+        {board ? null : (
         <FilterGroup label="Estado">
           <Chip active={search.quoteStatus === 'open'} onClick={() => setSearch({ quoteStatus: 'open' })}>
             Abiertos
@@ -167,6 +205,7 @@ function Pedidos() {
             Cancelados por el usuario
           </Chip>
         </FilterGroup>
+        )}
 
         <FilterGroup label="Canal">
           <Chip active={search.quoteChannel === 'all'} onClick={() => setSearch({ quoteChannel: 'all' })}>
@@ -209,9 +248,27 @@ function Pedidos() {
             Sin contactar &gt; {QUOTE_UNCONTACTED_AFTER_HOURS} h
           </Chip>
         </FilterGroup>
+
+        {/*
+          Los cerrados como `duplicate` son duplicados de verdad Y pedidos de
+          prueba del equipo: no son pedidos reales y no se listan por default.
+          Están a un click para poder encontrarlos, nunca en los contadores.
+        */}
+        {summary.duplicates > 0 ? (
+          <FilterGroup label="Descartados">
+            <Chip
+              active={search.quoteShowDuplicates}
+              onClick={() => setSearch({ quoteShowDuplicates: !search.quoteShowDuplicates })}
+            >
+              Incluir duplicados / prueba ({formatInt(summary.duplicates)})
+            </Chip>
+          </FilterGroup>
+        ) : null}
       </div>
 
-      {rows.length === 0 ? (
+      {board ? (
+        <QuoteBoard rows={rows} />
+      ) : rows.length === 0 ? (
         <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
           {summary.total === 0
             ? 'Todavía no entró ningún pedido de presupuesto. Cuando alguien pida uno por la app, la web o WhatsApp, aparece acá.'
@@ -228,9 +285,9 @@ function Pedidos() {
                 <Sort label="Contacto" sortKey="contact" search={search} />
                 <Sort label="Cuenta" sortKey="account" search={search} />
                 <Sort label="Vehículo" sortKey="plate" search={search} />
+                <Sort label="Presupuestos" sortKey="responses" search={search} align="right" firstClick="desc" />
                 <TableHead>Descripción</TableHead>
                 <Sort label="Monto declarado" sortKey="declaredAmount" search={search} align="right" firstClick="desc" />
-                <Sort label="Propuestas" sortKey="proposals" search={search} align="right" firstClick="desc" />
                 <Sort label="A contacto" sortKey="toContact" search={search} align="right" firstClick="desc" />
                 <Sort label="A respuesta" sortKey="toAnswer" search={search} align="right" firstClick="desc" />
                 <TableHead>Resultado (operador)</TableHead>
@@ -293,7 +350,9 @@ function SummaryTiles({ summary }: { summary: QuoteRequestStatusSummary }) {
     {
       label: 'Cerrados',
       value: summary.byStatus.closed,
-      sub: `${formatInt(summary.cancelledByUser)} cancelados por el usuario`,
+      sub: `${formatInt(summary.cancelledByUser)} cancelados por el usuario${
+        summary.duplicates > 0 ? ` · sin ${formatInt(summary.duplicates)} duplicados/prueba` : ''
+      }`,
     },
     {
       label: `Sin contactar > ${QUOTE_UNCONTACTED_AFTER_HOURS} h`,
@@ -323,11 +382,6 @@ function SummaryTiles({ summary }: { summary: QuoteRequestStatusSummary }) {
   )
 }
 
-/** "hace 5 h" / "hace 3 d". Lectura del reloj de Postgres, no del navegador. */
-function ageLabel(hours: number): string {
-  return hours < 48 ? `hace ${formatInt(hours)} h` : `hace ${formatInt(Math.floor(hours / 24))} d`
-}
-
 function Muted({ children = '—' }: { children?: string }) {
   return <span className="text-muted-foreground/50">{children}</span>
 }
@@ -351,7 +405,7 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
           </div>
         ) : null}
         <div className="text-xs tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)} UTC</div>
-        <div className="text-xs text-muted-foreground">{ageLabel(row.ageHours)}</div>
+        <div className="text-xs text-muted-foreground">{quoteAgeLabel(row.ageHours)}</div>
       </TableCell>
 
       <TableCell>
@@ -382,9 +436,14 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
         La cuenta de AutoLibre, si hay. "anónimo" no es un error: web y WhatsApp
         no tienen cuenta, y un POST público con `channel = app` tampoco.
       */}
-      <TableCell>
+      <TableCell className="max-w-[9rem]">
         {row.userId ? (
-          <Link to="/usuarios/$userId" params={{ userId: row.userId }} className="text-brand hover:underline">
+          <Link
+            to="/usuarios/$userId"
+            params={{ userId: row.userId }}
+            title={row.userEmail ?? row.userId}
+            className="block truncate text-brand hover:underline"
+          >
             {row.userEmail ?? row.userId}
           </Link>
         ) : (
@@ -393,15 +452,27 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
       </TableCell>
 
       <TableCell>
-        <span className="font-mono font-semibold tracking-wider">{row.plate}</span>
+        {row.plate ? (
+          <span className="font-mono font-semibold tracking-wider">{row.plate}</span>
+        ) : (
+          <Muted>sin patente</Muted>
+        )}
         {row.vehicleId ? (
           <>
             {row.catalogLabel ? <div className="text-xs text-muted-foreground">{row.catalogLabel}</div> : null}
             <QuoteVehicleWarnings row={row} />
           </>
+        ) : row.vehicleText ? (
+          // Escrito por el operador (018): no hay auto vinculado, pero sí sabemos cuál es.
+          <div className="text-xs text-muted-foreground">{row.vehicleText}</div>
         ) : (
           <div className="text-xs text-muted-foreground/70">sin vehículo vinculado</div>
         )}
+      </TableCell>
+
+      {/* Presupuestos CARGADOS (lo que contestó cada taller); `—` = la 015 no está aplicada. */}
+      <TableCell className="text-right tabular-nums">
+        {row.responseCount === null ? <Muted /> : row.responseCount === 0 ? <Muted>0</Muted> : formatInt(row.responseCount)}
       </TableCell>
 
       <TableCell className="max-w-[18rem]" title={row.description}>
@@ -415,10 +486,6 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
       */}
       <TableCell className="text-right tabular-nums">
         {row.declaredAmount === null ? <Muted /> : formatArs(row.declaredAmount)}
-      </TableCell>
-
-      <TableCell className="text-right tabular-nums">
-        {row.proposalsCount === null ? <Muted /> : formatInt(row.proposalsCount)}
       </TableCell>
 
       <TableCell className="whitespace-nowrap text-right tabular-nums">

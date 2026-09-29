@@ -27,6 +27,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteResponses } from '~/components/QuoteResponses'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
+import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { QuoteTemplates } from '~/components/QuoteTemplates'
@@ -51,6 +52,10 @@ import type { ReactNode } from 'react'
  * `<QuoteTemplates detail={d}/>` es texto para copiar y pegar al contactar,
  * completado con los datos DE ESTE pedido — no vive en el listado porque no
  * tiene sentido sin un pedido puntual al que referirse. → `~/lib/quote-templates`.
+ *
+ * `<QuoteRequestEditor/>` (migración 018) edita contacto, patente, vehículo
+ * escrito, descripción, monto y zona tipeada: el pedido casi nunca llega
+ * completo, y la persona suelta los datos de a poco.
  *
  * Desde `.claude/plans/partners-derivacion.md` (Fase 2) también monta
  * `<PartnerCandidates/>`: dado el rubro del pedido (clasificado vía
@@ -209,7 +214,16 @@ function QuoteRequestScreen() {
       <PageHeader
         title={`${quotePublicCode(d.publicNumber)} · Pedido de presupuesto`}
         subtitle={`Por ${quoteChannelLabel(d.channel)}${d.enteredManually ? ' · cargado a mano' : ''} · recibido ${formatDateTime(d.createdAt)} UTC · actualizado ${formatDateTime(d.updatedAt)} UTC`}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <div className="flex items-center gap-2">
+            {d.editAvailable ? (
+              <QuoteRequestEditor key={d.id} detail={d} />
+            ) : (
+              <span className="text-xs text-muted-foreground">Editar: falta aplicar la migración 018</span>
+            )}
+            <SsrTag>ssr: full</SsrTag>
+          </div>
+        }
       />
 
       <QuoteTemplates detail={d} responses={responseRows} templates={templates} />
@@ -333,13 +347,35 @@ function QuoteRequestScreen() {
         <Card>
           <CardContent className="space-y-4 pt-6">
             <SectionTitle>Vehículo</SectionTitle>
-            <Field label="Patente que escribió la persona">
-              <span className="font-mono font-semibold tracking-wider">{d.plate}</span>
+            <Field label="Patente">
+              {d.plate ? (
+                <span className="font-mono font-semibold tracking-wider">{d.plate}</span>
+              ) : (
+                <span className="text-sm text-muted-foreground">No la dio todavía</span>
+              )}
+            </Field>
+            {/*
+              El vehículo ESCRITO (migración 018): lo que contó la persona
+              cuando no hay un vehicle_id que vincular. Vive en ops, no en
+              quote_requests.
+            */}
+            <Field label="Vehículo (según la persona)">
+              {d.vehicleText ? (
+                <span className="text-sm">{d.vehicleText}</span>
+              ) : (
+                <span className="text-sm text-muted-foreground">Sin cargar</span>
+              )}
             </Field>
             <Field label="Vehículo vinculado por el operador">
               {d.vehicleId ? (
                 <div className="text-sm">
-                  <span className="font-mono font-semibold tracking-wider">{d.vehiclePlate ?? '—'}</span>
+                  <Link
+                    to="/vehiculos/$vehicleId"
+                    params={{ vehicleId: d.vehicleId }}
+                    className="rounded outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background font-mono font-semibold tracking-wider text-brand"
+                  >
+                    {d.vehiclePlate ?? 'ver el vehículo'}
+                  </Link>
                   {d.vehicleArchived ? (
                     <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">archivado</span>
                   ) : null}
@@ -373,6 +409,20 @@ function QuoteRequestScreen() {
             <SectionTitle>Pedido</SectionTitle>
             <Field label="Descripción">
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{d.description}</p>
+            </Field>
+            <Field label="Zona">
+              {d.locationAddress ? (
+                <>
+                  <span className="text-sm">{d.locationAddress}</span>
+                  <div className="text-xs text-muted-foreground">
+                    {[d.locationLocality, d.locationProvince].filter(Boolean).join(', ') || 'sin localidad'}
+                    {' · '}
+                    {d.locationSource === 'device' ? 'GPS del teléfono' : 'tipeada'}
+                  </div>
+                </>
+              ) : (
+                <span className="text-sm text-muted-foreground">Sin cargar</span>
+              )}
             </Field>
             <Field label="Monto declarado">
               {d.declaredAmount === null ? (

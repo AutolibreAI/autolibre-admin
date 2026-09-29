@@ -1,4 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { useSessionRowClick } from '~/components/useSessionRowClick'
 import { User, X, type LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import {
@@ -474,9 +475,10 @@ function SessionsPanel({
 
 function SessionRow({ session: s, of }: { session: DetectionSessionRow; of: DetectionKind }) {
   const duration = scanDurationLabel(s.durationSeconds)
+  const rowClick = useSessionRowClick(s.sessionId)
 
   return (
-    <li className="px-4 py-3.5">
+    <li className={`px-4 py-3.5 ${rowClick.className}`} onClick={rowClick.onClick}>
       <div className="flex items-center gap-2 text-sm">
         <Link
           to="/escaneres/sesiones/$sessionId"

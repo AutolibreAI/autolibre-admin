@@ -445,14 +445,72 @@ disjunto. Para no copiar un tercer `SortHeader` local, el componente compartido
 tomó una prop opcional `searchKeys`. La alternativa era duplicar el control, que
 es justo lo que ese archivo existe para no tener.
 
-## `notification_rules` NO tiene `user_id`
+## Recordatorios de vencimiento (`notification_rules`) — desde el 2026-09-25
 
-Son plantillas globales (`source_type` + `offset_value`/`offset_unit`/
-`offset_direction`), 22 filas todas `active` en prod. `notifications.rule_id`
-apunta a la que generó una notificación de vencimiento/mantenimiento (nulo para
-las event-driven como `diagnostic_available` y `vehicle_data_ready`). Esta
-pantalla NO las muestra — si algún día hace falta una vista de reglas y
-preferencias, es otra pantalla y otra consulta.
+Alcance: `src/lib/notification-rules.ts`, `src/server/notification-rules.repo.ts`,
+`src/fn/notification-rules.ts`, `src/components/NotificationRuleCards.tsx`, la
+sección de arriba de `notificaciones.reglas.index.tsx`, y el filtro
+`notificationRuleId` del Historial. Plan: `.claude/plans/reglas-de-vencimiento.md`.
+
+`public.notification_rules` es del BACKEND: plantillas globales (**sin
+`user_id`**) de "N días/km antes de que venza X". 22 filas al 2026-09-25, todas
+`push` · `before` · `active`, sembradas por el backend el 2026-08-30.
+`notifications.rule_id` apunta a la que generó cada aviso (nulo para todo lo
+demás). **No confundir con `ops.notification_schedule`** (migración 014, las
+reglas que crea el panel): en el código son `NotificationRule` vs
+`NotificationSchedule`, y en la UI "Recordatorios de vencimiento" vs "Envíos
+programados", las dos secciones de `/notificaciones/reglas`.
+
+### Sólo lectura, y por qué todavía
+
+Ni un `UPDATE`/`INSERT` en `notification-rules.repo.ts`. La excepción de
+`ops-write-actions.md` se gana con un `grep` al backend que no se pudo correr,
+y hay una mina concreta: **si el seed del backend reactiva las reglas en cada
+deploy, una pausa desde el panel se deshace sola.** Está pedido al backend
+(plan, §8). Cuando conteste, las escrituras van por HTTP o por un SP 018.
+
+### Cuatro hechos relevados contra producción, que deciden cualquier escritura futura
+
+1. **El texto no está en la tabla.** Lo arma el backend en código. La pantalla
+   muestra el último aviso real como ejemplo y dice que no se edita. (El de
+   mantenimiento sale "custom de tu vehículo…": bug del backend, reportado.)
+2. **Los avisos se crean justo a tiempo**, en el tick horario en que el offset
+   se cumple — nunca hay filas con `scheduled_at` futuro. Un cambio de regla
+   correría desde la próxima hora.
+3. **El motor recupera offsets vencidos, a veces** (un seguro recibió el de 30
+   y el de 15 días en el mismo tick; otro no). La regla exacta no se sabe y no
+   se adivina: agregar o reactivar una regla podría disparar una ráfaga.
+4. **El offset es la identidad de la regla.** La dedupe es
+   `UNIQUE (rule_id, source_id)` y la FK de `notifications` es `ON DELETE
+   RESTRICT`. Un `UPDATE … SET offset_value` le cambiaría el significado a los
+   avisos ya mandados y bloquearía el nuevo para quien recibió el viejo:
+   "cambiar 30 → 45" es crear la de 45 y pausar la de 30. Con avisos, se pausa;
+   nunca se borra.
+
+### El conteo es subconsulta escalar; el ejemplo, un `lateral … limit 1`
+
+Un `left join notifications` + `group by` multiplicaría la fila. El ejemplo de
+cada tarjeta es el aviso más reciente del GRUPO (se elige en JS entre los de
+cada regla). Es una notificación real, con póliza y aseguradora: por eso
+`listNotificationRulesFn` pasa por `adminMiddleware` aunque las reglas sean
+globales.
+
+Una regla con 0 avisos **se muestra en 0**, no se esconde: "VTV 1 día antes: 0"
+es un dato (al 2026-09-25, 9 de 22 nunca sonaron).
+
+### `notificationRuleId` en el Historial
+
+Calificado, igual que `notificationBroadcastId`. Filtra `n.rule_id` en el WHERE
+INTERNO (columna cruda). El listado suma `rule` (`LEFT JOIN
+notification_rules`: casi ninguna fila tiene regla) para decir "Seguro · 30 días
+antes" en la columna de origen y en el chip del filtro sin otra consulta. El
+link "N avisos" de la tarjeta es un `<Link search={{ notificationRuleId }}>`
+con objeto literal, no spread (`partners-coverage.md`).
+
+Cuadre: la suma de "avisos" de las tarjetas = `count(*) from notifications
+where rule_id is not null` (78 al 2026-09-25), y el Historial filtrado por cada
+regla trae exactamente su conteo. `tmp/probe-reglas.mjs` carga los módulos
+reales y verifica las dos cosas.
 
 ## Cómo verificar un cambio acá
 

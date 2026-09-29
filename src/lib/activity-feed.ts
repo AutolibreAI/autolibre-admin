@@ -35,6 +35,8 @@ import { z } from 'zod'
  * | `assistant_proposals` (5) | La propone la IA. Aceptarla sí es del usuario, pero con 5 filas todavía no vale una rama. |
  * | `partner_applications` (14) | Es un taller, no un usuario de la app — la columna "quién" quedaría vacía. Tiene `/solicitudes`. |
  * | `recommendation_impressions`, `leads` | 0 filas en producción. |
+ * | `conversations` SIN mensajes (125 de 228) | Abrir el asistente sin escribir no es algo que la persona hizo. Decidido el 2026-09-25; tampoco se listan en `/chats`. |
+ * | `quote_requests` cerrados como `duplicate` (25 de 32) | El operador marca así los duplicados Y los pedidos de prueba del equipo. Mismo corte que la card "Pedidos totales". Decidido el 2026-09-25. |
  *
  * Si mañana una de esas se vuelve importante, es una rama más en
  * `activity-feed.repo.ts` + una entrada acá. Eso es todo.
@@ -137,13 +139,13 @@ export const ACTIVITY_KIND_SHORT: Record<ActivityKind, string> = {
  * Esta lista es el RESTO — lo que hoy no tiene dueño en el panel. Ahí sí hace
  * falta una ficha, porque si no el click no lleva a ningún lado.
  *
- * **Corolario operativo**: el día que exista, por ejemplo, una ficha de
- * vehículo, `vehiculo` sale de esta lista y entra en `ownerHref()`. Los dos
- * lugares se tocan juntos, y el tipo lo obliga (`ActivityDetailKind` es el
- * parámetro de la ruta y la clave de `DETAIL_QUERIES`).
+ * **Corolario operativo**: el día que un tipo gana pantalla dueña, sale de
+ * esta lista y entra como `case` en `ActivityLink`. Los dos lugares se tocan
+ * juntos, y el tipo lo obliga (`ActivityDetailKind` es el parámetro de la ruta
+ * y la clave de `DETAIL_QUERIES`). Pasó con `feedback` el 2026-09-23 y con
+ * `vehiculo` el 2026-09-28, cuando apareció `/vehiculos/:vehicleId`.
  */
 export const ACTIVITY_DETAIL_KINDS = [
-  'vehiculo',
   'mantenimiento',
   'plan_mantenimiento',
   'consulta_multas',
@@ -191,7 +193,7 @@ export const ACTIVITY_TARGET_LABELS: Record<ActivityKind, string> = {
   registro: 'Ver el documento',
   vtv: 'Ver el documento',
   pedido: 'Ver el pedido',
-  vehiculo: 'Ver el detalle',
+  vehiculo: 'Ver el vehículo',
   mantenimiento: 'Ver el detalle',
   plan_mantenimiento: 'Ver el detalle',
   consulta_multas: 'Ver el detalle',
@@ -223,8 +225,6 @@ export const ACTIVITY_OUTCOMES: Record<string, { label: string; tone: OutcomeTon
   sin_datos: { label: 'sin datos', tone: 'warn' },
   fallado: { label: 'falló', tone: 'warn' },
   pendiente: { label: 'pendiente', tone: 'muted' },
-  // conversations
-  sin_mensajes: { label: 'sin mensajes', tone: 'muted' },
   // document_status
   active: { label: 'vigente', tone: 'ok' },
   expired: { label: 'vencido', tone: 'warn' },

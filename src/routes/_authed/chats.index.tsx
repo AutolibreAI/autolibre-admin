@@ -61,10 +61,8 @@ const TYPE_FILTER_LABELS: Record<ChatTypeFilter, string> = {
 }
 
 const MESSAGE_FILTER_LABELS: Record<ChatMessageFilter, string> = {
-  withMessages: 'Con mensajes',
-  all: 'Todos',
+  withMessages: 'Todos',
   noAiReply: 'Sin respuesta de IA',
-  empty: 'Sin mensajes',
 }
 
 /**
@@ -85,9 +83,9 @@ function ChatsList() {
     navigate({ search: { ...search, ...next }, replace: true })
 
   /**
-   * "Angostado" = el operador tocó algo. El default (`withMessages` y nada
-   * más) NO cuenta como filtro puesto, pero SÍ oculta las conversaciones
-   * vacías — así que el subtítulo lo dice en vez de mentir con "en total".
+   * "Angostado" = el operador tocó algo. Las conversaciones vacías no se
+   * listan NUNCA (no es un filtro, ver `CHAT_MESSAGE_FILTERS`) — así que el
+   * subtítulo lo dice en vez de mentir con "en total".
    */
   const narrowed =
     Boolean(search.q) ||
@@ -289,7 +287,7 @@ function ChatRow({ chat: c }: { chat: ChatListItem }) {
             params={{ conversationId: c.id }}
             className="rounded text-xs text-muted-foreground/60 underline decoration-dotted outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
-            sin mensajes
+            sin mensaje del usuario
           </Link>
         )}
       </TableCell>

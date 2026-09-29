@@ -241,13 +241,24 @@ export const QUOTE_SORT_KEYS = [
   'plate',
   'declaredAmount',
   'proposals',
+  'responses',
   'toContact',
   'toAnswer',
   'notes',
 ] as const
 export type QuoteSortKey = (typeof QUOTE_SORT_KEYS)[number]
 
+/**
+ * Lista (la tabla) o tablero (una columna por estado, arrastrando la tarjeta
+ * para moverla). Calificado (`quoteView`, no `view`): un nombre genérico es un
+ * nombre que otra pantalla va a querer. En tablero el filtro de estado NO
+ * aplica —las columnas SON el estado— y el loader pide todos.
+ */
+export const QUOTE_VIEWS = ['lista', 'tablero'] as const
+export type QuoteView = (typeof QUOTE_VIEWS)[number]
+
 export const quoteRequestSearchSchema = z.object({
+  quoteView: z.enum(QUOTE_VIEWS).catch('lista').default('lista'),
   /** Código `AL-n`, patente, teléfono, email, nombre, descripción o email de la cuenta. */
   q: z.string().trim().max(120).optional(),
   quoteStatus: z.enum(QUOTE_STATUS_FILTERS).catch('open').default('open'),
@@ -255,6 +266,12 @@ export const quoteRequestSearchSchema = z.object({
   quoteOutcome: z.enum(QUOTE_OUTCOME_FILTERS).catch('all').default('all'),
   /** Sólo abiertos, sin `contacted_at`, con más de `QUOTE_UNCONTACTED_AFTER_HOURS`. */
   quoteUncontacted: z.coerce.boolean().catch(false).default(false),
+  /**
+   * Los cerrados como `duplicate` (duplicados de verdad y pedidos de PRUEBA del
+   * equipo) no se listan salvo que se pidan — desde el 2026-09-25. Son filas
+   * que el operador tiene que poder encontrar, pero no pedidos reales.
+   */
+  quoteShowDuplicates: z.coerce.boolean().catch(false).default(false),
   /**
    * `createdAt desc` por default: el más nuevo primero — pedido explícito del
    * 2026-09-15, así que lo que acaba de entrar es lo primero que se ve al
@@ -401,6 +418,32 @@ export interface QuoteRequestWriteResult {
   status: string
 }
 
+/**
+ * Qué movimiento acepta cada estado — el ESPEJO de las guardas de los SPs de
+ * la 011 (`ops._assert_quote_request_status`), para que el tablero no ofrezca
+ * soltar una tarjeta donde la base la va a rechazar:
+ *
+ * - `received` → `contacted` (`mark_quote_request_contacted`)
+ * - `contacted` → `answered` (`mark_quote_request_answered`)
+ * - cualquier abierto → `closed` (`close_quote_request`)
+ *
+ * `received` → `answered` NO está: el SP de respondido exige `contacted`. Y
+ * ninguno retrocede, ni sale de `closed` — por eso TODO movimiento es
+ * irreversible y el tablero pide confirmación siempre. Si este mapa y los SP
+ * divergen, el SP gana (la UI no es el guard) y la tarjeta vuelve con un error.
+ */
+export const QUOTE_REQUEST_TRANSITIONS: Record<QuoteRequestStatus, ReadonlyArray<QuoteRequestStatus>> = {
+  received: ['contacted', 'closed'],
+  contacted: ['answered', 'closed'],
+  answered: ['closed'],
+  closed: [],
+}
+
+export function canMoveQuoteRequest(from: string, to: string): boolean {
+  const allowed = (QUOTE_REQUEST_TRANSITIONS as Record<string, ReadonlyArray<string> | undefined>)[from]
+  return allowed?.includes(to) ?? false
+}
+
 /** Sentinela del handler cuando `quote_requests` no existe o le faltan columnas. */
 export const QUOTE_REQUESTS_UNAVAILABLE = 'QUOTE_REQUESTS_UNAVAILABLE'
 
@@ -441,23 +484,62 @@ export function readableQuoteRequestError(cause: unknown): string {
 }
 
 /**
- * Las sentinelas propias de `ops.create_quote_request` (migración 012), para
- * `QuoteRequestComposer`. Lo compartido —disponibilidad, actor, sesión— y el
- * fallback los resuelve `readableQuoteRequestError`: el texto crudo de
- * Postgres no llega a la pantalla tampoco acá.
+ * Sentinela del handler cuando la migración 018 no está aplicada en esta base
+ * (`ops.quote_request_vehicle_text` no existe): el alta y la edición llaman a
+ * las firmas nuevas, que sin la 018 no existen. Mismo guard que la 015 para
+ * los presupuestos.
  */
-export function readableCreateQuoteRequestError(raw: string): string {
+export const QUOTE_EDIT_UNAVAILABLE = 'QUOTE_EDIT_UNAVAILABLE'
+
+/**
+ * Las sentinelas de los datos de un pedido — las comparten el alta
+ * (`ops.create_quote_request`) y la edición (`ops.update_quote_request`),
+ * migración 018. Lo demás —disponibilidad, actor, sesión— y el fallback los
+ * resuelve `readableQuoteRequestError`: el texto crudo de Postgres no llega a
+ * la pantalla tampoco acá.
+ */
+export function readableQuoteRequestDataError(raw: string): string {
+  if (raw.includes(QUOTE_EDIT_UNAVAILABLE))
+    return 'Falta aplicar la migración 018 de `ops` en esta base (`pnpm db:migrate`). No se guardó nada.'
   if (raw.includes('CONTACT_PHONE_REQUIRED')) return 'Falta el teléfono de contacto.'
-  if (raw.includes('PLATE_REQUIRED')) return 'Falta la patente.'
   if (raw.includes('DESCRIPTION_REQUIRED')) return 'Falta la descripción de qué necesita.'
+  if (raw.includes('PLATE_REQUIRED_FOR_ACCOUNT'))
+    return 'Este pedido está asociado a una cuenta de AutoLibre, y la base exige patente en ese caso. Corregila, pero no la dejes vacía.'
+  if (raw.includes('INVALID_PLATE')) return 'La patente tiene hasta 7 letras y números (AB123CD o ABC123).'
+  if (raw.includes('VEHICLE_TEXT_TOO_LONG')) return 'El vehículo tiene hasta 200 caracteres.'
+  if (raw.includes('INVALID_DECLARED_AMOUNT')) return 'El monto no puede ser negativo.'
+  if (raw.includes('DECLARED_AMOUNT_TOO_LARGE')) return 'El monto es demasiado grande.'
+  if (raw.includes('LOCATION_FROM_DEVICE'))
+    return 'La ubicación de este pedido vino del GPS del teléfono y no se edita. No se guardó nada: recargá la pantalla.'
+  if (raw.includes('LOCATION_ADDRESS_REQUIRED'))
+    return 'Para cargar la ubicación hace falta la dirección o zona (la localidad sola no alcanza).'
+  if (raw.includes('LOCATION_ADDRESS_TOO_LONG')) return 'La dirección tiene hasta 300 caracteres.'
   if (raw.includes('INVALID_CHANNEL')) return 'Ese canal no existe en la base. Recargá la pantalla.'
   return readableQuoteRequestError(raw)
 }
 
+/** Para `QuoteRequestComposer` — mismo catálogo que la edición. */
+export const readableCreateQuoteRequestError = readableQuoteRequestDataError
+
 /**
- * El payload de `ops.create_quote_request` (migración 012) — cargar un pedido
- * que llegó de forma informal (llamada, en persona, referido) y por eso nunca
- * pasó por el POST público de app/web/whatsapp.
+ * La patente como la tipea el operador. El SP la normaliza (mayúsculas, sin
+ * separadores) y `plate` es `varchar(7)`: acá se avisa ANTES, contando sólo
+ * letras y números, para que "AB 123 CD" no se rechace por los espacios.
+ * Vacía = no la dio.
+ */
+const plateField = z
+  .string()
+  .trim()
+  .max(20)
+  .refine((s) => s.replace(/[^A-Za-z0-9]/g, '').length <= 7, 'La patente tiene hasta 7 letras y números.')
+
+/** El vehículo escrito ("Peugeot 208 1.6 2019"). Vive en `ops`, no en `quote_requests` — migración 018. */
+const vehicleTextField = z.string().trim().max(200, 'El vehículo tiene hasta 200 caracteres.')
+
+/**
+ * El payload de `ops.create_quote_request` (012, firma nueva en la 018) —
+ * cargar un pedido que llegó de forma informal (llamada, en persona, referido)
+ * y por eso nunca pasó por el POST público de app/web/whatsapp.
  *
  * `p_actor_id` NO está acá, mismo motivo que los schemas de las transiciones:
  * sale de la sesión de Clerk, nunca del payload.
@@ -466,19 +548,62 @@ export function readableCreateQuoteRequestError(raw: string): string {
  * `quote_request_channel` (sólo `app | web | whatsapp`, es un enum del
  * backend), así que el operador elige el que más se parezca — `~/components/
  * QuoteRequestComposer` lo defaultea a `whatsapp`.
+ *
+ * `plate` es OPCIONAL desde la 018: la persona muchas veces no la da, y la
+ * base no la exige (`quote_requests.plate` es nullable; sólo es obligatoria con
+ * cuenta de AutoLibre, y un alta a mano nunca tiene cuenta).
  */
 export const createQuoteRequestSchema = z.object({
   channel: z.enum(QUOTE_REQUEST_CHANNELS),
   contactPhone: z.string().trim().min(1).max(40),
-  plate: z.string().trim().min(1).max(20),
   description: z.string().trim().min(1).max(2000),
+  plate: plateField.optional(),
+  vehicleText: vehicleTextField.optional(),
   contactName: z.string().trim().max(200).optional(),
   contactEmail: z.string().trim().max(200).optional(),
-  declaredAmount: z.number().min(0).optional(),
+  declaredAmount: z.number().min(0).max(9_999_999_999.99).optional(),
+  /**
+   * La zona, tipeada (migración 019): dirección o zona, y opcionalmente
+   * localidad y provincia. Localidad o provincia sin dirección las rechaza el
+   * SP (`LOCATION_ADDRESS_REQUIRED`).
+   */
+  locationAddress: z.string().trim().max(300, 'La dirección tiene hasta 300 caracteres.').optional(),
+  locationLocality: z.string().trim().max(200).optional(),
+  locationProvince: z.string().trim().max(200).optional(),
   /** Nota de auditoría en `ops.action_log`, no `quote_requests.internal_notes`. */
   note: z.string().trim().max(280).optional(),
 })
 export type CreateQuoteRequestInput = z.infer<typeof createQuoteRequestSchema>
+
+/**
+ * Editar los datos de un pedido ya creado — `ops.update_quote_request`
+ * (migración 018). REEMPLAZO COMPLETO: viajan todos los campos, y un opcional
+ * en `''` (o `declaredAmount: null`) se BORRA. Mismo contrato que el
+ * formulario de `set_partner_contact`: lo que se ve en pantalla es lo que
+ * queda guardado.
+ *
+ * La ubicación viaja siempre, también cuando vino del GPS del teléfono: en ese
+ * caso el formulario la manda tal cual está y el SP exige que no cambie
+ * (`LOCATION_FROM_DEVICE`). → cabecera de la migración 018.
+ *
+ * No hay `channel`, `userId`, `vehicleId` ni estado: el canal es un hecho, la
+ * cuenta la pone la app, el vínculo al vehículo es otra feature y el estado lo
+ * mueven los SP de la 011.
+ */
+export const updateQuoteRequestSchema = z.object({
+  quoteRequestId: z.uuid(),
+  contactPhone: z.string().trim().min(1, 'Falta el teléfono.').max(40),
+  description: z.string().trim().min(1, 'Falta qué necesita.').max(2000),
+  contactName: z.string().trim().max(200),
+  contactEmail: z.string().trim().max(200),
+  plate: plateField,
+  vehicleText: vehicleTextField,
+  declaredAmount: z.number().min(0).max(9_999_999_999.99).nullable(),
+  locationAddress: z.string().trim().max(300, 'La dirección tiene hasta 300 caracteres.'),
+  locationLocality: z.string().trim().max(200),
+  locationProvince: z.string().trim().max(200),
+})
+export type UpdateQuoteRequestInput = z.infer<typeof updateQuoteRequestSchema>
 
 // ── Tipos de salida ─────────────────────────────────────────────────────────
 
@@ -497,8 +622,12 @@ export interface QuoteRequestListItem {
   userId: string | null
   userEmail: string | null
   userName: string | null
-  /** La patente TAL CUAL la tipeó la persona. */
-  plate: string
+  /**
+   * La patente TAL CUAL la tipeó la persona (o la cargó el operador). `null`
+   * si no la dio: `quote_requests.plate` es nullable, y desde la 018 un pedido
+   * cargado a mano puede no tenerla.
+   */
+  plate: string | null
   /** El vehículo que vinculó el operador. Puede estar archivado o ser de otro usuario. */
   vehicleId: string | null
   vehiclePlate: string | null
@@ -513,6 +642,20 @@ export interface QuoteRequestListItem {
   /** Lo que la persona dice que le cotizaron en otro lado. Sin columna de moneda: se asume ARS. */
   declaredAmount: number | null
   proposalsCount: number | null
+  /**
+   * Presupuestos CARGADOS por el operador (`ops.quote_request_response`, 015):
+   * lo que contestó cada taller. Es otro número que `proposalsCount` (la
+   * cantidad que el operador declaró al marcar respondido) y no se sincronizan
+   * — `.claude/rules/leads.md`. `null` = la 015 no está aplicada en esta base.
+   */
+  responseCount: number | null
+  /**
+   * El vehículo ESCRITO ("Peugeot 208 1.6 2019") cuando no hay `vehicleId`
+   * que vincular — `ops.quote_request_vehicle_text` (018). `null` = no se
+   * cargó, o la 018 no está aplicada. La lista lo muestra en vez de "sin
+   * vehículo vinculado".
+   */
+  vehicleText: string | null
   contactedAt: string | null
   answeredAt: string | null
   closedAt: string | null
@@ -542,7 +685,14 @@ export interface QuoteRequestListItem {
  * `/leads/seguros`: los cuatro estados siempre, incluso en cero.
  */
 export interface QuoteRequestStatusSummary {
+  /**
+   * Pedidos REALES: sin los cerrados como `duplicate` (duplicados de verdad y
+   * pedidos de prueba del equipo). Todos los contadores de abajo tienen el
+   * mismo corte — `total` es lo mismo que muestra la card "Pedidos totales".
+   */
   total: number
+  /** Los excluidos de todo lo anterior. Se muestra aparte, nunca se suma. */
+  duplicates: number
   byStatus: Record<QuoteRequestStatus, number>
   /** Subconjunto de `closed` con `close_reason_code = 'cancelled_by_user'`. */
   cancelledByUser: number
@@ -622,6 +772,22 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * `quote_requests` — vive en `ops`, ver la cabecera de esa migración.
    */
   rubroCategorySlugs: Array<string>
+  /**
+   * El vehículo ESCRITO por el operador ("Peugeot 208 1.6 2019"), para cuando
+   * no hay `vehicleId` que vincular. Vive en `ops.quote_request_vehicle_text`
+   * (migración 018), no en `quote_requests`: el backend no tiene columna para
+   * esto. `null` = no se cargó (o la 018 no está aplicada).
+   */
+  vehicleText: string | null
+  /** `device` (GPS del teléfono, no se edita), `typed` (tipeada) o `null` (sin ubicación). */
+  locationSource: string | null
+  locationProvince: string | null
+  /**
+   * ¿Está aplicada la migración 018 en esta base? Sin ella no hay dónde
+   * guardar el vehículo escrito ni SP para editar, y la ficha no ofrece el
+   * botón. Mismo patrón que `quoteResponsesAvailable()` de la 015.
+   */
+  editAvailable: boolean
 }
 
 export type QuoteRequestsListResult =

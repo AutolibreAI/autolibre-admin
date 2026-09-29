@@ -180,18 +180,28 @@ function VehicleCard({ event: e }: { event: ActivityEventDetail }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-1">
-        <p className="font-mono text-sm font-medium tracking-wide">
-          {e.vehiclePlate ?? <span className="font-sans text-muted-foreground/50">sin patente</span>}
-        </p>
+        {e.vehicleId ? (
+          <Link
+            to="/vehiculos/$vehicleId"
+            params={{ vehicleId: e.vehicleId }}
+            className="block rounded font-mono text-sm font-medium tracking-wide outline-none hover:text-brand hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            {e.vehiclePlate ?? 'sin patente'}
+          </Link>
+        ) : (
+          <p className="font-mono text-sm font-medium tracking-wide">
+            {e.vehiclePlate ?? <span className="font-sans text-muted-foreground/50">sin patente</span>}
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
           {e.vehicleLabel ?? 'sin modelo de catálogo'}
         </p>
         {e.vehicleArchived ? <p className="text-xs text-status-yellow">archivado</p> : null}
-        {/*
-          No hay link: el panel todavía no tiene ficha de vehículo. `/vehiculos/listado`
-          es el padrón entero, y mandar ahí con la patente en `q` sería un link que
-          promete una ficha y entrega un filtro.
-        */}
+        {e.vehicleId ? (
+          <p className="pt-1 text-xs leading-relaxed text-muted-foreground">
+            La ficha del vehículo tiene sus escaneos, DTCs, documentos y avisos.
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   )

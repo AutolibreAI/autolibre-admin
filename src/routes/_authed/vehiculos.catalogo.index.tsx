@@ -507,7 +507,13 @@ function CatalogUsersPanel({ state }: { state: CatalogUsersState | undefined }) 
               </td>
 
               <td className="px-2 py-1.5">
-                <span className="font-mono font-semibold tracking-wider">{u.plate}</span>
+                <Link
+                  to="/vehiculos/$vehicleId"
+                  params={{ vehicleId: u.vehicleId }}
+                  className="rounded outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background font-mono font-semibold tracking-wider text-brand"
+                >
+                  {u.plate}
+                </Link>
                 {u.alias ? <span className="text-muted-foreground"> · {u.alias}</span> : null}
                 {u.archived ? (
                   <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">

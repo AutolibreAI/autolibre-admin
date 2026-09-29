@@ -122,6 +122,10 @@ interface NotificationListRow {
   scheduled_at: Date | string
   sent_at: Date | string | null
   created_at: Date | string
+  rule_source_type: string | null
+  rule_offset_unit: string | null
+  rule_offset_direction: string | null
+  rule_offset_value: number | string | null
 }
 
 /**
@@ -161,6 +165,12 @@ export async function listNotifications(
   if (search.notificationBroadcastId) {
     params.push(search.notificationBroadcastId)
     innerWhere.push(`n.source_type = 'broadcast' and n.source_id = $${params.length}`)
+  }
+
+  // Columna cruda también: va adentro, igual que `user_id`.
+  if (search.notificationRuleId) {
+    params.push(search.notificationRuleId)
+    innerWhere.push(`n.rule_id = $${params.length}`)
   }
 
   if (search.q) {
@@ -215,9 +225,16 @@ export async function listNotifications(
         end as delivery_error,
         n.scheduled_at,
         n.sent_at,
-        n.created_at
+        n.created_at,
+        -- La regla de vencimiento que la generó. LEFT: casi ninguna fila tiene
+        -- regla (los envíos manuales, diagnósticos, etc. no).
+        nr.source_type::text as rule_source_type,
+        nr.offset_unit::text as rule_offset_unit,
+        nr.offset_direction::text as rule_offset_direction,
+        nr.offset_value as rule_offset_value
       from notifications n
       join users u on u.id = n.user_id
+      left join notification_rules nr on nr.id = n.rule_id
       left join vehicles v on v.id = n.vehicle_id
       left join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
       left join vehicle_catalogs vc on vc.id = vcs.vehicle_catalog_id
@@ -251,6 +268,18 @@ export async function listNotifications(
       scheduledAt: toIsoRequired(r.scheduled_at),
       sentAt: toIso(r.sent_at),
       createdAt: toIsoRequired(r.created_at),
+      rule:
+        r.rule_source_type === null ||
+        r.rule_offset_unit === null ||
+        r.rule_offset_direction === null ||
+        r.rule_offset_value === null
+          ? null
+          : {
+              sourceType: r.rule_source_type,
+              offsetUnit: r.rule_offset_unit,
+              offsetDirection: r.rule_offset_direction,
+              offsetValue: Number(r.rule_offset_value),
+            },
     }),
   )
 }

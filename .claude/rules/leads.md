@@ -9,7 +9,8 @@ Alcance: `src/routes/_authed/leads.tsx` (layout), `leads.index.tsx`,
 `leads.pedidos.$quoteRequestId.tsx`, `src/lib/quote-requests.ts`,
 `src/server/quote-requests.repo.ts`, `src/fn/quote-requests.ts`,
 `src/components/QuoteRequestCells.tsx`, `src/components/QuoteRequestsUnavailable.tsx`,
-`src/components/QuoteRequestActions.tsx`, `src/lib/quote-templates.ts`,
+`src/components/QuoteRequestActions.tsx`, `src/components/QuoteRequestEditor.tsx`,
+`src/lib/quote-templates.ts`,
 `src/components/QuoteTemplates.tsx`, `src/components/QuoteRequestComposer.tsx`,
 `migrations/012_ops_crear_pedido.sql` (+ su `.test.sql`),
 `src/components/PartnerCandidates.tsx`, `migrations/013_ops_rubro_de_pedido.sql`
@@ -24,8 +25,8 @@ en `src/fn/ops.ts`.
 Las escrituras del embudo de talleres (`ops.advance_lead`) NO están acá — su
 regla es `.claude/rules/ops-write-actions.md`, que también tiene la sección de
 las migraciones 011 y 012. Seguros, Multas y las dos pestañas "todavía no" no
-escriben nada. Pedidos sí: la ficha mueve estados y el listado carga pedidos a
-mano (ver Pedidos, abajo).
+escriben nada. Pedidos sí: la ficha y el tablero mueven estados y el listado
+carga pedidos a mano (ver Pedidos, abajo).
 
 ## `/leads` es un layout, no una pantalla
 
@@ -297,6 +298,24 @@ y `quoteRequestSeries()` (la sección Pedidos de `/metricas`,
 esta semana" contaría distinto en la card de Inicio y en el gráfico de
 `/metricas`, del mismo conjunto de filas — misma clase de acoplamiento que
 `INTERNAL_PREDICATE` entre `ops.repo.ts` y `ops.v_ai_usage`.
+
+### Duplicado = "no es un pedido real", y ningún número de medición lo cuenta — desde el 2026-09-25
+
+Dato de producto: `close_reason_code = 'duplicate'` es cómo el equipo descarta
+los duplicados de verdad **y los pedidos de PRUEBA que manda él mismo**. Por eso
+el predicado se exportó como `notDuplicatePredicate(alias)` y lo usan TODOS los
+números: la card "Pedidos totales", la serie de `/metricas`, el feed de
+`/actividad` y, desde esta fecha, el resumen de `/leads/pedidos`.
+
+- `quoteRequestStatusSummary()` cuenta cada estado SIN duplicados y trae
+  `duplicates` aparte. Cuadre: Recibidos + Contactados + Respondidos + Cerrados
+  = la card de Inicio (7 al 2026-09-25, con 25 descartados). El subtítulo dice
+  "de N pedidos reales (M descartados como duplicado o prueba)".
+- El listado los esconde salvo `quoteShowDuplicates` (chip "Incluir duplicados
+  / prueba", sólo visible si hay alguno). Son filas que el operador tiene que
+  poder encontrar, pero no pedidos.
+- `cancelled_by_user` y `duplicate` son disjuntos (una sola columna), así que
+  el "N cancelados por el usuario" del tile de Cerrados no cambia.
 
 ### `QuoteRequest` ≠ `Lead`
 
@@ -610,6 +629,59 @@ las plantillas, la lectura de `location_address` y Pedidos como pestaña default
 Si vuelve la idea de acciones rápidas en la fila, llaman a los MISMOS SPs que la
 ficha. Un segundo camino de escritura para la misma transición es justo lo que
 se sacó.
+
+### El tablero (`quoteView=tablero`) — desde el 2026-09-27
+
+Alcance: `src/components/QuoteBoard.tsx`, `src/components/ui/dialog.tsx`,
+`QUOTE_VIEWS` / `QUOTE_REQUEST_TRANSITIONS` / `canMoveQuoteRequest` de
+`~/lib/quote-requests`, y `CloseFields` / `ProposalsCountField` /
+`isValidProposalsCount`, extraídos de `QuoteRequestActions.tsx`.
+
+La otra vista de `/leads/pedidos`: una columna por estado (Recibido ·
+Contactado · Respondido · Cerrado) y la tarjeta se ARRASTRA a otra columna para
+moverla. Es el "acciones rápidas en la fila" que la sección de arriba dejaba
+abierto, y cumple su condición: **llama a los MISMOS SPs que la ficha**
+(`markQuoteRequestContactedFn` / `markQuoteRequestAnsweredFn` /
+`closeQuoteRequestFn`). Si aparece un cuarto camino para mover un pedido, está
+mal.
+
+- **`quoteView`, calificado** (no `view`). En tablero el filtro de estado se
+  esconde y el loader pide `quoteStatus: 'all'`: las columnas SON el estado.
+  Los demás filtros (texto, canal, resultado, sin contactar) siguen valiendo, y
+  el orden dentro de cada columna es el `sort`/`dir` de la lista.
+- **`QUOTE_REQUEST_TRANSITIONS` es un ESPEJO de las guardas de los SPs**
+  (`ops._assert_quote_request_status`): `received → contacted`,
+  `contacted → answered`, cualquier abierto `→ closed`. `received → answered`
+  NO está (el SP exige `contacted`), ni ningún retroceso, ni nada desde
+  `closed`. Mientras se arrastra, las columnas que no aceptan la tarjeta se
+  apagan y dicen por qué. Si el espejo y el SP divergen, gana el SP: el error
+  vuelve legible y la tarjeta no se movió.
+- **Todo movimiento pide confirmación.** El pedido original era "si es
+  irreversible, preguntar", y en este dominio lo son TODOS: ningún SP
+  retrocede. Soltar no escribe — abre un recuadro «¿Estás seguro?» con Sí / No
+  que pide, en el mismo lugar, lo que la transición necesita: la cantidad de
+  propuestas para respondido; motivo, resultado y nota para el hilo para
+  cerrar. Son los campos de la ficha, extraídos a componentes compartidos:
+  si «Sin preguntar» se explicara distinto en los dos lados, uno estaría mal.
+- **Sin movimiento optimista.** La tarjeta cambia de columna recién cuando la
+  base confirma y el loader se relee. «No» o un error no dejan nada que
+  deshacer. Un `INVALID_QUOTE_REQUEST_TRANSITION` (la persona canceló desde la
+  app) relee el tablero y deja el error en el recuadro.
+- **«Propuestas» arranca VACÍO en el tablero**, no sembrado como en la ficha:
+  el listado no trae cuántos presupuestos hay cargados en
+  `ops.quote_request_response`, y sembrar con un número que no se leyó sería
+  inventarlo. Mismo criterio: un campo vacío nunca viaja como cero.
+- **Arrastre HTML5 nativo, sin librería.** No anda con teclado ni en táctil.
+  Hubo un «Mover a…» por tarjeta como alternativa y **se sacó a pedido el
+  2026-09-27** (no se usaba): para mover sin arrastrar está la ficha.
+- **Un click en la tarjeta abre la ficha.** Es el link del `AL-n` ESTIRADO
+  sobre la tarjeta (`after:absolute after:inset-0`), no un `onClick` sobre el
+  `<article>`: sigue siendo un link real (Tab, botón del medio). Lleva
+  `draggable={false}` —un link es arrastrable por sí mismo y arrastraría la
+  URL— y el navegador no dispara `click` al terminar un arrastre, así que
+  soltar una tarjeta no navega.
+- **La nota interna suelta sigue en la ficha.** El tablero sólo mueve estados;
+  la única nota que escribe es la del cierre, que viaja atómica con él (016).
 
 ### Cargar un pedido a mano (`<QuoteRequestComposer/>`) — desde el 2026-09-15
 
@@ -1154,8 +1226,64 @@ para el mismo auto.
 export) para que las dos pantallas compartan la forma — si "vencida" se ve
 distinto en una de las dos, una está mal.
 
+### Editar los datos de un pedido (`<QuoteRequestEditor/>`) — desde el 2026-09-27
+
+El pedido casi nunca llega completo: por WhatsApp la persona escribe "necesito
+un service" y el auto, la patente y la zona los va soltando en la charla. Hasta
+acá la ficha no tenía dónde anotarlos (sólo el hilo de notas, que las plantillas
+y los candidatos no leen), y el alta a mano exigía una patente que muchas veces
+no hay.
+
+Migración 018 (`ops-write-actions.md`). Tres cambios:
+
+- **La patente es opcional en «Cargar pedido».** La base ya lo permitía
+  (`plate` nullable); la exigía nuestro SP. Se normaliza a mayúsculas sin
+  separadores (`AB 123 CD` → `AB123CD`), porque la columna es `varchar(7)`.
+  Con cuenta de AutoLibre la base SÍ la exige, y la edición no deja vaciarla.
+- **Vehículo escrito** (`vehicleText`, `ops.quote_request_vehicle_text`): lo que
+  cuenta la persona, para cuando no hay `vehicle_id`. No es el vehículo
+  VINCULADO (eso sigue sin picker, ver "Sin vincular usuario ni vehículo"). Las
+  plantillas lo usan en este orden: catálogo del vinculado → escrito → patente
+  → "tu auto" (`vehiclePhrase`); para el taller, catálogo → escrito →
+  corchete. Sin patente, `{{patente}}` sale como corchete a completar.
+- **«Editar datos»** en el header de la ficha: contacto, patente, vehículo
+  escrito, descripción, monto declarado y zona. Reemplazo completo — vaciar un
+  opcional lo borra. Se siembra con la ficha al abrir.
+
+Lo que NO edita, y el formulario lo dice:
+
+- **La zona que vino del GPS del teléfono** (`location_source = 'device'`, 28 de
+  33 pedidos al 2026-09-27): cambiarla obligaría a borrar las coordenadas con
+  las que `PartnerCandidates` ordena por cercanía. Se muestra de sólo lectura.
+  Los pedidos sin zona (WhatsApp) o con zona tipeada sí se editan, y una zona
+  tipeada exige dirección (la localidad sola no alcanza: CHECK del backend).
+- **`raw_submission`**: lo que mandó la persona queda intacto al pie de la
+  ficha. Corregir la descripción de un pedido de la app no pierde el original.
+- **Canal, cuenta, vehículo vinculado y estado.** El canal es un hecho (o una
+  aproximación ya elegida en el alta), la cuenta la pone la app, el vínculo al
+  vehículo es otra feature, y el estado lo mueven los SP de la 011.
+
+Un pedido cerrado también se edita: los datos no son el estado.
+
 ## Cómo verificar un cambio acá
 
 `pnpm typecheck` + `pnpm build` (el build regenera `routeTree.gen.ts`, así que
 una pestaña nueva o un `Link` a una ruta nueva sólo se validan DESPUÉS del
 build).
+
+### Presupuestos cargados en la lista y el tablero — desde el 2026-09-29
+
+La tabla de `/leads/pedidos` tiene una columna **Presupuestos** (ordenable) y la
+tarjeta del tablero muestra «N presupuestos»: cuántas filas hay en
+`ops.quote_request_response` para ese pedido (`responseCount`). Es OTRO número
+que «Propuestas» (`proposals_count`, lo que el operador declaró al marcar
+respondido) y no se sincronizan. Desde el 2026-09-29 la lista y el tablero
+muestran sólo «Presupuestos» (redundante con «Propuestas»); la columna va entre
+Vehículo y Descripción, y `proposals_count` sigue en la ficha. `null` = la 015 no está aplicada (`—`), `0` = cero de verdad.
+Van como subconsultas escalares con `to_regclass` previo (`listExtraColumns`).
+
+Sin vehículo vinculado, la lista y el tablero muestran el **vehículo escrito**
+(`vehicleText`, 018) en vez de «sin vehículo vinculado».
+
+El filtro «todos, menos duplicados» es el chip «Todos» de Estado: los cerrados
+como `duplicate` sólo entran con «Incluir duplicados / prueba».

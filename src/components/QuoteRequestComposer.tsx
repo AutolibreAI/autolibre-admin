@@ -1,10 +1,9 @@
 import { useRef, useState } from 'react'
-import { Link, useRouter } from '@tanstack/react-router'
+import { useRouter } from '@tanstack/react-router'
 import { Phone, Plus } from 'lucide-react'
 import {
   QUOTE_REQUEST_CHANNELS,
   quoteChannelLabel,
-  quotePublicCode,
   readableCreateQuoteRequestError,
 } from '~/lib/quote-requests'
 import { createQuoteRequestFn } from '~/fn/quote-requests'
@@ -39,6 +38,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~
  * que el formulario pide elegir el que más se parezca — default `whatsapp`,
  * el más cercano a un contacto directo — y lo dice en el texto de ayuda.
  *
+ * ── Casi nada es obligatorio, a propósito ───────────────────────────────────
+ *
+ * Sólo teléfono y qué necesita: son las dos columnas NOT NULL que la persona
+ * siempre da. La patente y el vehículo muchas veces no llegan en el primer
+ * mensaje —sobre todo por WhatsApp— y se completan después desde la ficha
+ * (`QuoteRequestEditor`, migración 018). Pedirlos acá obligaba a inventar una
+ * patente para poder cargar el pedido.
+ *
  * ── Sin idempotencia, a propósito ───────────────────────────────────────────
  *
  * A diferencia de `BroadcastComposer` (que manda push a decenas de personas y
@@ -56,16 +63,23 @@ export function QuoteRequestComposer() {
   const [contactPhone, setContactPhone] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [plate, setPlate] = useState('')
+  const [vehicleText, setVehicleText] = useState('')
   const [description, setDescription] = useState('')
   const [declaredAmount, setDeclaredAmount] = useState('')
+  const [locationAddress, setLocationAddress] = useState('')
+  const [locationLocality, setLocationLocality] = useState('')
+  const [locationProvince, setLocationProvince] = useState('')
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [created, setCreated] = useState<{ id: string; publicNumber: number } | null>(null)
 
   const inFlight = useRef(false)
 
-  const canSubmit = contactPhone.trim() !== '' && plate.trim() !== '' && description.trim() !== ''
+  // Localidad o provincia sin dirección las rechaza el SP: se avisa antes.
+  const zoneIncomplete =
+    locationAddress.trim() === '' && (locationLocality.trim() !== '' || locationProvince.trim() !== '')
+
+  const canSubmit = contactPhone.trim() !== '' && description.trim() !== '' && !zoneIncomplete
 
   function reset() {
     setChannel('whatsapp')
@@ -73,10 +87,13 @@ export function QuoteRequestComposer() {
     setContactPhone('')
     setContactEmail('')
     setPlate('')
+    setVehicleText('')
     setDescription('')
     setDeclaredAmount('')
+    setLocationAddress('')
+    setLocationLocality('')
+    setLocationProvince('')
     setError(null)
-    setCreated(null)
   }
 
   function handleOpenChange(next: boolean) {
@@ -98,19 +115,27 @@ export function QuoteRequestComposer() {
         return
       }
 
-      const result = await createQuoteRequestFn({
+      await createQuoteRequestFn({
         data: {
           channel,
           contactPhone: contactPhone.trim(),
-          plate: plate.trim(),
           description: description.trim(),
+          plate: plate.trim() === '' ? undefined : plate.trim(),
+          vehicleText: vehicleText.trim() === '' ? undefined : vehicleText.trim(),
           contactName: contactName.trim() === '' ? undefined : contactName.trim(),
           contactEmail: contactEmail.trim() === '' ? undefined : contactEmail.trim(),
           declaredAmount: amount,
+          locationAddress: locationAddress.trim() === '' ? undefined : locationAddress.trim(),
+          locationLocality: locationLocality.trim() === '' ? undefined : locationLocality.trim(),
+          locationProvince: locationProvince.trim() === '' ? undefined : locationProvince.trim(),
         },
       })
 
-      setCreated(result)
+      // El pedido ya existe: se cierra el panel y se limpia el formulario. Con
+      // el panel abierto y el botón activo, un segundo click creaba OTRO pedido
+      // igual. `inFlight` sigue trabado hasta el `finally`, y para entonces el
+      // panel ya no está.
+      handleOpenChange(false)
       void router.invalidate()
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : String(cause)
@@ -147,22 +172,6 @@ export function QuoteRequestComposer() {
           </div>
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
-            {created ? (
-              <div className="rounded-md border border-status-green/30 bg-status-green-bg p-3 text-sm">
-                <p className="font-medium text-status-green">
-                  {quotePublicCode(created.publicNumber)} cargado.
-                </p>
-                <Link
-                  to="/leads/pedidos/$quoteRequestId"
-                  params={{ quoteRequestId: created.id }}
-                  className="mt-1 inline-block text-brand hover:underline"
-                  onClick={() => setOpen(false)}
-                >
-                  Ver la ficha →
-                </Link>
-              </div>
-            ) : null}
-
             <section className="space-y-1.5">
               <label
                 htmlFor="qrc-channel"
@@ -245,13 +254,35 @@ export function QuoteRequestComposer() {
               />
             </section>
 
+            <section className="space-y-1.5">
+              <label
+                htmlFor="qrc-vehicle"
+                className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
+              >
+                Vehículo <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
+              </label>
+              <Input
+                id="qrc-vehicle"
+                value={vehicleText}
+                disabled={busy}
+                autoComplete="off"
+                maxLength={200}
+                placeholder="Peugeot 208 1.6 2019"
+                onChange={(e) => setVehicleText(e.currentTarget.value)}
+                className="shadow-none"
+              />
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Como lo cuente la persona: marca, modelo, versión y año, lo que haya.
+              </p>
+            </section>
+
             <section className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label
                   htmlFor="qrc-plate"
                   className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
                 >
-                  Patente
+                  Patente <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
                 </label>
                 <Input
                   id="qrc-plate"
@@ -259,7 +290,6 @@ export function QuoteRequestComposer() {
                   disabled={busy}
                   autoComplete="off"
                   placeholder="AB123CD"
-                  aria-required
                   onChange={(e) => setPlate(e.currentTarget.value)}
                   className="font-mono uppercase shadow-none"
                 />
@@ -283,6 +313,74 @@ export function QuoteRequestComposer() {
                   className="shadow-none"
                 />
               </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="qrc-address"
+                  className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                >
+                  Zona o dirección{' '}
+                  <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
+                </label>
+                <Input
+                  id="qrc-address"
+                  value={locationAddress}
+                  disabled={busy}
+                  autoComplete="off"
+                  maxLength={300}
+                  placeholder="Av. Cabildo 2000, Belgrano"
+                  aria-invalid={zoneIncomplete}
+                  onChange={(e) => setLocationAddress(e.currentTarget.value)}
+                  className="shadow-none"
+                />
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Dónde está el auto. Ordena a los talleres por cercanía y completa las plantillas.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="qrc-locality"
+                    className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                  >
+                    Localidad{' '}
+                    <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
+                  </label>
+                  <Input
+                    id="qrc-locality"
+                    value={locationLocality}
+                    disabled={busy}
+                    autoComplete="off"
+                    placeholder="Tigre"
+                    onChange={(e) => setLocationLocality(e.currentTarget.value)}
+                    className="shadow-none"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="qrc-province"
+                    className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                  >
+                    Provincia{' '}
+                    <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
+                  </label>
+                  <Input
+                    id="qrc-province"
+                    value={locationProvince}
+                    disabled={busy}
+                    autoComplete="off"
+                    onChange={(e) => setLocationProvince(e.currentTarget.value)}
+                    className="shadow-none"
+                  />
+                </div>
+              </div>
+              {zoneIncomplete ? (
+                <p role="alert" className="text-xs text-destructive">
+                  Si cargás localidad o provincia, falta la zona o dirección.
+                </p>
+              ) : null}
             </section>
 
             <section className="space-y-1.5">

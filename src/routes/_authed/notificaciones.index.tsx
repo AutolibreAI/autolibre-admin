@@ -13,6 +13,7 @@ import {
   type NotificationState,
   type NotificationStateTone,
 } from '~/lib/notifications'
+import { describeOffset, describeRule } from '~/lib/notification-rules'
 import { listAppNotificationFacets, listAppNotifications } from '~/fn/notifications'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { BroadcastComposer } from '~/components/BroadcastComposer'
@@ -83,7 +84,8 @@ function NotificationsList() {
     Boolean(search.channel) ||
     Boolean(search.notificationState) ||
     Boolean(search.userId) ||
-    Boolean(search.notificationBroadcastId)
+    Boolean(search.notificationBroadcastId) ||
+    Boolean(search.notificationRuleId)
 
   // Cuando se filtra por usuario mostramos su email — sale de las propias filas,
   // sin una consulta extra. Si el filtro no matchea nada, no hay email que
@@ -92,6 +94,9 @@ function NotificationsList() {
 
   // Mismo truco para un envío: todas sus filas comparten el título.
   const broadcastTitle = search.notificationBroadcastId ? (notifications[0]?.title ?? null) : null
+
+  // Y para una regla de vencimiento: todas sus filas traen la misma regla.
+  const scopedRule = search.notificationRuleId ? (notifications[0]?.rule ?? null) : null
 
   return (
     <>
@@ -124,6 +129,34 @@ function NotificationsList() {
           <button
             type="button"
             onClick={() => setSearch({ notificationBroadcastId: undefined })}
+            className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <X className="size-3" aria-hidden />
+            quitar
+          </button>
+        </div>
+      ) : null}
+
+      {search.notificationRuleId ? (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-sm">
+          <span className="min-w-0 truncate text-muted-foreground">
+            Filtrando por la regla{' '}
+            {scopedRule ? (
+              <Link
+                to="/notificaciones/reglas"
+                className="font-medium text-foreground underline decoration-dotted hover:text-brand"
+              >
+                {describeRule(scopedRule)}
+              </Link>
+            ) : (
+              <span className="font-mono text-xs text-foreground">
+                {search.notificationRuleId.slice(0, 8)}
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSearch({ notificationRuleId: undefined })}
             className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             <X className="size-3" aria-hidden />
@@ -280,6 +313,7 @@ function NotificationRow({ notification: n }: { notification: NotificationListIt
         <div>{typeLabel(n.type)}</div>
         <div className="text-xs text-muted-foreground">
           {n.sourceType ? (NOTIFICATION_SOURCE_LABELS[n.sourceType] ?? n.sourceType) : '—'}
+          {n.rule ? <span className="ml-1">· {describeOffset(n.rule).toLowerCase()}</span> : null}
           {n.channel !== 'push' ? <span className="ml-1">· {n.channel}</span> : null}
         </div>
       </TableCell>
