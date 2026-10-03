@@ -20,6 +20,7 @@
     "@tanstack/react-start": "1.168.49",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "leaflet": "^1.9.4",
     "lucide-react": "^1.34.0",
     "pg": "^8.23.0",
     "radix-ui": "^1.6.7",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@tanstack/nitro-v2-vite-plugin": "1.155.0",
+    "@types/leaflet": "^1.9.20",
     "@types/node": "^26.3.0",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",

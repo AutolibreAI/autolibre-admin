@@ -185,7 +185,7 @@ export const TEMPLATE_VARIABLES: Record<QuoteTemplateAudience, ReadonlyArray<{ k
     { key: 'vehiculo', label: 'El auto, frase corta ("el Nissan Note (PNZ450)")' },
     { key: 'vehiculo_completo', label: 'El auto completo, o un aviso si falta' },
     { key: 'pedido', label: 'La descripción del pedido' },
-    { key: 'zona', label: 'La dirección/zona de la persona' },
+    { key: 'zona', label: 'La zona de la persona (localidad y provincia, nunca la dirección exacta)' },
     { key: 'intro', label: 'El párrafo de presupuestos, redactado según la cantidad' },
     { key: 'presupuestos', label: 'El bloque numerado con lo que contestó cada taller' },
   ],
@@ -363,9 +363,34 @@ function fullVehicleValue(detail: QuoteRequestDetail): string {
   return detail.vehicleText ?? '[sin vehículo cargado]'
 }
 
-/** `null` (WhatsApp, o un pedido `typed` sin dirección) → aviso, no un vacío. */
+/**
+ * La ZONA de la persona, nunca su dirección exacta (pedido del 2026-10-03):
+ * `location_address` del GPS suele ser calle y número ("Lourdes 2021"), y un
+ * mensaje de WhatsApp no es lugar para eso. Sale de localidad + provincia; la
+ * localidad se omite cuando la provincia ya la nombra ("Córdoba, Córdoba",
+ * "Buenos Aires, Ciudad Autónoma de Buenos Aires").
+ *
+ * Sin localidad ni provincia (un `typed` viejo que sólo trae dirección) la
+ * dirección entra SÓLO si no tiene ningún número: "Bariloche" o "Palermo" son
+ * una zona; "Caseros 4241" es una dirección y cae en el corchete. Es una
+ * heurística y está escrita como tal — ante la duda, el corchete.
+ */
+export function quoteZoneLabel(detail: Pick<QuoteRequestDetail, 'locationAddress' | 'locationLocality' | 'locationProvince'>): string | null {
+  const locality = detail.locationLocality?.trim() || null
+  const province = detail.locationProvince?.trim() || null
+  if (locality || province) {
+    const norm = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    if (locality && province && norm(province).includes(norm(locality))) return province
+    return [locality, province].filter(Boolean).join(', ')
+  }
+  const address = detail.locationAddress?.trim() || null
+  if (address && !/\d/.test(address)) return address
+  return null
+}
+
+/** Sin zona (WhatsApp, o sólo una dirección con número) → aviso, no un vacío. */
 function zoneValue(detail: QuoteRequestDetail): string {
-  return detail.locationAddress ?? '[completar zona/dirección — el pedido no la trae cargada]'
+  return quoteZoneLabel(detail) ?? '[completar zona — sin la dirección exacta]'
 }
 
 /**

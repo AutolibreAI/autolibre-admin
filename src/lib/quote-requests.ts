@@ -741,7 +741,7 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
   /**
    * `location_address`, texto ya armado por el backend (device vs typed —
    * ver `.claude/rules/leads.md`). `null` cuando el pedido no trae ubicación
-   * (WhatsApp, o un `typed` sin dirección). Es lo que rellena `{{zona}}` en
+   * (WhatsApp, o un `typed` sin dirección). NO rellena `{{zona}}`: eso es `quoteZoneLabel` en
    * `~/lib/quote-templates`.
    */
   locationAddress: string | null

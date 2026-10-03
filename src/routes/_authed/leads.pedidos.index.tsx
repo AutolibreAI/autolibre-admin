@@ -27,7 +27,6 @@ import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import {
   QuoteStatusBadge,
   QuoteVehicleWarnings,
-  QuoteWhatsAppLink,
   quoteAgeLabel,
 } from '~/components/QuoteRequestCells'
 import { QuoteRequestComposer } from '~/components/QuoteRequestComposer'
@@ -283,7 +282,6 @@ function Pedidos() {
                 <Sort label="Estado" sortKey="status" search={search} />
                 <Sort label="Canal" sortKey="channel" search={search} />
                 <Sort label="Contacto" sortKey="contact" search={search} />
-                <Sort label="Cuenta" sortKey="account" search={search} />
                 <Sort label="Vehículo" sortKey="plate" search={search} />
                 <Sort label="Presupuestos" sortKey="responses" search={search} align="right" firstClick="desc" />
                 <TableHead>Descripción</TableHead>
@@ -426,30 +424,30 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
 
       <TableCell className="whitespace-nowrap">{quoteChannelLabel(row.channel)}</TableCell>
 
-      <TableCell>
+      {/*
+        Contacto y cuenta en una celda: la cuenta de AutoLibre, si hay, es un
+        renglón más. "anónimo" no es un error: web y WhatsApp no tienen cuenta,
+        y un POST público con `channel = app` tampoco. El botón de WhatsApp vive
+        en la ficha, no acá.
+      */}
+      <TableCell className="max-w-[14rem]">
         <div>{row.contactName ?? <Muted>sin nombre</Muted>}</div>
         <div className="font-mono text-xs tabular-nums text-muted-foreground">{row.contactPhone}</div>
-        <QuoteWhatsAppLink phone={row.contactPhone} publicNumber={row.publicNumber} contactName={row.contactName} />
         {row.contactEmail ? <div className="truncate text-xs text-muted-foreground">{row.contactEmail}</div> : null}
-      </TableCell>
-
-      {/*
-        La cuenta de AutoLibre, si hay. "anónimo" no es un error: web y WhatsApp
-        no tienen cuenta, y un POST público con `channel = app` tampoco.
-      */}
-      <TableCell className="max-w-[9rem]">
-        {row.userId ? (
-          <Link
-            to="/usuarios/$userId"
-            params={{ userId: row.userId }}
-            title={row.userEmail ?? row.userId}
-            className="block truncate text-brand hover:underline"
-          >
-            {row.userEmail ?? row.userId}
-          </Link>
-        ) : (
-          <Muted>anónimo</Muted>
-        )}
+        <div className="mt-1 truncate text-xs">
+          {row.userId ? (
+            <Link
+              to="/usuarios/$userId"
+              params={{ userId: row.userId }}
+              title={row.userEmail ?? row.userId}
+              className="text-brand hover:underline"
+            >
+              Cuenta: {row.userEmail ?? row.userId}
+            </Link>
+          ) : (
+            <Muted>sin cuenta</Muted>
+          )}
+        </div>
       </TableCell>
 
       <TableCell>

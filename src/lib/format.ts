@@ -49,7 +49,11 @@ const dateTime = new Intl.DateTimeFormat("es-AR", {
   timeZone: "UTC",
 });
 
+const km = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+
 export const formatInt = (n: number) => int.format(n);
+/** Distancia con un decimal y coma decimal: `3,4 km`. */
+export const formatKm = (n: number) => `${km.format(n)} km`;
 export const formatDate = (iso: string) => date.format(new Date(iso));
 export const formatArs = (n: number) => ars.format(n);
 /** Sin sufijo de zona — la hora es UTC y el llamador lo aclara una vez, no por celda. */

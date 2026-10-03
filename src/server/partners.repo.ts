@@ -1384,6 +1384,8 @@ interface CandidateRow {
   matched_services: Array<{ slug: string; name: string }>
   matched_category_count: number | string
   distance_km: string | number | null
+  latitude: string | number | null
+  longitude: string | number | null
 }
 
 /**
@@ -1404,6 +1406,14 @@ interface CandidateRow {
  * `matched_category_count DESC` — antes de la distancia, no después. Un
  * partner que cubre 2 de 2 rubros pedidos conviene más que uno más cercano
  * que sólo cubre 1, porque evita derivar a dos talleres distintos.
+ *
+ * Desde el 2026-10-03 la PANTALLA ordena por distancia por default (pedido
+ * explícito) y deja "más rubros cubiertos" como segundo criterio a un click —
+ * ese orden lo arma `<PartnerCandidates/>` en el cliente sobre esta misma
+ * lista. Este `ORDER BY` queda como el orden estable de partida.
+ *
+ * Las coordenadas del partner viajan para el mapa del mismo componente. Son
+ * del TALLER (dato público de un negocio), no de una persona.
  */
 export async function listPartnerCandidates(
   input: ListPartnerCandidatesInput,
@@ -1413,7 +1423,7 @@ export async function listPartnerCandidates(
 
   const rows = await sql<CandidateRow>(
     `SELECT p.id, p.name, p.coverage_zone, p.tier::text AS tier, p.modality, p.hours,
-            p.whatsapp, p.address,
+            p.whatsapp, p.address, p.latitude, p.longitude,
             coalesce(
               jsonb_agg(DISTINCT jsonb_build_object('slug', sc.slug, 'name', sc.name))
                 FILTER (WHERE sc.id IS NOT NULL),
@@ -1456,5 +1466,10 @@ export async function listPartnerCandidates(
     matchedCategories: [...r.matched_categories].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     matchedServices: [...r.matched_services].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     distanceKm: r.distance_km === null ? null : Number(r.distance_km),
+    // El par va junto o no va: `set_partner_location` (007) rechaza uno incompleto.
+    location:
+      r.latitude === null || r.longitude === null
+        ? null
+        : { lat: Number(r.latitude), lng: Number(r.longitude) },
   }))
 }

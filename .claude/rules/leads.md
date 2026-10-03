@@ -1287,3 +1287,33 @@ Sin vehículo vinculado, la lista y el tablero muestran el **vehículo escrito**
 
 El filtro «todos, menos duplicados» es el chip «Todos» de Estado: los cerrados
 como `duplicate` sólo entran con «Incluir duplicados / prueba».
+
+### Cambios del 2026-10-03
+
+- **Contacto y cuenta, una sola columna.** La cuenta de AutoLibre es un renglón
+  más de la celda de contacto ("Cuenta: …" o "sin cuenta"). El botón de
+  WhatsApp **salió de la fila**: vive en la ficha. El sort key `account` sigue
+  existiendo (un link viejo con `sort=account` no se rompe), pero ya no tiene
+  header.
+- **`{{zona}}` nunca es la dirección exacta.** `location_address` del GPS es
+  calle y número ("Lourdes 2021"). `quoteZoneLabel()` en `~/lib/quote-templates`
+  arma localidad + provincia (omitiendo la localidad si la provincia ya la
+  nombra). Sin las dos, usa la dirección SÓLO si no tiene ningún dígito
+  ("Bariloche", "Palermo"); si no, corchete. Como la variable es la misma,
+  alcanza también a las versiones editadas en `ops` (017).
+- **Candidatos ordenados por distancia.** `<PartnerCandidates/>` ordena del
+  más cerca al más lejos (línea recta, Haversine); "sin ubicación" al final.
+  Con más de un rubro pedido, el orden anterior ("más rubros cubiertos") queda
+  a un chip. Los dos órdenes son del cliente; el `ORDER BY` del repo es sólo
+  el orden estable de partida. Distancia con `formatKm` (`3,4 km`).
+- **Vista de mapa** (`CandidatesMap`, Leaflet + tiles de OpenStreetMap, con
+  atribución): pin del pedido (Action Dark) y un pin por candidato VISIBLE
+  (mismos filtros de zona y aliado), verde si es aliado. Leaflet se importa
+  adentro del efecto (toca `window`, la ficha es SSR). Los pines son
+  `circleMarker` con color de token, no el PNG con sombra de Leaflet. El texto
+  del popup va por `textContent` (el nombre de un partner es texto libre). El
+  efecto depende de una firma del contenido, no de la identidad del array: el
+  padre arma la lista en cada render. Los candidatos sin coordenadas no tienen
+  pin, y la pantalla dice cuántos quedaron afuera. `listPartnerCandidates`
+  devuelve `location` (`{lat,lng}` o `null`) — coordenadas del TALLER, no de
+  una persona.

@@ -284,8 +284,8 @@ export interface PartnerCandidate {
   address: string | null
   /**
    * De los rubros PEDIDOS (`categorySlugs` del pedido), cuáles cubre este
-   * partner. El orden de los candidatos es por `cardinality(matchedCategories)`
-   * descendente — el que cubre más rubros de los que se pidieron va primero.
+   * partner. La pantalla ordena por distancia por default y ofrece este conteo
+   * (`cardinality(matchedCategories)` descendente) como segundo orden.
    */
   matchedCategories: Array<{ slug: string; name: string }>
   /** Los `services` de los rubros pedidos que el partner cubre, no todo su catálogo. */
@@ -297,6 +297,8 @@ export interface PartnerCandidate {
    * `scanner-compatibility.md` para las celdas vacías de esa matriz.
    */
   distanceKm: number | null
+  /** Dónde está el taller, para el mapa de candidatos. `null` = sin coordenadas cargadas. */
+  location: { lat: number; lng: number } | null
 }
 
 /**

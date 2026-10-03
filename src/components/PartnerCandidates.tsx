@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
-import { Check, MapPin, MessageCircle, Save, Send } from 'lucide-react'
+import { Check, List, Map as MapIcon, MapPin, MessageCircle, Save, Send } from 'lucide-react'
 import { addQuoteRequestInternalNoteFn, setQuoteRequestRubrosFn } from '~/fn/quote-requests'
 import {
   canonicalWhatsAppDigits,
@@ -16,6 +16,8 @@ import { Card, CardContent } from '~/components/ui/card'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MultiSelect } from '~/components/MultiSelect'
 import { cn } from '~/lib/utils'
+import { formatKm } from '~/lib/format'
+import { CandidatesMap, type MapCandidate } from '~/components/CandidatesMap'
 import type { ServiceFamily } from '~/lib/catalog'
 
 /**
@@ -51,7 +53,45 @@ import type { ServiceFamily } from '~/lib/catalog'
  * de una ficha que ya se abrió — que un link pegado no lo reproduzca no cuesta
  * nada. Zona usa el mismo `MultiSelect` que el selector de rubros (antes eran
  * chips sueltas, que no escalaban a las ~30 zonas del directorio).
+ *
+ * ── Orden y mapa — desde el 2026-10-03 ──────────────────────────────────────
+ *
+ * El orden por default es la DISTANCIA (del más cercano al más lejano, en
+ * línea recta entre las coordenadas del pedido y las del taller); "sin
+ * ubicación" va al final, nunca se lee como "lejos". Con más de un rubro
+ * pedido queda a un click el orden anterior —más rubros cubiertos primero—,
+ * que sigue siendo el criterio correcto cuando se quiere UN solo taller para
+ * todo. Los dos son del cliente: la lista ya vino entera.
+ *
+ * "Mapa" muestra el pedido y los candidatos VISIBLES (mismos filtros que la
+ * lista). Vista y orden van en `useState` por el mismo motivo que zona.
  */
+
+type CandidateOrder = 'distance' | 'coverage'
+type CandidateView = 'list' | 'map'
+
+/** Distancia ascendente, sin ubicación al final; desempata por rubros cubiertos y aliado. */
+function byDistance(a: PartnerCandidate, b: PartnerCandidate): number {
+  if (a.distanceKm !== b.distanceKm) {
+    if (a.distanceKm === null) return 1
+    if (b.distanceKm === null) return -1
+    return a.distanceKm - b.distanceKm
+  }
+  return byCoverage(a, b)
+}
+
+/** Más rubros pedidos cubiertos primero; desempata por distancia, aliado y nombre. */
+function byCoverage(a: PartnerCandidate, b: PartnerCandidate): number {
+  const cov = b.matchedCategories.length - a.matchedCategories.length
+  if (cov !== 0) return cov
+  if (a.distanceKm !== b.distanceKm) {
+    if (a.distanceKm === null) return 1
+    if (b.distanceKm === null) return -1
+    return a.distanceKm - b.distanceKm
+  }
+  if ((a.tier === 'founding') !== (b.tier === 'founding')) return a.tier === 'founding' ? -1 : 1
+  return a.name.localeCompare(b.name, 'es')
+}
 
 const MIN_LOCATED_SHARE = 0.5
 
@@ -97,6 +137,8 @@ export function PartnerCandidates({
   const [rubroError, setRubroError] = useState<string | null>(null)
   const [zoneFilter, setZoneFilter] = useState<Array<string>>([])
   const [onlyFounding, setOnlyFounding] = useState(false)
+  const [order, setOrder] = useState<CandidateOrder>('distance')
+  const [view, setView] = useState<CandidateView>('list')
 
   const categories = catalog.map((f) => ({ slug: f.slug, name: f.name }))
   const savedSet = new Set(savedCategorySlugs)
@@ -119,12 +161,34 @@ export function PartnerCandidates({
    * mismo campo de texto (`"CABA, Zona Norte"`) desaparecería justo cuando el
    * operador busca una de las suyas.
    */
-  const visibleCandidates = candidates.filter((c) => {
-    if (onlyFounding && c.tier !== 'founding') return false
-    if (zoneFilter.length === 0) return true
-    const zone = c.coverageZone.toLowerCase()
-    return zoneFilter.some((z) => zone.includes(z.toLowerCase()))
-  })
+  const visibleCandidates = candidates
+    .filter((c) => {
+      if (onlyFounding && c.tier !== 'founding') return false
+      if (zoneFilter.length === 0) return true
+      const zone = c.coverageZone.toLowerCase()
+      return zoneFilter.some((z) => zone.includes(z.toLowerCase()))
+    })
+    .sort(order === 'distance' || selectedCategorySlugs.length < 2 ? byDistance : byCoverage)
+
+  const pedidoLocation =
+    detail.locationLatitude !== null && detail.locationLongitude !== null
+      ? { lat: detail.locationLatitude, lng: detail.locationLongitude }
+      : null
+  const mapCandidates: Array<MapCandidate> = visibleCandidates.flatMap((c) =>
+    c.location
+      ? [
+          {
+            id: c.id,
+            name: c.name,
+            coverageZone: c.coverageZone,
+            founding: c.tier === 'founding',
+            distanceKm: c.distanceKm,
+            location: c.location,
+          },
+        ]
+      : [],
+  )
+  const offMap = visibleCandidates.length - mapCandidates.length
 
   async function saveRubro() {
     setSavingRubro(true)
@@ -219,6 +283,26 @@ export function PartnerCandidates({
                     Solo aliados
                   </Chip>
                 </FilterGroup>
+
+                {selectedCategorySlugs.length > 1 && view === 'list' ? (
+                  <FilterGroup label="Orden">
+                    <Chip active={order === 'distance'} onClick={() => setOrder('distance')}>
+                      Más cerca primero
+                    </Chip>
+                    <Chip active={order === 'coverage'} onClick={() => setOrder('coverage')}>
+                      Más rubros cubiertos
+                    </Chip>
+                  </FilterGroup>
+                ) : null}
+
+                <FilterGroup label="Vista">
+                  <Chip active={view === 'list'} onClick={() => setView('list')}>
+                    <List className="size-3.5" aria-hidden /> Lista
+                  </Chip>
+                  <Chip active={view === 'map'} onClick={() => setView('map')}>
+                    <MapIcon className="size-3.5" aria-hidden /> Mapa
+                  </Chip>
+                </FilterGroup>
               </div>
             ) : null}
 
@@ -247,6 +331,24 @@ export function PartnerCandidates({
               <p className="text-sm text-muted-foreground">
                 Ningún candidato con este filtro{zoneFilterActive ? ' de zona / aliado' : ''}.
               </p>
+            ) : view === 'map' ? (
+              <div className="space-y-2">
+                <CandidatesMap pedido={pedidoLocation} candidates={mapCandidates} />
+                {offMap > 0 || !pedidoLocation ? (
+                  <p className="text-xs text-muted-foreground">
+                    {[
+                      !pedidoLocation ? 'el pedido no tiene coordenadas, así que no tiene pin' : null,
+                      offMap > 0
+                        ? `${offMap} de ${visibleCandidates.length} candidatos no tienen ubicación cargada y no aparecen`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                      .replace(/^./, (ch) => ch.toUpperCase())}
+                    .
+                  </p>
+                ) : null}
+              </div>
             ) : (
               <div className="space-y-2">
                 {local.map((c) => (
@@ -261,7 +363,7 @@ export function PartnerCandidates({
               </div>
             )}
 
-            {remote.length > 0 ? (
+            {remote.length > 0 && view === 'list' ? (
               <div className="space-y-2">
                 <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   A domicilio / a distancia — la distancia no aplica
@@ -384,7 +486,7 @@ function CandidateRow({
               )}
             >
               <MapPin className="size-3" aria-hidden />
-              {c.distanceKm === null ? 'sin ubicación' : `${c.distanceKm.toFixed(1)} km`}
+              {c.distanceKm === null ? 'sin ubicación' : formatKm(c.distanceKm)}
             </span>
           ) : null}
 
