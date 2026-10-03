@@ -424,3 +424,39 @@ y sumar los buckets: `sum(signups)` = usuarios reales, `sum(received)` =
 comentario `--` dentro del template literal de SQL con un `` `nombre` `` cierra
 el string y rompe el build con un error de parser opaco (`Expected ',' or
 ')'`) — los comentarios de SQL van sin backticks.
+
+## Partners y personas por canal — desde el 2026-10-03
+
+### El gráfico de Partners
+
+`adoptionSeries()` devuelve `partners` + `partnersBaseline`. Cuenta toda alta,
+sin mirar `status` (mismo criterio que vehículos archivados). **Los
+`source = 'legacy_sheet'` no son barra**: su `created_at` es el día del import
+(34 filas el 2026-08-26), no el día en que se sumó cada taller. Entran como piso
+del acumulado. Cuadre: último `total` = `count(*) from partners` (70 = 70 al
+2026-10-03).
+
+### Personas por canal (`channelPeople`, `~/lib/channels`)
+
+App, WhatsApp y web **no valen lo mismo**: nunca se suman en un número sin el
+desglose al lado. El gráfico de usuarios pasó a llamarse "Usuarios de la app".
+
+- **Una persona de WhatsApp/web** es un teléfono (sólo dígitos) o un email de
+  sus pedidos, con clausura transitiva (union-find en JS, en
+  `src/server/channels.repo.ts`). Sólo cuentan los pedidos reales
+  (`notDuplicatePredicate`, importado). Un grupo con email de dominio excluido
+  o con una cuenta interna se descarta.
+- **Duplicados**: `users.phone` está vacío (250 de 250), así que los únicos
+  puentes a una cuenta son un pedido por la APP (trae `user_id` +
+  `contact_phone`) y el email contra `users.email`. Con cuenta, la persona se
+  cuenta UNA vez como usuario de la app, y "llegó primero por X" si su primer
+  pedido por WhatsApp/web es anterior a su alta. Quien bajó la app y nunca
+  pidió desde ahí queda contado dos veces: está pedido al backend
+  (`docs/pedido-backend-2026-10-03.md`, §2).
+- `appUsers` sale de la lista de usuarios, no de los grupos: tiene que dar
+  EXACTO "Usuarios reales" (250 = 250).
+- La serie cuenta a cada persona en el período de su PRIMER pedido, por el
+  canal de ese pedido, con o sin cuenta después. Cuadre: suma de la serie =
+  sin cuenta + convertidos (11 = 11 al 2026-10-03).
+
+`tmp/probe-canales.mjs` carga los módulos reales y verifica los tres cuadres.

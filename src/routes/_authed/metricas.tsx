@@ -18,8 +18,10 @@ import {
   type VehicleDistScope,
 } from '~/lib/ops'
 import type { QuoteRequestSeries } from '~/lib/quote-requests'
+import type { ChannelPeople } from '~/lib/channels'
 import {
   getAdoptionSeries,
+  getChannelPeople,
   getAssistantProposalStats,
   getOnboardingSeries,
   getOpsPulse,
@@ -97,6 +99,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       distribution,
       quoteSeries,
       locations,
+      channels,
     ] = await Promise.all([
       getOpsPulse({ signal }),
       getUsageAdoption({ signal }),
@@ -109,6 +112,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       getVehicleDistribution({ data: deps, signal }),
       getQuoteRequestSeriesFn({ data: deps, signal }),
       getVehicleLocationBreakdownFn({ signal }),
+      getChannelPeople({ data: deps, signal }),
     ])
     return {
       pulse,
@@ -122,6 +126,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       distribution,
       quoteSeries,
       locations,
+      channels,
     }
   },
 
@@ -162,6 +167,7 @@ function MetricasPage() {
     distribution,
     quoteSeries,
     locations,
+    channels,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -217,7 +223,7 @@ function MetricasPage() {
           <GrowthChart
             buckets={series.users.map((p) => p.bucket)}
             unit={series.unit}
-            label="Usuarios"
+            label="Usuarios de la app"
             bars={[{ values: series.users.map((p) => p.added), color: 'var(--color-brand)', label: `altas por ${series.unit}` }]}
           />
           <GrowthChart
@@ -226,7 +232,38 @@ function MetricasPage() {
             label="Vehículos"
             bars={[{ values: series.vehicles.map((p) => p.added), color: 'var(--color-brand)', label: `altas por ${series.unit}` }]}
           />
+          <GrowthChart
+            buckets={series.partners.map((p) => p.bucket)}
+            unit={series.unit}
+            label="Partners"
+            bars={[{ values: series.partners.map((p) => p.added), color: 'var(--color-brand)', label: `altas por ${series.unit}` }]}
+            lines={[
+              {
+                values: series.partners.map((p) => p.total),
+                color: 'var(--color-action)',
+                label: `acumulado (arranca en ${formatInt(series.partnersBaseline)} de la planilla vieja)`,
+                format: formatInt,
+              },
+            ]}
+            emptyMessage="Todavía no hay altas de partners fuera de la planilla vieja."
+          />
+          <GrowthChart
+            buckets={channels.series.map((p) => p.bucket)}
+            unit={channels.unit}
+            label="Personas que llegaron por WhatsApp o web"
+            bars={[
+              { values: channels.series.map((p) => p.whatsapp), color: 'var(--color-brand)', label: 'por WhatsApp' },
+              { values: channels.series.map((p) => p.web), color: 'var(--color-brand-muted)', label: 'por web' },
+            ]}
+            emptyMessage={
+              channels.available
+                ? 'Todavía no llegó nadie por WhatsApp o web.'
+                : 'Esta base no tiene pedidos de presupuesto: no hay otro canal que el de la app.'
+            }
+          />
         </div>
+
+        <ChannelPeopleTable data={channels} />
 
         <OnboardingChart data={onboarding} />
 
@@ -234,7 +271,11 @@ function MetricasPage() {
           Las barras son las altas de cada período; la línea (default) es el
           acumulado. El total de vehículos cuenta los registros históricos
           (activos + archivados), así que no coincide con "Vehículos activos" de
-          arriba. Se excluyen las cuentas internas de test. Los períodos agrupan
+          arriba. Partners cuenta toda alta (también las pausadas hoy); los
+          importados de la planilla vieja no son barra —su fecha es la del
+          import— y el acumulado arranca en ellos. «Personas que llegaron por
+          WhatsApp o web» cuenta a cada persona en el período de su primer pedido,
+          tenga o no cuenta después. Se excluyen las cuentas internas de test. Los períodos agrupan
           en hora de Buenos Aires, no UTC — un alta de las 22 h local cae en su
           propio día, no en el siguiente.
         </p>
@@ -956,5 +997,68 @@ function MissingResponsesNote({ label }: { label: string }) {
         base — sin ella no hay de dónde leer qué contestó cada taller.
       </p>
     </div>
+  )
+}
+
+/**
+ * Personas por canal de llegada — cada persona UNA vez (`~/lib/channels`).
+ *
+ * La app va arriba y aparte porque no vale lo mismo que un contacto: el total
+ * de personas únicas se muestra, pero nunca sin el desglose al lado. Quien
+ * escribió primero por WhatsApp/web y después se dio de alta cuenta en la app,
+ * con su origen dicho en la fila de abajo — no en dos lados.
+ */
+function ChannelPeopleTable({ data }: { data: ChannelPeople }) {
+  const rows: ReadonlyArray<{ label: string; value: number; sub?: string; indent?: boolean }> = [
+    { label: 'App (con cuenta)', value: data.appUsers, sub: 'el mismo número que «Usuarios reales» de arriba' },
+    { label: 'llegaron primero por WhatsApp', value: data.appFromWhatsapp, indent: true },
+    { label: 'llegaron primero por web', value: data.appFromWeb, indent: true },
+    { label: 'Sólo WhatsApp (sin cuenta)', value: data.whatsappOnly },
+    { label: 'Sólo web (sin cuenta)', value: data.webOnly },
+  ]
+  const total = data.appUsers + data.whatsappOnly + data.webOnly
+
+  return (
+    <section className="mt-6">
+      <h3 className="mb-1 font-heading text-sm font-semibold">Personas por canal</h3>
+      <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+        Una persona de WhatsApp o web es un teléfono o un email de sus pedidos de
+        presupuesto (sin los cerrados como duplicado o prueba). Si después pidió
+        desde la app con el mismo teléfono, o tiene cuenta con el mismo email, es la
+        misma persona y cuenta UNA vez, como usuario de la app. Quien bajó la app
+        y nunca pidió nada desde ahí no se puede cruzar todavía: la app no guarda
+        el teléfono del usuario.
+      </p>
+
+      <div className="overflow-x-auto rounded-lg border border-border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Canal</TableHead>
+              <TableHead className="text-right">Personas</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.label}>
+                <TableCell className={cn('text-sm', r.indent && 'pl-8 text-muted-foreground')}>
+                  {r.indent ? `de ellos, ${r.label}` : r.label}
+                  {r.sub ? <div className="text-xs text-muted-foreground">{r.sub}</div> : null}
+                </TableCell>
+                <TableCell
+                  className={cn('text-right tabular-nums', r.indent ? 'text-muted-foreground' : 'font-medium')}
+                >
+                  {formatInt(r.value)}
+                </TableCell>
+              </TableRow>
+            ))}
+            <TableRow>
+              <TableCell className="text-sm font-semibold">Personas únicas</TableCell>
+              <TableCell className="text-right font-semibold tabular-nums">{formatInt(total)}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+    </section>
   )
 }

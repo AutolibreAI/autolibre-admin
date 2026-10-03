@@ -142,6 +142,10 @@ export interface GrowthSeries {
   unit: GrowthUnit
   users: Array<GrowthPoint>
   vehicles: Array<GrowthPoint>
+  /** Altas de partners SIN los de la planilla vieja; `total` ya incluye `partnersBaseline`. */
+  partners: Array<GrowthPoint>
+  /** Los partners importados de la planilla (`legacy_sheet`): el piso del acumulado. */
+  partnersBaseline: number
 }
 
 // ── Altas con vehículo en el mismo proceso (sección Crecimiento) ───────────

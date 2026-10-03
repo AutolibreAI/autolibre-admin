@@ -204,7 +204,7 @@ export async function adoptionPulse(
  * interpolado: `date_trunc()` acepta text como primer argumento, así que no hace
  * falta meterlo en el string.
  */
-const PG_UNIT: Record<GrowthUnit, string> = {
+export const PG_UNIT: Record<GrowthUnit, string> = {
   dia: 'day',
   semana: 'week',
   mes: 'month',
@@ -288,6 +288,17 @@ async function growthSeries(
  *     se archivó fue un registro real en su momento; la curva de crecimiento no
  *     lo borra hacia atrás. Consecuencia: el último `total` de la serie de
  *     vehículos = activos + archivados, NO el "Vehículos activos" de Inicio.
+ *
+ * ── Partners — desde el 2026-10-03 ──────────────────────────────────────────
+ *
+ * Mismo criterio que vehículos: todo partner que se dio de alta, sin mirar su
+ * `status` (uno pausado hoy fue un alta real). Sin `INTERNAL_PREDICATE`: un
+ * partner no es una cuenta.
+ *
+ * Los `source = 'legacy_sheet'` NO van en las barras: su `created_at` es el día
+ * del IMPORT de la planilla (34 filas el 2026-08-26), no el día en que cada
+ * taller se sumó. Graficarlos sería una barra de 34 que aplasta a todas las
+ * altas reales. Entran como `partnersBaseline`: el acumulado arranca ahí.
  */
 export async function adoptionSeries(
   unit: GrowthUnit,
@@ -295,16 +306,25 @@ export async function adoptionSeries(
 ): Promise<GrowthSeries> {
   void opts.signal
 
-  const [users, vehicles] = await Promise.all([
+  const [users, vehicles, partners, legacy] = await Promise.all([
     growthSeries('u.created_at', `from users u where not ${INTERNAL_PREDICATE}`, unit),
     growthSeries(
       'v.created_at',
       `from vehicles v join users u on u.id = v.user_id where not ${INTERNAL_PREDICATE}`,
       unit,
     ),
+    growthSeries('p.created_at', `from partners p where p.source::text <> 'legacy_sheet'`, unit),
+    sqlOne<{ n: number | string }>(`select count(*)::int as n from partners where source::text = 'legacy_sheet'`),
   ])
 
-  return { unit, users, vehicles }
+  const partnersBaseline = toInt(legacy?.n ?? 0)
+  return {
+    unit,
+    users,
+    vehicles,
+    partners: partners.map((p) => ({ ...p, total: p.total + partnersBaseline })),
+    partnersBaseline,
+  }
 }
 
 // ── Altas con vehículo en el mismo proceso ──────────────────────────────────

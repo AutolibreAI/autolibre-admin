@@ -26,6 +26,8 @@ import {
   vehicleDistribution,
 } from '~/server/ops.repo'
 import { quoteRequestPulse } from '~/server/quote-requests.repo'
+import { channelPeople } from '~/server/channels.repo'
+import type { ChannelPeople } from '~/lib/channels'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type {
@@ -124,6 +126,16 @@ export const getAdoptionSeries = createServerFn({ method: 'GET' })
  * `adminMiddleware` que `getAdoptionSeries`: comparte la misma serie de altas
  * de usuarios.
  */
+/**
+ * Personas por canal de llegada (app / WhatsApp / web), deduplicadas
+ * (`~/lib/channels`). `adminMiddleware`: cruza teléfonos y emails de pedidos
+ * contra cuentas, aunque devuelva sólo conteos.
+ */
+export const getChannelPeople = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(growthSearchSchema)
+  .handler(async ({ data }): Promise<ChannelPeople> => channelPeople(data.unit, { signal: requestSignal() }))
+
 export const getOnboardingSeries = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
   .validator(growthSearchSchema)
