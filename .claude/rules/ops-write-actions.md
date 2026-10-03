@@ -1255,3 +1255,39 @@ pedido igual.
 **⚠ Al 2026-09-29 la suite de la 019 está escrita y NO corrida**: el `.env` de
 esta máquina apunta a producción. Correrla en DEV antes de aplicar (`pnpm
 db:migrate` la aplica en el próximo deploy de producción).
+
+---
+
+# Migración 020 — atar fotos a un pedido
+
+Alcance: `migrations/020_ops_fotos_de_pedido.sql` y su `.test.sql`,
+`addQuoteRequestFile` de `src/server/quote-photos.repo.ts`,
+`finishQuotePhotoUploadFn` de `src/fn/quote-photos.ts`. La UI está en
+`leads.md`, "Fotos del pedido".
+
+`ops.add_quote_request_file(p_quote_request_id, p_file_id, p_actor_id,
+p_purpose = 'problem_photo')` inserta en `public.quote_request_files` un
+archivo QUE YA EXISTE en `files` — la subida y el registro del archivo los hace
+el backend (`POST /files/confirm`), porque ningún SQL sube a un bucket.
+
+- **El grep se corrió el 2026-10-03** sobre un clon de lectura de `main` del
+  backend (69aa193): `src/quotes` no tiene ningún `AdminGuard`; sus escrituras
+  son `POST /` (anónimo), `POST app`, `:id/cancel` y `:id/user-outcome`, y el
+  alta de la app exige que el archivo sea DEL usuario. No hay camino admin: la
+  excepción aplica. Si aparece uno, esto va por HTTP y se retira.
+- Guardrail 7: lockea el PEDIDO (`ops._lock_quote_request`, 011), que de paso
+  da `QUOTE_REQUEST_NOT_FOUND`. Guardrail 8 no aplica (la tabla no tiene
+  `updated_at`). `p_purpose` es `text` con el cast en el cuerpo, como la 011.
+- Valida representabilidad con la MISMA regla de tipos que el backend
+  (`isMimeTypeAllowedForPurpose`): `problem_photo` = jpeg/png/webp
+  (`FILE_NOT_IMAGE`), `budget` = eso o PDF (`FILE_TYPE_NOT_ALLOWED`); el
+  archivo existe (`FILE_NOT_FOUND`); `INVALID_FILE_PURPOSE`, `FILE_REQUIRED`,
+  los de actor. Una primera versión aceptaba cualquier `image/*`: un GIF habría
+  entrado por el panel y no por la app.
+- **Idempotente**: el mismo archivo dos veces en el mismo pedido devuelve la
+  fila existente (índice único `(quote_request_id, file_id)`) sin segunda
+  entrada de log. Se puede en un pedido cerrado, como los presupuestos (015).
+
+**⚠ Al 2026-10-03 la suite (17 casos) está escrita y NO corrida, y la 020 no
+está aplicada en ninguna base**: el `.env` de esta máquina apunta a producción.
+La aplica el `vercel-build` del próximo deploy de `main`.

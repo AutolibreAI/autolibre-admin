@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { Columns3, List } from 'lucide-react'
+import { Camera, Columns3, List } from 'lucide-react'
 import {
   QUOTE_REQUEST_CHANNELS,
   QUOTE_REQUEST_OUTCOMES,
@@ -401,6 +401,12 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
         {row.enteredManually ? (
           <div className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
             Cargado a mano
+          </div>
+        ) : null}
+        {row.photoCount ? (
+          <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-foreground" title="Fotos adjuntas al pedido">
+            <Camera className="size-3.5" aria-hidden />
+            {formatInt(row.photoCount)} {row.photoCount === 1 ? 'foto' : 'fotos'}
           </div>
         ) : null}
         <div className="text-xs tabular-nums text-muted-foreground">{formatDateTime(row.createdAt)} UTC</div>

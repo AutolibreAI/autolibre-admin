@@ -650,6 +650,8 @@ export interface QuoteRequestListItem {
    * — `.claude/rules/leads.md`. `null` = la 015 no está aplicada en esta base.
    */
   responseCount: number | null
+  /** Archivos en `quote_request_files` (fotos de la app o cargadas desde el panel). `null` = esta base no tiene la tabla. */
+  photoCount: number | null
   /** Dónde está el auto (`location_address` / `location_locality`). `null` = sin zona. */
   locationAddress: string | null
   locationLocality: string | null

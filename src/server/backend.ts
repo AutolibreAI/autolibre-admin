@@ -394,6 +394,50 @@ export async function fileSignedUrl(fileId: string): Promise<{
   }
 }
 
+/**
+ * URL firmada de un archivo AJENO, para un admin — las fotos que la persona
+ * adjuntó a un pedido de presupuesto (`quote_request_files`).
+ *
+ * `fileSignedUrl` de arriba no sirve acá: está acotado al DUEÑO del archivo, y
+ * el dueño de esas fotos es quien hizo el pedido, nunca el admin (404 siempre).
+ * `GET /admin/files/:id/url` (`AdminGuard`) es el camino — está relevado en
+ * `.claude/rules/knowledge-documents.md`, pero hasta el 2026-10-03 ninguna
+ * pantalla lo había llamado, y el backend no está clonado en esta máquina para
+ * verificar su contrato. Por eso la respuesta se lee igual que la del otro
+ * endpoint (`{ url, expiresAt }`) y cualquier forma distinta vuelve como error
+ * legible, no como una imagen rota.
+ *
+ * Quién pide qué id lo decide el server function: sólo firma archivos atados
+ * al pedido que se está mirando, nunca un id del payload.
+ */
+export async function adminFileSignedUrl(fileId: string): Promise<{ url: string; expiresAt: string }> {
+  const token = await bearerToken()
+
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/files/${fileId}/url`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    // El fetch ni llegó: backend caído, URL mal configurada, o —en desarrollo—
+    // el default `localhost:3005` sin backend corriendo. Se dice CUÁL URL, que
+    // es lo único que hace falta para arreglarlo; un "fetch failed" no.
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+
+  if (!response.ok) throw await backendError(response, 'La URL de la foto', { detailed: true })
+
+  const body = (await response.json()) as { url?: unknown; expiresAt?: unknown }
+  if (typeof body.url !== 'string') {
+    throw new Error('BACKEND_ERROR:200:El backend no devolvió una URL para la foto')
+  }
+  return { url: body.url, expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : '' }
+}
+
 // ── Notificaciones ad-hoc ────────────────────────────────────────────────────
 
 /**

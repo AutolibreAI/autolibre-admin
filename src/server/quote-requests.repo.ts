@@ -305,6 +305,7 @@ interface ListRow {
   /** Sólo las trae `listQuoteRequests` (`listExtraColumns`); el detalle las lee aparte. */
   vehicle_text?: string | null
   response_count?: number | string | null
+  photo_count?: number | string | null
   location_address?: string | null
   location_locality?: string | null
 }
@@ -335,6 +336,7 @@ function mapListRow(r: ListRow): QuoteRequestListItem {
     declaredAmount: toNum(r.declared_amount),
     proposalsCount: toIntOrNull(r.proposals_count),
     responseCount: toIntOrNull(r.response_count),
+    photoCount: toIntOrNull(r.photo_count),
     vehicleText: r.vehicle_text ?? null,
     locationAddress: r.location_address ?? null,
     locationLocality: r.location_locality ?? null,
@@ -484,9 +486,10 @@ export async function listQuoteRequests(
  * `NULL` ≠ `0`: sin la 015 no sabemos cuántos hay; con ella, cero es cero.
  */
 async function listExtraColumns(): Promise<string> {
-  const row = await sqlOne<{ has_text: boolean; has_resp: boolean }>(
+  const row = await sqlOne<{ has_text: boolean; has_resp: boolean; has_files: boolean }>(
     `select to_regclass('ops.quote_request_vehicle_text') is not null as has_text,
-            to_regclass('ops.quote_request_response') is not null as has_resp`,
+            to_regclass('ops.quote_request_response') is not null as has_resp,
+            to_regclass('public.quote_request_files') is not null as has_files`,
   )
   const vehicleText = row?.has_text
     ? `(select vt.vehicle_text from ops.quote_request_vehicle_text vt where vt.quote_request_id = qr.id)`
@@ -494,7 +497,13 @@ async function listExtraColumns(): Promise<string> {
   const responseCount = row?.has_resp
     ? `(select count(*)::int from ops.quote_request_response rr where rr.quote_request_id = qr.id)`
     : `null::int`
+  // Fotos de la persona (app) y las cargadas desde el panel (020). Todas las
+  // de `quote_request_files`, también un presupuesto adjunto.
+  const photoCount = row?.has_files
+    ? `(select count(*)::int from quote_request_files qf where qf.quote_request_id = qr.id)`
+    : `null::int`
   return `,
+  ${photoCount} as photo_count,
   qr.location_address,
   qr.location_locality,
   ${vehicleText} as vehicle_text,

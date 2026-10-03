@@ -1,6 +1,6 @@
 import { useState, type DragEvent } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import { GripVertical, Lock } from 'lucide-react'
+import { Camera, GripVertical, Lock } from 'lucide-react'
 import { closeQuoteRequestFn, markQuoteRequestAnsweredFn, markQuoteRequestContactedFn } from '~/fn/quote-requests'
 import {
   QUOTE_REQUEST_STATUSES,
@@ -291,6 +291,12 @@ function BoardCard({
         {row.responseCount !== null ? (
           <span className={cn(row.responseCount > 0 && 'font-medium text-foreground')}>
             {formatInt(row.responseCount)} {row.responseCount === 1 ? 'presupuesto' : 'presupuestos'}
+          </span>
+        ) : null}
+        {row.photoCount ? (
+          <span className="inline-flex items-center gap-1 text-foreground">
+            <Camera className="size-3" aria-hidden />
+            {formatInt(row.photoCount)} {row.photoCount === 1 ? 'foto' : 'fotos'}
           </span>
         ) : null}
         {row.noteCount > 0 ? <span>{formatInt(row.noteCount)} notas</span> : null}

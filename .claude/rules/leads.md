@@ -1306,7 +1306,7 @@ como `duplicate` sólo entran con «Incluir duplicados / prueba».
   Con más de un rubro pedido, el orden anterior ("más rubros cubiertos") queda
   a un chip. Los dos órdenes son del cliente; el `ORDER BY` del repo es sólo
   el orden estable de partida. Distancia con `formatKm` (`3,4 km`).
-- **Vista de mapa** (`CandidatesMap`, Leaflet + tiles de OpenStreetMap, con
+- **Vista de mapa** (`PartnerMap`, compartido con `/partners/listado`; Leaflet + tiles de OpenStreetMap, con
   atribución): pin del pedido (Action Dark) y un pin por candidato VISIBLE
   (mismos filtros de zona y aliado), verde si es aliado. Leaflet se importa
   adentro del efecto (toca `window`, la ficha es SSR). Los pines son
@@ -1317,3 +1317,61 @@ como `duplicate` sólo entran con «Incluir duplicados / prueba».
   pin, y la pantalla dice cuántos quedaron afuera. `listPartnerCandidates`
   devuelve `location` (`{lat,lng}` o `null`) — coordenadas del TALLER, no de
   una persona.
+
+### Fotos del pedido (`<QuoteRequestPhotos/>`) — desde el 2026-10-03
+
+Alcance: `src/lib/quote-photos.ts`, `src/server/quote-photos.repo.ts`,
+`src/fn/quote-photos.ts`, `src/components/QuoteRequestPhotos.tsx`,
+`adminFileSignedUrl` de `src/server/backend.ts`, la migración 020
+(`ops-write-actions.md`).
+
+`public.quote_request_files` (del backend): la persona adjunta fotos al pedir
+desde la APP (`purpose = 'problem_photo'`, el archivo queda a SU nombre). Por
+WhatsApp las manda en la charla; el operador las carga desde la ficha.
+
+- **Listado y tablero**: «📷 N fotos» bajo el código / en la tarjeta
+  (`photoCount`, subconsulta escalar con `to_regclass` previo, igual que
+  `responseCount`). Cuenta TODO `quote_request_files`, también un presupuesto
+  adjunto (`budget`).
+- **Ver**: las miniaturas se piden al MONTAR la tarjeta, no en el loader — son
+  URLs firmadas que vencen a los minutos y la ficha no depende del backend para
+  pintarse. Van por **`GET /admin/files/:id/url`**, no por `/files/:id/url`:
+  ese está acotado al dueño, y el dueño de una foto de la app es la persona
+  (404 siempre para un admin). El server function recibe el PEDIDO y firma sólo
+  los `file_id` atados a él: no firma un id cualquiera del payload. Un error en
+  una foto no tira las demás (`allSettled`).
+- **Cargar**: el flujo de subida directa de los manuales (upload-url → PUT del
+  navegador → confirm, que mira los magic bytes) + `ops.add_quote_request_file`
+  (020) para atarla al pedido. De a una foto: un error en la tercera no se lleva
+  las dos primeras. JPG/PNG/WebP, tope del panel 20MB. La foto queda a nombre
+  del admin (`files.user_id`) — es la auditoría de quién la cargó, y la ficha
+  lo dice ("cargada por …").
+- **Sin la 020** las fotos se ven y no se cargan; la tarjeta lo dice. Cada
+  escritura re-chequea la 020 en el handler (`QUOTE_PHOTOS_UNAVAILABLE`), antes
+  de pedir la URL de subida: si no se puede atar, no se sube nada.
+- **No se borra ni se cambia** una foto: no hay endpoint, y un `DELETE` por SQL
+  dejaría el archivo huérfano en Spaces.
+
+Verificado el 2026-10-03 contra `main` del backend (69aa193, clon de lectura):
+`GET /admin/files/:id/url` existe desde el 2026-09-30 (`AdminFileController`,
+`AdminGuard`, `{ url, expiresAt }`, 15 minutos); foto = jpeg/png/webp
+(`quote-request-file.vo.ts`, la misma lista que ofrece el panel); `src/quotes`
+no tiene ningún `AdminGuard`; y la app no tiene ningún `GET` de pedidos (no lee
+las fotos del backend).
+
+**«Sin vista previa» con el motivo a la vista** (2026-10-03). La primera versión
+escondía el error en el tooltip de cada miniatura. Ahora la tarjeta dice el
+motivo una vez, en ámbar. Las dos causas reales, cada una con su texto:
+`BACKEND_UNREACHABLE:<url>` (el fetch ni llegó — en desarrollo, sin
+`AUTOLIBRE_BACKEND_URL` en el `.env`, el panel usa `localhost:3005`) y un 404
+con `Cannot GET` (el backend desplegado todavía no tiene la ruta).
+
+**Descargar** (2026-10-03): «Descargar» por foto y «Descargar todas (.zip)».
+Van por dos endpoints del panel —`/api/pedidos/:id/fotos/:fileId` y
+`/api/pedidos/:id/fotos-zip`— y no por la URL firmada: el backend firma sin
+`Content-Disposition`, la URL es de otro dominio, y el navegador ignora
+`download` y ABRE la foto. Los dos chequean rol (como `/api/metricas`), bajan
+sólo archivos atados a ESE pedido, y responden en STREAMING: Vercel no aplica el
+tope de 4.5MB a una respuesta streameada. El zip es `~/server/zip.ts`, modo
+STORE sin dependencia (un JPEG no se comprime más), validado con `zipfile` de
+Python (`tmp/probe-zip.mjs`). Nombre: `AL-1068-<nombre original>`.

@@ -25,6 +25,8 @@ import {
 } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerCandidates } from '~/components/PartnerCandidates'
+import { QuoteRequestPhotos } from '~/components/QuoteRequestPhotos'
+import { listQuoteRequestPhotosFn } from '~/fn/quote-photos'
 import { QuoteResponses } from '~/components/QuoteResponses'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
@@ -104,6 +106,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         partnerOptions: [],
         templates: [],
         vehicleProfile: null,
+        photos: { available: false as const },
       }
 
     // Los presupuestos, el directorio y las plantillas van en el MISMO
@@ -112,7 +115,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     // varios. El perfil del vehículo sólo se pide si el pedido tiene uno
     // vinculado — el caso más común (`web`/`whatsapp` sin cuenta) no tiene
     // nada que pedir acá.
-    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile] = await Promise.all([
+    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
       listQuoteResponsesFn({ data: params, signal }),
@@ -121,6 +124,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       result.detail.vehicleId
         ? getQuoteVehicleProfileFn({ data: { vehicleId: result.detail.vehicleId }, signal })
         : Promise.resolve(null),
+      listQuoteRequestPhotosFn({ data: { quoteRequestId: params.quoteRequestId }, signal }),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
@@ -149,6 +153,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       partnerOptions,
       templates,
       vehicleProfile,
+      photos,
     }
   },
 
@@ -177,6 +182,7 @@ function QuoteRequestScreen() {
     partnerOptions,
     templates,
     vehicleProfile,
+    photos,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -270,6 +276,9 @@ function QuoteRequestScreen() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Las fotos del problema: las de la app y las que llegan por WhatsApp. */}
+      <QuoteRequestPhotos key={`photos-${d.id}`} quoteRequestId={d.id} data={photos} />
 
       {/*
         Los presupuestos van ANTES de las acciones porque ése es el orden real
