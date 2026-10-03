@@ -2,8 +2,9 @@
 
 De: panel de administración (`autolibre-admin`). Para: equipo de `autolibre-backend-hex`.
 
-Dos pedidos. El primero es el grande: hoy bloquea editar y crear las reglas de
+Tres pedidos. El primero es el grande: hoy bloquea editar y crear las reglas de
 notificación desde el panel. El segundo es chico y hace exacta una métrica nueva.
+El tercero son confirmaciones para las fotos de los pedidos.
 
 Todo lo relevado salió de **producción** el 2026-10-03 (`autolibre`, `doadmin`,
 puerto 25060), sólo lectura.
@@ -174,3 +175,44 @@ contado dos veces**: como "sólo WhatsApp" y como usuario de la app.
 - Opcional: pedir el teléfono en el onboarding de la app.
 
 Con eso el panel cruza por `users.phone` sin cambiar nada más.
+
+---
+
+## 3. Fotos de los pedidos de presupuesto
+
+### Lo que hizo el panel
+
+- **Ver** las fotos de `quote_request_files` en la ficha del pedido, con
+  `GET /admin/files/:id/url` (las de la app son de la persona; el endpoint del
+  dueño le da 404 a un admin).
+- **Descargar** cada foto o todas en un `.zip`. Pasa por un endpoint del panel
+  que trae la foto en streaming y la entrega como adjunto.
+- **Cargar** fotos desde el panel (las que la persona manda por WhatsApp):
+  `POST /files/upload-url` → PUT a Spaces → `POST /files/confirm` con el token
+  del admin, y después un stored procedure del panel
+  (`ops.add_quote_request_file`) inserta en `quote_request_files` con
+  `purpose = 'problem_photo'` y deja auditoría. Aplica la misma regla de tipos
+  que `isMimeTypeAllowedForPurpose` (jpeg/png/webp).
+
+Verificado en `main` (69aa193, 2026-09-30): `GET /admin/files/:id/url` existe
+con ese contrato, y `src/quotes` no tiene ningún endpoint admin.
+
+### Lo que necesitamos
+
+1. **Que `GET /admin/files/:id/url` esté desplegado en producción.** Está en
+   `main` desde el 2026-09-30. Si el backend de producción es anterior, el panel
+   muestra "sin vista previa" en todas las fotos y dice que falta la ruta.
+2. **¿Les sirve que el panel escriba `quote_request_files` por su stored
+   procedure?** No hay endpoint admin para adjuntar archivos a un pedido. Si
+   prefieren uno (por ejemplo `POST /admin/quote-requests/:id/files` con
+   `{ fileId, purpose }` y `AdminGuard`, validando tipo con el mismo VO), el
+   panel lo usa y retira el SP.
+3. **Opcional: firmar la descarga con `Content-Disposition: attachment`** (un
+   parámetro `?download=1` en `GET /admin/files/:id/url` que agregue
+   `ResponseContentDisposition` al presign). Con eso el panel deja de pasar las
+   fotos por su servidor y descarga directo de Spaces.
+4. **Para cuando la app muestre las fotos de un pedido** (hoy no hay ningún
+   `GET` en `src/quotes`): una foto cargada por un admin queda con
+   `files.user_id` = el admin, así que `GET /files/:id/url` le daría 404 a la
+   persona. Ahí la descarga de adjuntos de un pedido debería autorizar por el
+   pedido, no por el dueño del archivo.
