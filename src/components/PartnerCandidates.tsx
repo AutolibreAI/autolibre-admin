@@ -17,7 +17,7 @@ import { Chip, FilterGroup } from '~/components/Filters'
 import { MultiSelect } from '~/components/MultiSelect'
 import { cn } from '~/lib/utils'
 import { formatKm } from '~/lib/format'
-import { CandidatesMap, type MapCandidate } from '~/components/CandidatesMap'
+import { PartnerMap, type MapPartnerPin } from '~/components/PartnerMap'
 import type { ServiceFamily } from '~/lib/catalog'
 
 /**
@@ -174,7 +174,7 @@ export function PartnerCandidates({
     detail.locationLatitude !== null && detail.locationLongitude !== null
       ? { lat: detail.locationLatitude, lng: detail.locationLongitude }
       : null
-  const mapCandidates: Array<MapCandidate> = visibleCandidates.flatMap((c) =>
+  const mapCandidates: Array<MapPartnerPin> = visibleCandidates.flatMap((c) =>
     c.location
       ? [
           {
@@ -333,7 +333,7 @@ export function PartnerCandidates({
               </p>
             ) : view === 'map' ? (
               <div className="space-y-2">
-                <CandidatesMap pedido={pedidoLocation} candidates={mapCandidates} />
+                <PartnerMap center={pedidoLocation} pins={mapCandidates} />
                 {offMap > 0 || !pedidoLocation ? (
                   <p className="text-xs text-muted-foreground">
                     {[

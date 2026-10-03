@@ -219,6 +219,26 @@ la clave. Los `SortHeader` esquivan esto con un cast interno; para todo lo demá
 finos) es el camino. Un `<Link>` con objeto literal cross-route
 (`search={{ category: x }}`) sí compila — es el spread lo que rompe.
 
+## La vista «Mapa» del listado — desde el 2026-10-03
+
+`partnerView=mapa` (calificado, `.catch('lista')`) pinta las MISMAS filas que
+la tabla, con los mismos filtros, en `PartnerMap` — el componente que también
+usa la ficha de un pedido para los candidatos. Un solo componente a propósito:
+si un aliado se viera distinto en los dos mapas, uno estaría mal. Verde =
+aliado (`tier = 'founding'`), gris = otro, gris claro = pausado/archivado. El
+popup linkea a la ficha.
+
+- `partnerView` está FUERA de `loaderDeps`: pasar de lista a mapa no vuelve a
+  pedir nada.
+- `listPartners` suma `tier` y `location` (`{lat,lng}` o `null`, el par junto o
+  nada, como `set_partner_location`). El `GROUP BY p.id` alcanza (PK).
+- Los partners sin coordenadas no tienen pin, y la pantalla dice cuántos son y
+  que se cargan desde la ficha (10 de 71 al 2026-10-03).
+
+Detalles de Leaflet (import adentro del efecto, círculos con color de token,
+popup por `textContent`, efecto por firma del contenido): `leads.md`, cambios
+del 2026-10-03.
+
 ## Cómo verificar un cambio acá
 
 `& ".\node_modules\.bin\vite.CMD" build` (regenera `routeTree.gen.ts`, así que

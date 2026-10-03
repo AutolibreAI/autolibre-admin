@@ -1,6 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
-/* El mapa de candidatos de `/leads/pedidos/:id` (`CandidatesMap`). */
+/* Los mapas de partners (`PartnerMap`): la ficha de un pedido y `/partners/listado`. */
 @import 'leaflet/dist/leaflet.css';
 
 @custom-variant dark (&:is(.dark *));

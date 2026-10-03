@@ -596,6 +596,9 @@ interface PartnerRow {
   category_count: number
   categories: Array<{ slug: string; name: string; position: number }>
   invisible: boolean
+  tier: string
+  latitude: string | number | null
+  longitude: string | number | null
 }
 
 /**
@@ -652,6 +655,9 @@ export async function listPartners(
               p.name,
               p.status::text AS status,
               p.coverage_zone,
+              p.tier::text AS tier,
+              p.latitude,
+              p.longitude,
               count(DISTINCT ps.service_id)::int AS service_count,
               count(DISTINCT sc.id)::int AS category_count,
               coalesce(
@@ -667,7 +673,7 @@ export async function listPartners(
          LEFT JOIN services s ON s.id = ps.service_id AND s.active
          LEFT JOIN service_categories sc ON sc.id = s.category_id AND sc.active
         WHERE ($1::text IS NULL OR p.name ILIKE '%' || $1 || '%')
-        GROUP BY p.id, p.name, p.status, p.coverage_zone
+        GROUP BY p.id
      ) t
       WHERE (NOT $2::boolean OR t.invisible)
         AND (cardinality($3::text[]) = 0 OR t.status = any($3))
@@ -707,6 +713,10 @@ export async function listPartners(
       .sort((a, b) => a.position - b.position)
       .map(({ slug, name }) => ({ slug, name })),
     invisible: r.invisible,
+    tier: r.tier,
+    // El par va junto o no va: `set_partner_location` (007) rechaza uno incompleto.
+    location:
+      r.latitude === null || r.longitude === null ? null : { lat: Number(r.latitude), lng: Number(r.longitude) },
   }))
 }
 

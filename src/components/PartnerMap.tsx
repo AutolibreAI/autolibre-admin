@@ -3,55 +3,63 @@ import type { Map as LeafletMap } from 'leaflet'
 import { formatKm } from '~/lib/format'
 
 /**
- * El mapa de "Derivar a un taller": un pin del pedido y uno por candidato,
- * con los MISMOS filtros que la lista (rubros, zona, solo aliados) — recibe
- * los candidatos ya filtrados, no la lista entera.
+ * Mapa de partners. Lo usan dos pantallas, con la MISMA forma de pin:
+ *
+ *  - la ficha de un pedido (`<PartnerCandidates/>`): `center` es el pedido y
+ *    los pines son los candidatos visibles;
+ *  - `/partners/listado` (vista «Mapa»): sin `center`, todo el directorio con
+ *    los filtros de la tabla.
+ *
+ * Si un aliado se viera distinto en los dos mapas, uno estaría mal — por eso
+ * es un solo componente.
  *
  * ── Por qué así ─────────────────────────────────────────────────────────────
  *
  * - **Leaflet se importa adentro del efecto**, nunca arriba del módulo: toca
- *   `window` al cargarse, y la ficha es SSR completo. El mapa existe sólo en
- *   el navegador; en el servidor se pinta el recuadro vacío del mismo alto,
- *   así que no hay salto de layout ni mismatch de hidratación.
+ *   `window` al cargarse, y las dos pantallas son SSR. En el servidor se pinta
+ *   el recuadro vacío del mismo alto: sin salto de layout ni mismatch.
  * - **Círculos, no el marcador de imagen de Leaflet.** El pin por defecto es
- *   un PNG con sombra que el bundler no resuelve bien, y el design system no
- *   tiene sombras. Los colores salen de los tokens de `styles.css`
- *   (`getComputedStyle`), nunca de un hex escrito acá.
+ *   un PNG con sombra, y el design system no tiene sombras. Los colores salen
+ *   de los tokens de `styles.css` (`getComputedStyle`), nunca de un hex acá.
  * - **El texto del popup va por `textContent`.** El nombre de un partner es
  *   texto libre que vino de una planilla; armarlo como HTML sería inyectarlo.
- * - **Tiles de OpenStreetMap**, con su atribución (es condición de uso). Para
- *   el volumen de un panel interno está dentro de su política.
+ * - **Tiles de OpenStreetMap**, con su atribución (es condición de uso).
+ * - **El efecto depende del CONTENIDO, no de la identidad del array**: los
+ *   padres arman la lista en cada render, y rearmar el mapa por identidad lo
+ *   reconstruiría al tipear en cualquier otro campo.
  *
- * Un candidato sin coordenadas NO aparece en el mapa, y la pantalla dice
- * cuántos quedaron afuera — un mapa con menos pines que la lista, sin
- * explicación, se lee como un filtro que no se aplicó.
+ * Un partner sin coordenadas NO tiene pin; quien usa el mapa dice cuántos
+ * quedaron afuera — un mapa con menos pines que la lista, sin explicación, se
+ * lee como un filtro que no se aplicó.
  */
 
-export interface MapCandidate {
+export interface MapPartnerPin {
   id: string
   name: string
   coverageZone: string
   founding: boolean
-  distanceKm: number | null
+  /** Pausado / archivado: pin gris claro. */
+  inactive?: boolean
+  distanceKm?: number | null
   location: { lat: number; lng: number }
 }
 
-export function CandidatesMap({
-  pedido,
-  candidates,
+export function PartnerMap({
+  center,
+  pins,
+  centerLabel = 'El pedido',
 }: {
-  pedido: { lat: number; lng: number } | null
-  candidates: Array<MapCandidate>
+  center: { lat: number; lng: number } | null
+  pins: Array<MapPartnerPin>
+  centerLabel?: string
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<LeafletMap | null>(null)
   const [failed, setFailed] = useState(false)
-  // El padre arma `candidates` en cada render. Rearmar el mapa por identidad
-  // del array lo reconstruiría con cualquier cambio de estado ajeno (tipear
-  // una nota): el efecto depende del CONTENIDO y lee la lista por ref.
-  const latest = useRef({ pedido, candidates })
-  latest.current = { pedido, candidates }
-  const signature = JSON.stringify([pedido, candidates])
+  const latest = useRef({ center, pins })
+  latest.current = { center, pins }
+  const signature = JSON.stringify([center, pins])
+  const hasInactive = pins.some((p) => p.inactive)
 
   useEffect(() => {
     let cancelled = false
@@ -62,14 +70,15 @@ export function CandidatesMap({
     void import('leaflet')
       .then((mod) => {
         if (cancelled) return
-        const { pedido, candidates } = latest.current
+        const { center, pins } = latest.current
         const L = mod.default ?? mod
         const css = getComputedStyle(document.documentElement)
         const token = (name: string) => css.getPropertyValue(name).trim()
         const colors = {
-          pedido: token('--action-dark'),
+          center: token('--action-dark'),
           founding: token('--brand-500'),
           other: token('--gray-500'),
+          inactive: token('--gray-300'),
           surface: token('--surface'),
         }
 
@@ -82,32 +91,32 @@ export function CandidatesMap({
 
         const points: Array<[number, number]> = []
 
-        for (const c of candidates) {
-          const marker = L.circleMarker([c.location.lat, c.location.lng], {
+        for (const p of pins) {
+          L.circleMarker([p.location.lat, p.location.lng], {
             radius: 7,
             color: colors.surface,
             weight: 2,
-            fillColor: c.founding ? colors.founding : colors.other,
+            fillColor: p.inactive ? colors.inactive : p.founding ? colors.founding : colors.other,
             fillOpacity: 1,
           })
-          marker.bindPopup(() => popupContent(c), { closeButton: false })
-          marker.bindTooltip(c.name, { direction: 'top', offset: [0, -6] })
-          marker.addTo(map)
-          points.push([c.location.lat, c.location.lng])
+            .bindPopup(() => popupContent(p), { closeButton: false })
+            .bindTooltip(p.name, { direction: 'top', offset: [0, -6] })
+            .addTo(map)
+          points.push([p.location.lat, p.location.lng])
         }
 
-        // El pedido va último para quedar ARRIBA de un taller en la misma esquina.
-        if (pedido) {
-          L.circleMarker([pedido.lat, pedido.lng], {
+        // El centro va último para quedar ARRIBA de un taller en la misma esquina.
+        if (center) {
+          L.circleMarker([center.lat, center.lng], {
             radius: 10,
             color: colors.surface,
             weight: 3,
-            fillColor: colors.pedido,
+            fillColor: colors.center,
             fillOpacity: 1,
           })
-            .bindTooltip('El pedido', { direction: 'top', offset: [0, -8], permanent: false })
+            .bindTooltip(centerLabel, { direction: 'top', offset: [0, -8] })
             .addTo(map)
-          points.push([pedido.lat, pedido.lng])
+          points.push([center.lat, center.lng])
         }
 
         if (points.length === 0) {
@@ -133,27 +142,24 @@ export function CandidatesMap({
       mapRef.current?.remove()
       mapRef.current = null
     }
-    // Se rearma entero cuando cambia el conjunto: con decenas de pines es
-    // instantáneo, y evita sincronizar marcadores a mano.
-  }, [signature])
+  }, [signature, centerLabel])
 
   return (
     <div className="space-y-2">
       <div
         ref={containerRef}
-        className="relative z-0 h-[26rem] overflow-hidden rounded-md border border-border bg-surface-2"
+        className="relative z-0 h-[28rem] overflow-hidden rounded-md border border-border bg-surface-2"
         role="region"
-        aria-label="Mapa del pedido y los talleres candidatos"
+        aria-label="Mapa de partners"
       >
-        {failed ? (
-          <p className="p-4 text-sm text-muted-foreground">No se pudo cargar el mapa.</p>
-        ) : null}
+        {failed ? <p className="p-4 text-sm text-muted-foreground">No se pudo cargar el mapa.</p> : null}
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <Legend className="size-3 bg-action" label="El pedido" />
+        {center ? <Legend className="size-3 bg-action" label={centerLabel} /> : null}
         <Legend className="size-2.5 bg-brand" label="Aliado" />
         <Legend className="size-2.5 bg-muted-foreground" label="Otro partner" />
-        <span>Distancias en línea recta.</span>
+        {hasInactive ? <Legend className="size-2.5 bg-border" label="Pausado / archivado" /> : null}
+        {center ? <span>Distancias en línea recta.</span> : null}
       </div>
     </div>
   )
@@ -168,19 +174,25 @@ function Legend({ className, label }: { className: string; label: string }) {
   )
 }
 
-function popupContent(c: MapCandidate): HTMLElement {
+function popupContent(p: MapPartnerPin): HTMLElement {
   const root = document.createElement('div')
-  root.style.fontFamily = 'inherit'
   const name = document.createElement('div')
   name.style.fontWeight = '600'
-  name.textContent = c.founding ? `${c.name} · Aliado` : c.name
+  name.textContent = p.founding ? `${p.name} · Aliado` : p.name
   const zone = document.createElement('div')
-  zone.textContent = c.coverageZone
+  zone.textContent = p.inactive ? `${p.coverageZone} · pausado` : p.coverageZone
   root.append(name, zone)
-  if (c.distanceKm !== null) {
+  if (p.distanceKm !== undefined && p.distanceKm !== null) {
     const km = document.createElement('div')
-    km.textContent = `A ${formatKm(c.distanceKm)} del pedido`
+    km.textContent = `A ${formatKm(p.distanceKm)} del pedido`
     root.append(km)
   }
+  // Link a la ficha: el id es un uuid de la base, no texto libre.
+  const link = document.createElement('a')
+  link.href = `/partners/${encodeURIComponent(p.id)}`
+  link.textContent = 'Ver ficha'
+  link.style.display = 'inline-block'
+  link.style.marginTop = '4px'
+  root.append(link)
   return root
 }

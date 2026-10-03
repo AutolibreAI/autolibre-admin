@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { EyeOff, X } from 'lucide-react'
+import { EyeOff, List, Map as MapIcon, X } from 'lucide-react'
 import {
   PARTNER_STATUS_FILTER_VALUES,
   PARTNER_STATUS_FILTER_LABELS,
@@ -9,6 +9,7 @@ import { getServiceCatalog, listMarketplacePartners, listPartnerZonesFn } from '
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { SortHeader } from '~/components/SortHeader'
+import { PartnerMap, type MapPartnerPin } from '~/components/PartnerMap'
 import { Badge } from '~/components/ui/badge'
 import { SearchInput } from '~/components/SearchInput'
 import {
@@ -36,7 +37,9 @@ const TO = '/partners/listado'
  */
 export const Route = createFileRoute('/_authed/partners/listado')({
   validateSearch: partnerSearchSchema,
-  loaderDeps: ({ search }) => search,
+  // `partnerView` fuera de las deps: pasar de lista a mapa no vuelve a pedir
+  // nada, el mapa pinta las mismas filas.
+  loaderDeps: ({ search: { partnerView: _view, ...rest } }) => rest,
   loader: async ({ deps, abortController }) => {
     const signal = abortController.signal
     const [partners, catalog, zones] = await Promise.all([
@@ -61,6 +64,22 @@ function PartnersListado() {
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
   const invisibleCount = partners.filter((p) => p.invisible).length
+
+  const pins: Array<MapPartnerPin> = partners.flatMap((p) =>
+    p.location
+      ? [
+          {
+            id: p.id,
+            name: p.name,
+            coverageZone: p.coverageZone,
+            founding: p.tier === 'founding',
+            inactive: p.status !== 'active',
+            location: p.location,
+          },
+        ]
+      : [],
+  )
+  const offMap = partners.length - pins.length
 
   const allServices = catalog.flatMap((f) => f.services)
   const activeServices = search.partnerServices.map(
@@ -162,6 +181,14 @@ function PartnersListado() {
           ))}
         </FilterGroup>
 
+        <FilterGroup label="Vista">
+          <Chip active={search.partnerView === 'lista'} onClick={() => setSearch({ partnerView: 'lista' })}>
+            <List className="size-3.5" aria-hidden /> Lista
+          </Chip>
+          <Chip active={search.partnerView === 'mapa'} onClick={() => setSearch({ partnerView: 'mapa' })}>
+            <MapIcon className="size-3.5" aria-hidden /> Mapa
+          </Chip>
+        </FilterGroup>
         <FilterGroup label="Sin rubros">
           <Chip
             tone="warn"
@@ -227,6 +254,14 @@ function PartnersListado() {
           {search.onlyInvisible
             ? 'Ningún partner quedó sin rubros. Eso es lo esperable.'
             : 'No hay partners con ese filtro.'}
+        </div>
+      ) : search.partnerView === 'mapa' ? (
+        <div className="space-y-2">
+          <PartnerMap center={null} pins={pins} />
+          <p className="text-xs text-muted-foreground">
+            {formatInt(pins.length)} de {formatInt(partners.length)} partners en el mapa
+            {offMap > 0 ? ` — ${formatInt(offMap)} no tienen coordenadas cargadas y no aparecen (se cargan desde su ficha)` : ''}.
+          </p>
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">

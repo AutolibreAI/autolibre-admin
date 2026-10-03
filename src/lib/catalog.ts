@@ -39,6 +39,10 @@ export interface PartnerListItem {
   categories: Array<{ slug: string; name: string }>
   /** Sin un solo rubro: se lista sin filtro pero no sale bajo ningún chip. */
   invisible: boolean
+  /** `founding` = Aliado. Lo usa el mapa para el color del pin. */
+  tier: string
+  /** Para la vista de mapa. `null` = sin coordenadas cargadas. */
+  location: { lat: number; lng: number } | null
 }
 
 export interface PartnerServicesView {
@@ -189,6 +193,12 @@ export const partnerSearchSchema = z.object({
    * estado ambiguo.
    */
   partnerStatuses: multiSelectParam(z.enum(PARTNER_STATUS_FILTER_VALUES)),
+  /**
+   * Lista o mapa (desde el 2026-10-03). Calificado (`partnerView`, no `view`)
+   * por la regla de `notifications.md`. No cambia la consulta: el mapa pinta
+   * las mismas filas que la tabla, con los mismos filtros.
+   */
+  partnerView: z.enum(['lista', 'mapa']).catch('lista').default('lista'),
   /** Slugs de `service_categories`: filtra a los que cubren ≥1 servicio de alguno de esos rubros. */
   partnerCategories: multiSelectParam(z.string().trim().max(60)),
   /** Slugs de `services`: filtra a los que tienen alguno de esos servicios puntuales. */
