@@ -421,6 +421,8 @@ export async function pipelineHealth(
 export interface ApprovalResult {
   partnerId: string
   servicesLoaded: number
+  /** Si la solicitud traía coordenadas válidas y se le copiaron al partner. */
+  locationCopied: boolean
 }
 
 /**
@@ -489,7 +491,56 @@ export async function approveApplication(
       [partnerId],
     )
 
-    return { partnerId, servicesLoaded: loaded.rowCount ?? 0 }
+    /**
+     * Tercer paso: la ubicación que el taller eligió en el formulario.
+     *
+     * El backend guarda el body entero en `raw_submission` (`{ ...dto }`), y el
+     * DTO trae `latitude`/`longitude` de primer nivel: el geocode de Google
+     * Places de la dirección (AUT-81). Sin este paso el partner nace sin
+     * coordenadas y no sale en el mapa ni ordena por distancia.
+     *
+     * NO va adentro de `approve_partner_application()`: es del backend (la
+     * migra su Drizzle, no este repo) y tiene que quedar flaca. Leer un jsonb
+     * que no es contrato nuestro es decidir, y decidir es de acá.
+     *
+     * Sólo se copia si vienen LAS DOS como número y en rango. Una solicitud
+     * vieja (planilla, formulario previo a AUT-81) o con un par roto se
+     * aprueba igual, sin ubicación: no es motivo para frenar el alta, y la
+     * coordenada se carga después desde la ficha. Escribe por
+     * `ops.set_partner_location` (007) para que quede en `ops.action_log`
+     * con el reviewer como actor, igual que si la cargara a mano.
+     */
+    const location = await client.query<{ latitude: number; longitude: number }>(
+      `SELECT (a.raw_submission->>'latitude')::float8  AS latitude,
+              (a.raw_submission->>'longitude')::float8 AS longitude
+         FROM partner_applications a
+        WHERE a.id = $1
+          AND jsonb_typeof(a.raw_submission->'latitude')  = 'number'
+          AND jsonb_typeof(a.raw_submission->'longitude') = 'number'
+          AND (a.raw_submission->>'latitude')::float8  BETWEEN -90  AND 90
+          AND (a.raw_submission->>'longitude')::float8 BETWEEN -180 AND 180`,
+      [applicationId],
+    )
+
+    const coords = location.rows[0]
+    if (coords) {
+      await client.query(
+        `SELECT ops.set_partner_location(
+           p_partner_id => $1::uuid,
+           p_latitude   => $2::float8,
+           p_longitude  => $3::float8,
+           p_actor_id   => $4::uuid,
+           p_note       => 'Copiada de la solicitud al aprobar'
+         )`,
+        [partnerId, coords.latitude, coords.longitude, reviewerId],
+      )
+    }
+
+    return {
+      partnerId,
+      servicesLoaded: loaded.rowCount ?? 0,
+      locationCopied: coords !== undefined,
+    }
   })
 }
 

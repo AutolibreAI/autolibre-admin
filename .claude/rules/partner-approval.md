@@ -42,6 +42,20 @@ mano**: el archivo tuvo una y se sacó, justamente para que un rubro nuevo del c
 > Si en el panel volvés a escribir un mapa familia→rubro a mano, estás reintroduciendo la clase de
 > bug que ese JOIN vino a eliminar.
 
+### Tercer paso, desde el 2026-10-05: la ubicación de la solicitud
+
+El formulario de la landing geocodifica la dirección con Google Places (AUT-81) y el backend guarda
+el body entero en `raw_submission` (`{ ...dto }`), así que viajan `latitude`/`longitude` de primer
+nivel. `approveApplication` las copia al partner **en la misma transacción**, por
+`ops.set_partner_location` (007): queda en `ops.action_log` con el reviewer como actor.
+
+- **No va en `approve_partner_application()`**: es del backend y tiene que quedar flaca (abajo).
+- Sólo se copia con **las dos** como `jsonb_typeof = 'number'` y en rango. Una solicitud de la
+  planilla, previa a AUT-81 o con el par roto se aprueba igual, sin ubicación (`locationCopied:
+  false`): no frena el alta, y la coordenada se carga desde la ficha.
+- Necesita la 007 aplicada en esa base. Sin ella, aprobar una solicitud CON coordenadas falla entera
+  (la transacción hace rollback).
+
 ### Un partner entra con TODOS los rubros de las familias que declaró
 
 Decisión tomada. Si el taller marca "Motor", entra en los 10 rubros de motor.
