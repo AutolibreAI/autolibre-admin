@@ -17,7 +17,6 @@ import {
   Handshake,
   History,
   Inbox,
-  LayoutDashboard,
   LogOut,
   Megaphone,
   Menu,
@@ -96,14 +95,16 @@ interface NavItem {
  * panel, the API and the database.
  */
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { to: "/dashboard", label: "Inicio", icon: LayoutDashboard },
   /**
-   * `Métricas` va 2º, pegada a Inicio y fuera del bloque de dominio: las dos
-   * son la lectura transversal del panel. Inicio da el snapshot accionable;
-   * Métricas da el resto — las mismas 4 cards del pulso, qué % de los usuarios
-   * usa cada función de la app, y la curva de crecimiento período a período.
-   * Todo agregado a mano sobre `public`, mismo criterio que `Operación` (no
-   * espeja ningún bounded context del backend porque el backend no tiene uno).
+   * `Métricas` va 1ª y fuera del bloque de dominio: es la lectura transversal
+   * del panel — las 4 cards del pulso, qué % de los usuarios usa cada función
+   * de la app, y la curva de crecimiento período a período. Todo agregado a
+   * mano sobre `public`, mismo criterio que `Operación` (no espeja ningún
+   * bounded context del backend porque el backend no tiene uno).
+   *
+   * Hasta el 2026-10-06 la primera era Inicio (`/dashboard`): una versión
+   * reducida de esta misma pantalla. Se sacó a pedido; `/dashboard` quedó
+   * como redirect acá.
    */
   { to: "/metricas", label: "Métricas", icon: BarChart3 },
   /**
@@ -112,9 +113,9 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * `UNION ALL` de las dieciséis tablas que sólo se escriben cuando una persona
    * toca la app, ordenado por cuándo pasó.
    *
-   * Los tres primeros ítems son las tres preguntas transversales y en este
-   * orden: Inicio "¿qué hay que arreglar?", Métricas "¿cómo venimos?",
-   * Actividad "¿qué está pasando ahora?". Todo lo que sigue es dominio.
+   * Los dos primeros ítems son las dos preguntas transversales y en este
+   * orden: Métricas "¿cómo venimos?", Actividad "¿qué está pasando ahora?".
+   * Todo lo que sigue es dominio.
    *
    * Cada fila lleva a la pantalla dueña de esa entidad (un chat abre `/chats`,
    * un escaneo abre la sesión); sólo lo que todavía no tiene dueño cae en una
@@ -258,7 +259,6 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
           key={to}
           to={to}
           onClick={onNavigate}
-          activeOptions={{ exact: to === "/dashboard" }}
           activeProps={{
             className:
               "bg-sidebar-accent text-sidebar-accent-foreground font-medium",

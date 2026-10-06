@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { readQuoteGeocode } from './quote-geocode.repo'
 import { quoteResponsesAvailable } from './quote-responses.repo'
 import { mapTaskRow, type TaskRow } from './users.repo'
 import { lookupDtc } from './dtc-catalog'
@@ -915,8 +916,16 @@ export async function findQuoteRequestDetail(
       )?.vehicle_text ?? null)
     : null
 
+  const geocodedLocation = await readQuoteGeocode(id, {
+    source: r.location_source,
+    address: r.location_address,
+    locality: r.location_locality,
+    province: r.location_province,
+  })
+
   return {
     ...mapListRow(r),
+    geocodedLocation,
     updatedAt: toIso(r.updated_at) ?? '',
     vehicleOwnerId: r.vehicle_owner_id,
     vehicleOwnerEmail: r.vehicle_owner_email,

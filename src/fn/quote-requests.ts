@@ -28,9 +28,11 @@ import {
   setQuoteRequestRubros,
   updateQuoteRequest,
 } from '~/server/quote-requests.repo'
+import { refreshQuoteRequestGeocode } from '~/server/quote-geocode.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type {
+  QuoteGeocodeOutcome,
   QuoteRequestDetailResult,
   QuoteRequestSeries,
   QuoteRequestWriteResult,
@@ -191,7 +193,9 @@ export const createQuoteRequestFn = createServerFn({ method: 'POST' })
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
     await assertQuoteEditAvailable(signal)
-    return createQuoteRequest(data, context.user.id, { signal })
+    const created = await createQuoteRequest(data, context.user.id, { signal })
+    await geocodeQuietly(created.id, context.user.id)
+    return created
   })
 
 /**
@@ -206,5 +210,35 @@ export const updateQuoteRequestFn = createServerFn({ method: 'POST' })
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
     await assertQuoteEditAvailable(signal)
-    return updateQuoteRequest(data, context.user.id, { signal })
+    const result = await updateQuoteRequest(data, context.user.id, { signal })
+    await geocodeQuietly(data.quoteRequestId, context.user.id)
+    return result
   })
+
+/**
+ * El pin de un pedido con dirección tipeada (021). Después de crear o editar
+ * se geocodifica solo; esto es el botón «Ubicar en el mapa» de la ficha, para
+ * los pedidos que se cargaron antes de la 021 o cuando el geocoder no
+ * respondió. `force` rehace el geocode aunque la dirección no haya cambiado.
+ */
+export const geocodeQuoteRequestFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(quoteRequestIdSchema)
+  .handler(async ({ data, context }): Promise<{ outcome: QuoteGeocodeOutcome }> => {
+    const signal = requestSignal()
+    await assertQuoteRequestsAvailable(signal)
+    return { outcome: await refreshQuoteRequestGeocode(data.quoteRequestId, context.user.id, { force: true }) }
+  })
+
+/**
+ * Geocodificar después de guardar es un extra: el pedido ya quedó escrito. Un
+ * geocoder caído o un SP que falla no puede convertir un guardado exitoso en
+ * un error — el pedido queda sin pin y la ficha ofrece reintentar.
+ */
+async function geocodeQuietly(quoteRequestId: string, actorId: string): Promise<void> {
+  try {
+    await refreshQuoteRequestGeocode(quoteRequestId, actorId)
+  } catch {
+    // sin pin; «Ubicar en el mapa» en la ficha
+  }
+}

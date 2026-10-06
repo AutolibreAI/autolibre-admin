@@ -3,22 +3,27 @@ import { Car, ClipboardList, Store, Users, type LucideIcon } from 'lucide-react'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { OpsPulse } from '~/lib/ops'
+import type { ChannelPeople } from '~/lib/channels'
 
 /**
  * Las cuatro tarjetas del pulso del negocio: usuarios reales, vehículos activos,
  * partners publicados, pedidos totales.
  *
- * Vivían inline en `dashboard.tsx`. Cuando `/metricas` necesitó las mismas
- * cuatro, la tentación fue copiarlas — y una tarjeta copiada no se ve mal el día
- * uno, se ve mal el día que una de las dos cambia y nadie nota que la otra quedó
- * atrás. Mismo criterio que `Filters.tsx` y `VehicleCells.tsx`: una sola
- * definición, acá.
+ * Vivían inline en `dashboard.tsx` (Inicio, que se sacó el 2026-10-06). Hoy
+ * sólo las usa `/metricas`, pero siguen acá: es el componente, no la página.
  *
  * La cuarta card era "Leads ganados" (el embudo de talleres, `pulse.leads`) y
  * pasó a ser "Pedidos totales" (`pulse.quotes`) el 2026-09-17: `leads` tiene 0
  * filas en producción, y `quote_requests` es la línea de captación que de
- * verdad se usa. `pulse.leads` no se sacó del contrato — `MarketplaceBreakdown`
- * de `/dashboard` lo sigue usando aparte de esta fila.
+ * verdad se usa. `pulse.leads` no se sacó del contrato (lo sigue leyendo
+ * `GET /api/metricas`).
+ *
+ * La card de Usuarios suma, desde el 2026-10-06, a las personas que llegaron
+ * por WhatsApp o web sin cuenta (`ChannelPeople`): el número grande es el
+ * TOTAL de personas únicas y el desglose por canal va siempre al lado — app,
+ * WhatsApp y web no valen lo mismo y nunca se muestran sumados sin decirlo
+ * (`~/lib/channels`). Sin `channels`, o sin `quote_requests` en la base, es
+ * "Usuarios reales" de la app como antes.
  */
 
 interface PulseTile {
@@ -27,15 +32,16 @@ interface PulseTile {
   /** Ausente cuando el número no tiene una pantalla detrás. Ver `tiles`. */
   to?: string
   value: string
-  /** Un segundo número, más chico, debajo del principal. Hoy sólo lo usa Vehículos. */
+  /** Un segundo número, más chico, debajo del principal (Vehículos y Usuarios). */
   secondary?: string
   label: string
   hint: string
   alert: boolean
 }
 
-export function PulseRow({ pulse }: { pulse: OpsPulse }) {
+export function PulseRow({ pulse, channels }: { pulse: OpsPulse; channels?: ChannelPeople }) {
   const { adoption, marketplace, quotes } = pulse
+  const withChannels = channels?.available ? channels : null
 
   /**
    * `to` sigue siendo opcional en `PulseTile` —una tarjeta sin pantalla detrás
@@ -48,8 +54,17 @@ export function PulseRow({ pulse }: { pulse: OpsPulse }) {
       key: 'users',
       icon: Users,
       to: '/usuarios',
-      value: formatInt(adoption.usersTotal),
-      label: 'Usuarios reales',
+      value: formatInt(
+        withChannels
+          ? withChannels.appUsers + withChannels.whatsappOnly + withChannels.webOnly
+          : adoption.usersTotal,
+      ),
+      // Cada persona UNA vez: quien escribió por WhatsApp y después se dio de
+      // alta cuenta en "app", no en los dos lados.
+      secondary: withChannels
+        ? `${formatInt(withChannels.appUsers)} app · ${formatInt(withChannels.whatsappOnly)} WhatsApp · ${formatInt(withChannels.webOnly)} web`
+        : undefined,
+      label: withChannels ? 'Usuarios (todos los canales)' : 'Usuarios reales',
       // Las cuentas internas se muestran, no se restan en silencio: la
       // diferencia entre "3 usuarios" y "3 + 2.986 internas" es la diferencia
       // entre un producto que arranca y uno que parece tener tracción.

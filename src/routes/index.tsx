@@ -8,7 +8,7 @@ export const Route = createFileRoute('/')({
    * from `defaultSsr: true` in src/start.ts.
    */
   beforeLoad: ({ context }) => {
-    if (context.user) throw redirect({ to: '/dashboard' })
+    if (context.user) throw redirect({ to: '/metricas' })
   },
 
   head: () => ({ meta: [{ title: 'AutoLibre — Panel' }] }),

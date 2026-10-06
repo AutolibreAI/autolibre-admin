@@ -186,7 +186,7 @@ function MetricasPage() {
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
-      <PulseRow pulse={pulse} />
+      <PulseRow pulse={pulse} channels={channels} />
 
       <VehicleLocationSection data={locations} />
 

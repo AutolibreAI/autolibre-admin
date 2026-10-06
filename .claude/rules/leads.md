@@ -1375,3 +1375,46 @@ sólo archivos atados a ESE pedido, y responden en STREAMING: Vercel no aplica e
 tope de 4.5MB a una respuesta streameada. El zip es `~/server/zip.ts`, modo
 STORE sin dependencia (un JPEG no se comprime más), validado con `zipfile` de
 Python (`tmp/probe-zip.mjs`). Nombre: `AL-1068-<nombre original>`.
+
+### El pin de un pedido con dirección tipeada (021) — desde el 2026-10-06
+
+Síntoma: un pedido cargado a mano, o al que el operador le escribió la dirección, no tenía pin en el
+mapa de candidatos ni distancia a ningún taller. No era un bug de pintado: `location_source = 'typed'`
+no trae coordenadas, y `chk_quote_requests_location_coordinates_only_device` (del backend) PROHÍBE
+guardarlas en `quote_requests`.
+
+- El panel geocodifica la dirección tipeada (`src/server/geocode.ts`: Google si hay
+  `GOOGLE_GEOCODING_API_KEY`, si no Nominatim con su `User-Agent`) y la guarda en
+  `ops.quote_request_geocode` por `ops.set_quote_request_geocode` (021). Es una APROXIMACIÓN nuestra,
+  no el GPS de la persona: por eso no va en `locationLatitude` sino en `geocodedLocation`.
+- `quoteMapLocation(detail)` (`~/lib/quote-requests`) es el ÚNICO punto del pedido: GPS si lo hay, si
+  no el geocodificado. Lo usan el loader (candidatos por distancia) y el mapa — si divergieran, la
+  lista diría una distancia y el mapa mostraría otra.
+- Se geocodifica solo después de «Cargar pedido» y de «Editar datos» (`geocodeQuietly`: un geocoder
+  caído no convierte un guardado en error). Para los pedidos viejos o si falló, la ficha ofrece
+  «Ubicar en el mapa» (`geocodeQuoteRequestFn`, fuerza el geocode).
+- **Vigencia por `query`**: la fila guarda el texto que se geocodificó. Si la dirección cambió y no se
+  rehízo, al leer no coincide y se ignora — mejor sin pin que con un pin en otro lado.
+- `precise = false` (Nominatim matcheó la calle o la localidad, no la puerta — pasa casi siempre con
+  altura en Argentina): se usa igual para ordenar, y el mapa y el texto dicen "aproximada".
+- Nada de esto viaja a un taller: es el punto del pedido para el operador.
+
+### Presupuestos por ítems, con opcionales (022) — desde el 2026-10-06
+
+`ops.quote_request_response.items` (jsonb `[{label, amount, optional}]`). Con ítems, el SP DERIVA el
+precio: `amount_min = amount_max = suma de los NO opcionales`; los opcionales no suman y se listan
+aparte. Sólo opcionales = sin precio base. La suma en vivo del formulario (`quoteItemsTotals`) es una
+vista previa: el número que queda guardado lo calcula el SP con la misma regla, así que no pueden
+contradecirse.
+
+- Formulario: «Detalle por ítems» con botones «+ Ítem» / «+ Opcional», una fila por ítem (qué es,
+  precio, casilla "opcional") y el total + "con todos los opcionales". Con algún ítem, «Precio
+  desde/hasta» desaparecen y se muestra el total calculado.
+- Fila de la lista y mensaje de WhatsApp: los obligatorios debajo del 💵 total, los opcionales en un
+  bloque «➕ Opcionales:» con su precio. Un presupuesto sin ítems sale igual que antes.
+- Sin la 022 aplicada, `itemsAvailable` es `false`: el editor de ítems no aparece, el SELECT no nombra
+  la columna y `p_items` no viaja (la firma de la 015 no lo conoce). Mandar ítems igual es
+  `QUOTE_RESPONSE_ITEMS_UNAVAILABLE`, nunca un descarte silencioso del desglose.
+- Un monto guardado vuelve al input con coma decimal (`amountToInput`): `parseAmount` lee el punto
+  como separador de miles, y `String(60000.5)` se habría leído como 600005.
+

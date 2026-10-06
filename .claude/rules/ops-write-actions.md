@@ -1291,3 +1291,43 @@ el backend (`POST /files/confirm`), porque ningún SQL sube a un bucket.
 **⚠ Al 2026-10-03 la suite (17 casos) está escrita y NO corrida, y la 020 no
 está aplicada en ninguna base**: el `.env` de esta máquina apunta a producción.
 La aplica el `vercel-build` del próximo deploy de `main`.
+
+---
+
+# Migración 021 — la coordenada geocodificada de un pedido
+
+Alcance: `migrations/021_ops_ubicacion_geocodificada.sql` y su `.test.sql`,
+`src/server/geocode.ts`, `src/server/quote-geocode.repo.ts`, `geocodeQuoteRequestFn` y
+`geocodeQuietly` de `src/fn/quote-requests.ts`. La UI está en `leads.md`.
+
+Tabla nuestra (`ops.quote_request_geocode`) porque el backend prohíbe coordenadas en un pedido
+`typed` (CHECK). No es una escritura sobre `public`: no hace falta el `grep`, y no se toca el
+contrato ajeno. Los 8 guardrails, con la salvedad del 5 que ya tiene la 011: **el log no lleva las
+coordenadas** (`query`, `precise`, `provider` sí) — la ubicación de la persona es deuda bloqueante
+de Ley 25.326 y un log que crece solo es un lugar más que limpiar ante una supresión. Coordenadas
+NULL borran la fila; el mismo `query` y el mismo punto no loguean. El geocoder corre en el panel,
+nunca en SQL.
+
+# Migración 022 — presupuestos por ítems
+
+Alcance: `migrations/022_ops_items_de_presupuesto.sql` y su `.test.sql`,
+`quoteResponseItemsAvailable` / `itemsParam` de `src/server/quote-responses.repo.ts`.
+
+Columna `items jsonb` en la tabla de la 015, `ops._normalize_quote_response_items` (sentinelas
+`INVALID_ITEMS`, `ITEM_LABEL_REQUIRED`, `ITEM_LABEL_TOO_LONG`, `INVALID_ITEM_AMOUNT`,
+`TOO_MANY_ITEMS`) y `ops._quote_response_items_total`. Alta y edición son **DROP + CREATE** con las
+firmas exactas de la 015 (la trampa de la 009) y `p_items` al FINAL con default NULL, así las llamadas
+que no lo mandan siguen resolviendo. Con ítems el SP ignora `p_amount_*` y deriva el precio. jsonb y
+no una tabla de ítems: un ítem no tiene vida propia y viaja con el reemplazo completo de la fila, así
+el `before`/`after` del log trae el desglose entero.
+
+## Cómo se probaron la 021 y la 022
+
+**En una réplica PGlite, NO en DEV** (el `.env` de esta máquina apunta a producción). Enums, `users`,
+`partners`, `files` y `quote_requests` con columnas y CHECK copiados de producción el 2026-10-06, más
+las migraciones 007/011/012/015/018/019 de este repo. Rojo sin la migración (las dos abortan), 19/19
+cada una con ella. Dos casos de la 021 fallaron la primera vez por la suite, no por la función:
+adentro de una transacción `now()` es constante, así que el log no se puede ordenar por
+`created_at` — se busca por contenido. **Regla para las próximas suites: nunca `ORDER BY
+created_at` sobre `ops.action_log` adentro del `BEGIN … ROLLBACK`.**
+

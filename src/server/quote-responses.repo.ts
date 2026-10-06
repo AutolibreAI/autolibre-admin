@@ -1,10 +1,12 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { QUOTE_RESPONSE_ITEMS_UNAVAILABLE } from '~/lib/quote-responses'
 import type {
   AddQuoteResponseInput,
   DeleteQuoteResponseInput,
   QuoteResponse,
+  QuoteResponseItem,
   ReorderQuoteResponsesInput,
   UpdateQuoteResponseInput,
 } from '~/lib/quote-responses'
@@ -69,6 +71,35 @@ export async function quoteResponsesAvailable(opts: { signal?: AbortSignal } = {
   return row?.ok === true
 }
 
+/**
+ * ¿Está aplicada la 022 (`items`)? Es una COLUMNA nueva sobre una tabla que ya
+ * existía, así que `to_regclass` no alcanza: se mira `information_schema`.
+ * Sin ella, el SELECT no puede nombrar `r.items` (explota al planificarse) y
+ * los SP no tienen `p_items`.
+ */
+export async function quoteResponseItemsAvailable(): Promise<boolean> {
+  const row = await sqlOne<{ ok: boolean }>(
+    `select exists (
+       select 1 from information_schema.columns
+        where table_schema = 'ops' and table_name = 'quote_request_response' and column_name = 'items'
+     ) as ok`,
+  )
+  return row?.ok === true
+}
+
+/** `jsonb` llega parseado de `pg`; un `to_jsonb` anidado, también. Defensivo con cualquier otra forma. */
+function toItems(v: unknown): Array<QuoteResponseItem> {
+  const raw: unknown = typeof v === 'string' ? JSON.parse(v) : v
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((it: unknown) => {
+    if (typeof it !== 'object' || it === null) return []
+    const o = it as Record<string, unknown>
+    const amount = Number(o.amount)
+    if (typeof o.label !== 'string' || !Number.isFinite(amount)) return []
+    return [{ label: o.label, amount, optional: o.optional === true }]
+  })
+}
+
 // ── Lectura ────────────────────────────────────────────────────────────────
 
 interface ResponseRow {
@@ -89,6 +120,7 @@ interface ResponseRow {
   amount_max: string | null
   currency: string
   detail: string
+  items: unknown
   valid_until: Date | string | null
   internal_notes: string | null
   created_at: Date | string
@@ -116,7 +148,8 @@ interface ResponseRow {
  * booleano distinto del que mandó el servidor, o sea un mismatch de
  * hidratación por fila. Mismo patrón que `age_minutes` en `/actividad`.
  */
-const SELECT_COLUMNS = `
+const selectColumns = (itemsAvailable: boolean): string => `
+  ${itemsAvailable ? 'r.items' : 'null::jsonb as items'},
   r.id,
   r.quote_request_id,
   r.position,
@@ -161,6 +194,7 @@ function mapRow(r: ResponseRow): QuoteResponse {
     amountMax: toNum(r.amount_max),
     currency: r.currency,
     detail: r.detail,
+    items: toItems(r.items),
     validUntil: toPlainDay(r.valid_until),
     createdAt: toIso(r.created_at) ?? '',
     internalNotes: r.internal_notes,
@@ -185,8 +219,9 @@ export async function listQuoteResponses(
 ): Promise<Array<QuoteResponse>> {
   void opts.signal
 
+  const itemsAvailable = await quoteResponseItemsAvailable()
   const rows = await sql<ResponseRow>(
-    `select ${SELECT_COLUMNS}
+    `select ${selectColumns(itemsAvailable)}
        from ops.quote_request_response r
        left join partners p on p.id = r.partner_id
       where r.quote_request_id = $1
@@ -237,6 +272,7 @@ export async function addQuoteResponse(
 ): Promise<QuoteResponse> {
   void opts.signal
 
+  const items = await itemsParam(input.items)
   const row = await sqlOne<SpRow>(
     `SELECT ops.add_quote_request_response(
        p_quote_request_id => $1,
@@ -251,7 +287,7 @@ export async function addQuoteResponse(
        p_currency         => $10,
        p_valid_until      => $11,
        p_internal_notes   => $12,
-       p_note             => $13
+       p_note             => $13${items.sql}
      ) AS r`,
     [
       input.quoteRequestId,
@@ -267,9 +303,31 @@ export async function addQuoteResponse(
       blankToNull(input.validUntil),
       blankToNull(input.internalNotes),
       blankToNull(input.auditNote),
+      ...items.params,
     ],
   )
   return fromSp(row)
+}
+
+/**
+ * `p_items` sólo viaja si la 022 está aplicada: sin ella la firma de la 015 no
+ * lo conoce y la llamada nombrada fallaría. Con la 022, viaja SIEMPRE (NULL =
+ * sin desglose): la edición es reemplazo completo, y omitirlo borraría igual.
+ * Mandar ítems a una base sin la 022 es un error explícito, no un descarte
+ * silencioso del desglose.
+ */
+async function itemsParam(
+  items: ReadonlyArray<QuoteResponseItem> | undefined,
+): Promise<{ sql: string; params: Array<string | null> }> {
+  const hasItems = items !== undefined && items.length > 0
+  if (!(await quoteResponseItemsAvailable())) {
+    if (hasItems) throw new Error(QUOTE_RESPONSE_ITEMS_UNAVAILABLE)
+    return { sql: '', params: [] }
+  }
+  return {
+    sql: ',\n       p_items            => $14::jsonb',
+    params: [hasItems ? JSON.stringify(items) : null],
+  }
 }
 
 /**
@@ -285,6 +343,7 @@ export async function updateQuoteResponse(
 ): Promise<QuoteResponse> {
   void opts.signal
 
+  const items = await itemsParam(input.items)
   const row = await sqlOne<SpRow>(
     `SELECT ops.update_quote_request_response(
        p_id               => $1,
@@ -299,7 +358,7 @@ export async function updateQuoteResponse(
        p_currency         => $10,
        p_valid_until      => $11,
        p_internal_notes   => $12,
-       p_note             => $13
+       p_note             => $13${items.sql}
      ) AS r`,
     [
       input.id,
@@ -315,6 +374,7 @@ export async function updateQuoteResponse(
       blankToNull(input.validUntil),
       blankToNull(input.internalNotes),
       blankToNull(input.auditNote),
+      ...items.params,
     ],
   )
   return fromSp(row)

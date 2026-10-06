@@ -263,3 +263,24 @@ saber desde acá:
   quedan como chips "sin reconocer", removibles pero preservadas. Es el mismo
   caso que `Suggestions` resuelve del otro lado (en la ficha del partner ya
   publicado).
+
+## «Aprobar» guarda lo tipeado — desde el 2026-10-06
+
+Síntoma que lo motivó: "edito la solicitud y no se guarda; tengo que aprobar y corregir en la ficha
+del partner". Relevado en producción: ninguna de las últimas 8 solicitudes tenía una edición guardada
+antes de aprobarse. El operador corregía el formulario y apretaba «Aprobar» (otro panel, otro
+formulario) sin «Guardar solicitud», y `approve_partner_application()` copiaba lo que estaba en la
+BASE: lo tipeado se perdía sin aviso.
+
+- `ApplicationEditor` le pasa a la página lo que hay en pantalla y si difiere de lo guardado
+  (`onDraftChange` → `ApplicationDraft`). Con cambios, «Aprobar» manda `edits` y
+  `approveApplication` corre `ops.update_partner_application` (010) **antes** de la función de
+  aprobación, en la MISMA transacción: o pasan las dos o ninguna, y la edición queda en
+  `ops.action_log` con nota "Guardado al aprobar".
+- Con cambios, la cuenta de rubros y el aviso de "quedaría invisible" salen de lo TILDADO, no de
+  `resolved` (que es lo guardado). Las etiquetas "sin reconocer" no cuentan, igual que en el INSERT.
+- El editor dice "Cambios sin guardar" y, en una solicitud YA publicada, avisa arriba que lo que se
+  cambie ahí queda en la solicitud y NO en el partner, con link a la ficha. Propagar ediciones de la
+  solicitud a un partner ya publicado no se hace: el partner pudo haberse corregido aparte, y pisarlo
+  sería decidir cuál de las dos versiones gana.
+

@@ -460,3 +460,16 @@ desglose al lado. El gráfico de usuarios pasó a llamarse "Usuarios de la app".
   sin cuenta + convertidos (11 = 11 al 2026-10-03).
 
 `tmp/probe-canales.mjs` carga los módulos reales y verifica los tres cuadres.
+
+## Inicio se sacó, y la card de Usuarios suma canales — desde el 2026-10-06
+
+`/dashboard` (Inicio) era una versión reducida de esta pantalla y se sacó a pedido; quedó como
+redirect acá. `PulseRow` sigue en `~/components/PulseCards` y hoy sólo lo usa `/metricas`.
+
+La card de Usuarios recibe `channels` (`ChannelPeople`, la misma consulta que la tabla «Personas por
+canal» de abajo): el número grande es el TOTAL de personas únicas (`appUsers + whatsappOnly +
+webOnly`) y el desglose va SIEMPRE debajo ("N app · N WhatsApp · N web") — app, WhatsApp y web no
+valen lo mismo y nunca se suman sin decirlo (`~/lib/channels`). Sin `quote_requests` en la base cae a
+"Usuarios reales" de la app como antes. Cuadre: el número grande = "Personas únicas" de la tabla de
+canales; el "N app" = "Usuarios reales".
+

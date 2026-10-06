@@ -794,6 +794,52 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * botón. Mismo patrón que `quoteResponsesAvailable()` de la 015.
    */
   editAvailable: boolean
+  /**
+   * La coordenada APROXIMADA de un pedido con ubicación tipeada: el panel
+   * geocodificó la dirección y la guardó en `ops.quote_request_geocode`
+   * (migración 021). `null` con GPS (`device`), sin dirección, sin resultado,
+   * sin la 021, o si la dirección cambió después del último geocode. NO es el
+   * GPS de la persona — por eso no va en `locationLatitude`.
+   */
+  geocodedLocation: QuoteGeocodedLocation | null
+}
+
+/** Punto geocodificado de una dirección tipeada. `precise` = calle y altura; si no, centroide. */
+export interface QuoteGeocodedLocation {
+  lat: number
+  lng: number
+  precise: boolean
+}
+
+/** Qué pasó al geocodificar la dirección de un pedido (021). */
+export type QuoteGeocodeOutcome =
+  | 'located'
+  | 'approximate'
+  | 'unchanged'
+  | 'no_result'
+  | 'no_address'
+  | 'device'
+  | 'unavailable'
+
+/**
+ * El punto del pedido para el mapa y la distancia a cada taller: el GPS si lo
+ * hay, si no la dirección tipeada geocodificada. Una sola definición: el
+ * loader (candidatos por distancia) y el mapa tienen que usar el MISMO punto.
+ */
+export function quoteMapLocation(
+  detail: Pick<QuoteRequestDetail, 'locationLatitude' | 'locationLongitude' | 'geocodedLocation'>,
+): { lat: number; lng: number; approximate: boolean } | null {
+  if (detail.locationLatitude !== null && detail.locationLongitude !== null) {
+    return { lat: detail.locationLatitude, lng: detail.locationLongitude, approximate: false }
+  }
+  if (detail.geocodedLocation) {
+    return {
+      lat: detail.geocodedLocation.lat,
+      lng: detail.geocodedLocation.lng,
+      approximate: !detail.geocodedLocation.precise,
+    }
+  }
+  return null
 }
 
 export type QuoteRequestsListResult =

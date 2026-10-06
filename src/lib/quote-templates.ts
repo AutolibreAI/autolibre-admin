@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
-import { formatQuoteAmount, type QuoteResponse } from '~/lib/quote-responses'
+import { formatAmount, formatQuoteAmount, type QuoteResponse } from '~/lib/quote-responses'
 import { formatDate } from '~/lib/format'
 
 /**
@@ -447,6 +447,11 @@ export function splitQuoteResponsesForMessage(responses: ReadonlyArray<QuoteResp
  * ("lo atendió Juan", "me debe una") y esto es texto que lee la persona. Mismo
  * criterio que `closed_reason` en el recorrido del pedido.
  */
+/** Un ítem en 0 es "sin cargo", igual que el total (`formatQuoteAmount`). */
+function formatItemAmount(amount: number, currency: string): string {
+  return amount === 0 ? 'sin cargo' : formatAmount(amount, currency)
+}
+
 function responsesBlock(responses: ReadonlyArray<QuoteResponse>): string {
   const { included } = splitQuoteResponsesForMessage(responses)
   if (included.length === 0) return '[todavía no hay presupuestos cargados en el pedido]'
@@ -459,6 +464,16 @@ function responsesBlock(responses: ReadonlyArray<QuoteResponse>): string {
       if (r.hours) lines.push(`🕘 ${r.hours}`)
       const amount = formatQuoteAmount(r)
       if (amount) lines.push(`💵 ${amount}`)
+      // El desglose (022): los obligatorios debajo del total que suman; los
+      // opcionales aparte, con su precio, para que la persona elija. Un
+      // presupuesto sin ítems sale igual que antes.
+      const required = r.items.filter((it) => !it.optional)
+      const optional = r.items.filter((it) => it.optional)
+      for (const it of required) lines.push(`   • ${it.label}: ${formatItemAmount(it.amount, r.currency)}`)
+      if (optional.length > 0) {
+        lines.push('➕ Opcionales:')
+        for (const it of optional) lines.push(`   • ${it.label}: ${formatItemAmount(it.amount, r.currency)}`)
+      }
       // `formatDate` y no el `YYYY-MM-DD` crudo: es un mensaje para una
       // persona, no una celda de tabla. Es el MISMO formateador que el resto
       // del panel (locale y zona pineados), así que la fecha se lee igual en

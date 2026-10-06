@@ -52,6 +52,46 @@ export function quoteCurrencyLabel(raw: string): string {
 /** `numeric(12,2)`: lo máximo que entra sin un `numeric field overflow`. */
 export const MAX_QUOTE_AMOUNT = 9_999_999_999
 
+// ── Ítems (migración 022) ──────────────────────────────────────────────────
+
+/**
+ * Un renglón del desglose. Con ítems, el precio del presupuesto lo DERIVA el
+ * SP: `amount_min = amount_max = suma de los NO opcionales`. Los opcionales
+ * no suman: se listan aparte, con su precio, para que la persona elija.
+ */
+export interface QuoteResponseItem {
+  label: string
+  amount: number
+  optional: boolean
+}
+
+export const MAX_QUOTE_ITEMS = 50
+
+export const quoteResponseItemSchema = z.object({
+  label: z.string().trim().min(1, 'Falta qué es el ítem.').max(200),
+  amount: z.number().min(0).max(MAX_QUOTE_AMOUNT),
+  optional: z.boolean(),
+})
+
+/**
+ * Lo que suma el desglose. `base` es `null` sin ningún ítem obligatorio — el
+ * mismo criterio que `ops._quote_response_items_total` (022): sin obligatorios
+ * no hay precio base, sólo extras. La UI usa esto para el total en vivo; el
+ * número que se GUARDA lo calcula el SP, así que no pueden contradecirse.
+ */
+export function quoteItemsTotals(items: ReadonlyArray<Pick<QuoteResponseItem, 'amount' | 'optional'>>): {
+  base: number | null
+  optional: number
+  withOptional: number
+} {
+  const required = items.filter((i) => !i.optional)
+  const base = required.length === 0 ? null : roundCents(required.reduce((acc, i) => acc + i.amount, 0))
+  const optional = roundCents(items.filter((i) => i.optional).reduce((acc, i) => acc + i.amount, 0))
+  return { base, optional, withOptional: roundCents((base ?? 0) + optional) }
+}
+
+const roundCents = (n: number): number => Math.round(n * 100) / 100
+
 // ── Tipo de salida ──────────────────────────────────────────────────────────
 
 export interface QuoteResponse {
@@ -90,6 +130,13 @@ export interface QuoteResponse {
   amountMax: number | null
   currency: string
 
+  /**
+   * El desglose (022). `[]` = no está detallado y el precio es el de
+   * `amountMin`/`amountMax` tal cual se cargó. Con ítems, esas dos columnas
+   * son la suma de los obligatorios.
+   */
+  items: Array<QuoteResponseItem>
+
   /** Lo que le contamos a la persona sobre este taller. Es el párrafo. */
   detail: string
   /** `YYYY-MM-DD`, o `null` si no declaró vigencia. */
@@ -113,7 +160,12 @@ export interface QuoteResponse {
  */
 export type QuoteResponsesResult =
   | { available: false }
-  | { available: true; rows: Array<QuoteResponse> }
+  | {
+      available: true
+      rows: Array<QuoteResponse>
+      /** `false` = falta la 022: se puede cargar presupuestos, pero no detallarlos por ítems. */
+      itemsAvailable: boolean
+    }
 
 // ── Escrituras: los SP de `ops` de la migración 015 ─────────────────────────
 //
@@ -145,6 +197,11 @@ const responseFields = z
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'Usá el formato AAAA-MM-DD.')
       .optional(),
     internalNotes: z.string().trim().max(2000).optional(),
+    /**
+     * El desglose (022). Ausente o `[]` = sin desglose. Con ítems, el precio lo
+     * deriva el SP y `amountMin`/`amountMax` se ignoran.
+     */
+    items: z.array(quoteResponseItemSchema).max(MAX_QUOTE_ITEMS).optional(),
     /** Nota de AUDITORÍA (`ops.action_log`), no la nota interna de la fila. */
     auditNote: z.string().trim().max(500).optional(),
   })
@@ -197,6 +254,9 @@ export type ReorderQuoteResponsesInput = z.infer<typeof reorderQuoteResponsesSch
 /** Sentinela del handler cuando la tabla de `ops` no existe en esta base. */
 export const QUOTE_RESPONSES_UNAVAILABLE = 'QUOTE_RESPONSES_UNAVAILABLE'
 
+/** Sentinela: se mandaron ítems y la 022 no está aplicada en esta base. */
+export const QUOTE_RESPONSE_ITEMS_UNAVAILABLE = 'QUOTE_RESPONSE_ITEMS_UNAVAILABLE'
+
 /**
  * Traduce las sentinelas de los SP de la 015. Client-safe: corre en el
  * navegador sobre el `message` del error.
@@ -207,6 +267,8 @@ export const QUOTE_RESPONSES_UNAVAILABLE = 'QUOTE_RESPONSES_UNAVAILABLE'
 export function readableQuoteResponseError(cause: unknown): string {
   const raw = cause instanceof Error ? cause.message : String(cause)
 
+  if (raw.includes(QUOTE_RESPONSE_ITEMS_UNAVAILABLE))
+    return 'Falta aplicar la migración 022 en esta base: todavía no se puede detallar por ítems. No se aplicó nada.'
   if (raw.includes(QUOTE_RESPONSES_UNAVAILABLE))
     return 'Falta aplicar la migración 015 en esta base (pnpm db:migrate). No se aplicó nada.'
   if (raw.includes('QUOTE_RESPONSE_NOT_FOUND'))
@@ -219,6 +281,11 @@ export function readableQuoteResponseError(cause: unknown): string {
   if (raw.includes('PROVIDER_CONTACT_NOT_EDITABLE'))
     return 'La dirección y el teléfono de un partner salen de su ficha del directorio: corregilos ahí.'
   if (raw.includes('PARTNER_NOT_FOUND')) return 'Ese partner ya no existe. Recargá la pantalla.'
+  if (raw.includes('ITEM_LABEL_REQUIRED')) return 'Hay un ítem sin descripción: escribí qué es o sacalo.'
+  if (raw.includes('ITEM_LABEL_TOO_LONG')) return 'La descripción de un ítem es demasiado larga (máximo 200 caracteres).'
+  if (raw.includes('INVALID_ITEM_AMOUNT')) return 'Hay un ítem con un precio inválido: tiene que ser un número, cero o más.'
+  if (raw.includes('TOO_MANY_ITEMS')) return `Un presupuesto admite hasta ${MAX_QUOTE_ITEMS} ítems.`
+  if (raw.includes('INVALID_ITEMS')) return 'El desglose no tiene la forma esperada. Recargá la pantalla y probá de nuevo.'
   if (raw.includes('DETAIL_REQUIRED')) return 'Falta qué contestó el taller: es el párrafo que lee la persona.'
   if (raw.includes('AMOUNT_INCOMPLETE'))
     return 'Cargá las dos puntas del precio, o ninguna. Para un precio cerrado, poné el mismo número en las dos.'
@@ -258,7 +325,7 @@ const AMOUNT_FORMATTERS: Record<string, Intl.NumberFormat> = {
 const PLAIN = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 })
 
 /** Una moneda que el catálogo no conoce sale con el código adelante, nunca vacía. */
-function formatAmount(amount: number, currency: string): string {
+export function formatAmount(amount: number, currency: string): string {
   const f = AMOUNT_FORMATTERS[currency]
   return f ? f.format(amount) : `${currency} ${PLAIN.format(amount)}`
 }

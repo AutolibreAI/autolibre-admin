@@ -6,6 +6,7 @@ import {
   quoteCancellationReasonLabel,
   quoteChannelLabel,
   quoteCloseReasonLabel,
+  quoteMapLocation,
   quoteOutcomeLabel,
   quotePublicCode,
   quoteRequestDetailSearchSchema,
@@ -136,8 +137,9 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         ? await listPartnerCandidatesFn({
             data: {
               categorySlugs: effectiveCategorySlugs,
-              lat: result.detail.locationLatitude,
-              lng: result.detail.locationLongitude,
+              // GPS, o la dirección tipeada geocodificada (021): el mismo punto que el mapa.
+              lat: quoteMapLocation(result.detail)?.lat ?? null,
+              lng: quoteMapLocation(result.detail)?.lng ?? null,
             },
             signal,
           })
@@ -290,6 +292,7 @@ function QuoteRequestScreen() {
         key={`responses-${d.id}`}
         quoteRequestId={d.id}
         available={responses.available}
+        itemsAvailable={responses.available && responses.itemsAvailable}
         responses={responseRows}
         partners={partnerOptions}
         proposalsCount={d.proposalsCount}
@@ -311,7 +314,7 @@ function QuoteRequestScreen() {
         publicNumber={d.publicNumber}
         detail={d}
         templates={templates}
-        pedidoHasLocation={d.locationLatitude !== null && d.locationLongitude !== null}
+        pedidoHasLocation={quoteMapLocation(d) !== null}
         catalog={catalog}
         zones={zones}
         savedCategorySlugs={d.rubroCategorySlugs}

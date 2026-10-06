@@ -1,13 +1,13 @@
-import { useMemo, useState, type FormEvent } from 'react'
-import { useRouter } from '@tanstack/react-router'
-import { Plus, Save, X } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link, useRouter } from '@tanstack/react-router'
+import { Info, Plus, Save, X } from 'lucide-react'
 import { updatePartnerApplicationFn } from '~/fn/partners'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
 import { cn } from '~/lib/utils'
-import type { ApplicationDetail } from '~/lib/partners'
+import type { ApplicationDetail, ApplicationEdits } from '~/lib/partners'
 import type { ServiceFamily } from '~/lib/catalog'
 
 /**
@@ -32,13 +32,30 @@ import type { ServiceFamily } from '~/lib/catalog'
  * Tiene su propio editor (columna derecha) y el lock de `verbal_agreement` de
  * la función de aprobación. `first_contacted_at` / `reviewed_*` tampoco: no son
  * datos que el operador corrija a mano. → `.claude/rules/partner-approval.md`
+ *
+ * ── LO TIPEADO VIAJA CON «APROBAR» ──────────────────────────────────────────
+ *
+ * `onDraftChange` le pasa a la página lo que hay en pantalla y si difiere de lo
+ * guardado. «Aprobar» (otro panel, otro formulario) lo manda junto con la
+ * aprobación y se guarda en la misma transacción. Antes aprobar tomaba lo que
+ * estaba en la base y los cambios sin guardar se perdían sin aviso.
  */
+export interface ApplicationDraft {
+  edits: ApplicationEdits
+  /** Lo que hay en pantalla difiere de lo guardado. */
+  dirty: boolean
+  /** Rubros del catálogo tildados: los que cargaría la aprobación con lo tipeado. */
+  serviceCount: number
+}
+
 export function ApplicationEditor({
   app,
   catalog,
+  onDraftChange,
 }: {
   app: ApplicationDetail
   catalog: Array<ServiceFamily>
+  onDraftChange?: (draft: ApplicationDraft) => void
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -99,6 +116,48 @@ export function ApplicationEditor({
   const [fuelTypes, setFuelTypes] = useState<Array<string>>(app.declaredFuelTypes)
   const [vehicleTypes, setVehicleTypes] = useState<Array<string>>(app.vehicleTypes)
 
+  const edits: ApplicationEdits = {
+    ...form,
+    declaredServices: [...selectedServices, ...unknownServices],
+    declaredBrands: brands,
+    declaredFuelTypes: fuelTypes,
+    vehicleTypes,
+  }
+
+  // Lo guardado, con la MISMA siembra que el formulario: si no, una familia
+  // declarada (expandida a sus servicios al sembrar) se leería como un cambio.
+  const baseline: ApplicationEdits = {
+    businessName: app.businessName,
+    email: app.email,
+    whatsapp: app.whatsapp,
+    address: app.address,
+    brandSpecialized: app.brandSpecialized,
+    contactChannel: app.contactChannel ?? '',
+    howFound: app.howFound ?? '',
+    howFoundOther: app.howFoundOther ?? '',
+    serviceOther: app.serviceOther ?? '',
+    nextStep: app.nextStep ?? '',
+    agreementType: app.agreementType ?? '',
+    agreementDetail: app.agreementDetail ?? '',
+    internalNotes: app.internalNotes ?? '',
+    reviewNote: app.reviewNote ?? '',
+    followUpDate: (app.followUpDate ?? '').slice(0, 10),
+    declaredServices: [...seed.selected, ...seed.unknown],
+    declaredBrands: app.declaredBrands,
+    declaredFuelTypes: app.declaredFuelTypes,
+    vehicleTypes: app.vehicleTypes,
+  }
+
+  const editsKey = comparableKey(edits)
+  const dirty = editsKey !== comparableKey(baseline)
+  const serviceCount = selectedServices.size
+
+  useEffect(() => {
+    onDraftChange?.({ edits, dirty, serviceCount })
+    // `edits` se rearma en cada render; su contenido es `editsKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editsKey, dirty, serviceCount, onDraftChange])
+
   const set =
     <K extends keyof typeof form>(key: K) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -134,16 +193,7 @@ export function ApplicationEditor({
     setError(null)
     setSaved(false)
     try {
-      await updatePartnerApplicationFn({
-        data: {
-          applicationId: app.id,
-          ...form,
-          declaredServices: [...selectedServices, ...unknownServices],
-          declaredBrands: brands,
-          declaredFuelTypes: fuelTypes,
-          vehicleTypes: vehicleTypes,
-        },
-      })
+      await updatePartnerApplicationFn({ data: { applicationId: app.id, ...edits } })
       // El estado nuevo lo calcula el SP (normalización de '' → NULL, arrays sin
       // vacíos) y `resolved` lo recalcula el loader. Recargar es preguntar qué
       // quedó, no inventarlo en el cliente.
@@ -158,6 +208,25 @@ export function ApplicationEditor({
 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
+      {app.partner ? (
+        <div className="flex items-start gap-2.5 rounded-md border border-status-yellow/30 bg-status-yellow-bg p-3 text-sm">
+          <Info className="mt-0.5 size-4 shrink-0 text-status-yellow" aria-hidden />
+          <p className="leading-relaxed">
+            Esta solicitud ya se publicó como partner. Lo que cambies acá queda en la
+            solicitud, <strong>no</strong> en el partner: nombre, contacto, rubros y ubicación del
+            taller publicado se editan en{' '}
+            <Link
+              to="/partners/$partnerId"
+              params={{ partnerId: app.partner.id }}
+              className="font-medium text-brand hover:underline"
+            >
+              su ficha
+            </Link>
+            .
+          </p>
+        </div>
+      ) : null}
+
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Contacto</CardTitle>
@@ -314,7 +383,13 @@ export function ApplicationEditor({
             {error}
           </p>
         ) : null}
-        {saved ? <p className="text-sm text-status-green">Guardado.</p> : null}
+        {dirty && !busy ? (
+          <p className="text-sm text-status-yellow">
+            Cambios sin guardar{app.partner ? '' : ' — «Aprobar» también los guarda'}.
+          </p>
+        ) : saved ? (
+          <p className="text-sm text-status-green">Guardado.</p>
+        ) : null}
       </div>
 
       <p className="text-xs leading-relaxed text-muted-foreground">
@@ -323,6 +398,17 @@ export function ApplicationEditor({
       </p>
     </form>
   )
+}
+
+/** Una forma comparable del formulario: los arrays de etiquetas no tienen orden. */
+function comparableKey(edits: ApplicationEdits): string {
+  return JSON.stringify({
+    ...edits,
+    declaredServices: [...edits.declaredServices].sort(),
+    declaredBrands: [...edits.declaredBrands].sort(),
+    declaredFuelTypes: [...edits.declaredFuelTypes].sort(),
+    vehicleTypes: [...edits.vehicleTypes].sort(),
+  })
 }
 
 /**

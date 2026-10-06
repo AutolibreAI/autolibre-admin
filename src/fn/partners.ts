@@ -100,7 +100,7 @@ export const approvePartnerApplication = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .validator(approveSchema)
   .handler(async ({ data, context }): Promise<ApprovalResult> =>
-    approveApplication(data.applicationId, context.user.id, data.coverageZone),
+    approveApplication(data.applicationId, context.user.id, data.coverageZone, data.edits),
   )
 
 export const updatePartnerApplicationStatus = createServerFn({ method: 'POST' })

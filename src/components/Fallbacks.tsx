@@ -24,7 +24,7 @@ export function DefaultError({ error, reset }: ErrorComponentProps) {
         <Button size="sm" variant="outline" onClick={reset}>
           Reintentar
         </Button>
-        <Link to="/dashboard" className="text-sm text-brand hover:underline">
+        <Link to="/metricas" className="text-sm text-brand hover:underline">
           Ir al inicio
         </Link>
       </div>
@@ -37,7 +37,7 @@ export function DefaultNotFound() {
     <div className="py-16 text-center">
       <h2 className="text-lg font-semibold">404 — no existe</h2>
       <p className="mt-1 text-sm text-muted-foreground">Esa ruta no existe.</p>
-      <Link to="/dashboard" className="mt-3 inline-block text-sm text-brand hover:underline">
+      <Link to="/metricas" className="mt-3 inline-block text-sm text-brand hover:underline">
         Volver al inicio
       </Link>
     </div>

@@ -11,7 +11,7 @@ export const Route = createFileRoute('/login')({
   validateSearch: loginSearchSchema,
 
   beforeLoad: ({ context, search }) => {
-    if (context.user) throw redirect({ to: search.redirect ?? '/dashboard' })
+    if (context.user) throw redirect({ to: search.redirect ?? '/metricas' })
   },
 
   head: () => ({ meta: [{ title: 'Iniciar sesión — AutoLibre' }] }),
@@ -78,7 +78,7 @@ function LoginPage() {
       ) : (
         <SignIn
           routing="hash"
-          forceRedirectUrl={redirectTo ?? '/dashboard'}
+          forceRedirectUrl={redirectTo ?? '/metricas'}
           signUpUrl="/login"
         />
       )}

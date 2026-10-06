@@ -3,6 +3,7 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne, withTransaction } from './db'
 import {
   APPLICATION_PATCH_KEYS,
+  type ApplicationEdits,
   type EditApplicationInput,
   type ListPartnerCandidatesInput,
   type PartnerCandidate,
@@ -441,8 +442,24 @@ export async function approveApplication(
   applicationId: string,
   reviewerId: string,
   coverageZone: string,
+  edits?: ApplicationEdits,
 ): Promise<ApprovalResult> {
   return withTransaction(async (client) => {
+    /**
+     * Paso cero: lo tipeado en el editor y sin guardar. Va ANTES de la función
+     * de aprobación porque ella copia la solicitud al partner — guardarlo
+     * después dejaría el partner con los datos viejos. Mismo SP que «Guardar
+     * solicitud» (010), así que queda en `ops.action_log` igual. Si la
+     * aprobación falla, el rollback se lleva también la edición: o pasan las
+     * dos cosas o ninguna.
+     */
+    if (edits) {
+      await client.query(
+        `SELECT ops.update_partner_application($1::uuid, $2::uuid, $3::jsonb, $4)`,
+        [applicationId, reviewerId, applicationPatchJson(edits), 'Guardado al aprobar'],
+      )
+    }
+
     const approved = await client.query<{ partner_id: string }>(
       `SELECT approve_partner_application($1::uuid, $2::uuid, $3::text) AS partner_id`,
       [applicationId, reviewerId, coverageZone],
@@ -593,20 +610,24 @@ export async function updateApplicationStatus(
  * porque la UI necesita `resolved` recalculado sobre los `declared_services`
  * nuevos, y eso el SP no lo da.
  */
+/** Campos del editor → el `p_patch` (snake_case, JSON explícito) del SP de la 010. */
+function applicationPatchJson(fields: ApplicationEdits): string {
+  const patch: Record<string, unknown> = {}
+  for (const [camel, snake] of Object.entries(APPLICATION_PATCH_KEYS)) {
+    patch[snake] = (fields as Record<string, unknown>)[camel]
+  }
+  return JSON.stringify(patch)
+}
+
 export async function updatePartnerApplication(
   input: EditApplicationInput,
   actorId: string,
 ): Promise<ApplicationDetail> {
   const { applicationId, ...fields } = input
 
-  const patch: Record<string, unknown> = {}
-  for (const [camel, snake] of Object.entries(APPLICATION_PATCH_KEYS)) {
-    patch[snake] = (fields as Record<string, unknown>)[camel]
-  }
-
   const row = await sqlOne<{ id: string }>(
     `SELECT (ops.update_partner_application($1::uuid, $2::uuid, $3::jsonb, $4))->>'id' AS id`,
-    [applicationId, actorId, JSON.stringify(patch), null],
+    [applicationId, actorId, applicationPatchJson(fields), null],
   )
   if (!row) throw new Error(`APPLICATION_NOT_FOUND:${applicationId}`)
 

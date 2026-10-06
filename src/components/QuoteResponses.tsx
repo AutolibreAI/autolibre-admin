@@ -4,9 +4,12 @@ import { ArrowDown, ArrowUp, Check, ChevronDown, Pencil, Plus, Receipt, Trash2, 
 import { normalizeForMatch } from '~/lib/catalog'
 import {
   MAX_QUOTE_AMOUNT,
+  MAX_QUOTE_ITEMS,
   QUOTE_CURRENCIES,
+  formatAmount,
   formatQuoteAmount,
   quoteCurrencyLabel,
+  quoteItemsTotals,
   readableQuoteResponseError,
   type QuoteCurrency,
   type QuoteResponse,
@@ -71,7 +74,26 @@ interface FormState {
    * pedido, y se decidió ocultarla para no duplicar dónde anotar algo.
    */
   internalNotes: string
+  /**
+   * El desglose (022). Con al menos un ítem, el precio lo deriva el SP (suma
+   * de los no opcionales) y los campos «desde/hasta» no se usan.
+   */
+  items: Array<ItemDraft>
 }
+
+interface ItemDraft {
+  /** Sólo para la `key` de React: los ítems no tienen id en la base. */
+  key: string
+  label: string
+  amount: string
+  optional: boolean
+}
+
+let itemSeq = 0
+const newItemKey = (): string => `item-${++itemSeq}`
+
+/** Un número guardado, de vuelta al formato que lee `parseAmount` (coma decimal, sin miles). */
+const amountToInput = (n: number): string => String(n).replace('.', ',')
 
 function emptyForm(): FormState {
   return {
@@ -85,6 +107,7 @@ function emptyForm(): FormState {
     detail: '',
     validUntil: '',
     internalNotes: '',
+    items: [],
   }
 }
 
@@ -94,17 +117,43 @@ function formFrom(r: QuoteResponse): FormState {
     providerName: r.providerName ?? '',
     providerAddress: r.providerAddress ?? '',
     providerPhone: r.providerPhone ?? '',
-    amountMin: r.amountMin === null ? '' : String(r.amountMin),
+    // Con desglose, el precio guardado es la suma de los ítems: no se siembra
+    // en «desde/hasta» (si después se borran todos los ítems, arranca vacío).
+    amountMin: r.amountMin === null || r.items.length > 0 ? '' : amountToInput(r.amountMin),
     // Un precio cerrado se guarda como `min === max`. Al editar, el "hasta" se
     // deja vacío para que se vea como se cargó: un solo número.
-    amountMax: r.amountMax === null || r.amountMin === r.amountMax ? '' : String(r.amountMax),
+    amountMax:
+      r.amountMax === null || r.amountMin === r.amountMax || r.items.length > 0 ? '' : amountToInput(r.amountMax),
     currency: (QUOTE_CURRENCIES as ReadonlyArray<string>).includes(r.currency)
       ? (r.currency as QuoteCurrency)
       : 'ARS',
     detail: r.detail,
     validUntil: r.validUntil ?? '',
     internalNotes: r.internalNotes ?? '',
+    items: r.items.map((it) => ({
+      key: newItemKey(),
+      label: it.label,
+      amount: amountToInput(it.amount),
+      optional: it.optional,
+    })),
   }
+}
+
+/**
+ * Los ítems tipeados, ya leídos. `invalid` = alguno sin descripción o con un
+ * precio que no es un número: no se puede guardar, y el formulario dice cuál.
+ */
+function readItems(f: FormState): {
+  items: Array<{ label: string; amount: number; optional: boolean }>
+  invalid: boolean
+} {
+  let invalid = false
+  const items = f.items.map((it) => {
+    const amount = parseAmount(it.amount.trim())
+    if (it.label.trim() === '' || amount === null) invalid = true
+    return { label: it.label.trim(), amount: amount ?? 0, optional: it.optional }
+  })
+  return { items, invalid }
 }
 
 /**
@@ -146,6 +195,7 @@ function readAmounts(f: FormState): { min?: number; max?: number; invalid: boole
 export function QuoteResponses({
   quoteRequestId,
   available,
+  itemsAvailable,
   responses,
   partners,
   proposalsCount,
@@ -154,6 +204,8 @@ export function QuoteResponses({
   quoteRequestId: string
   /** `false` = falta aplicar la 015 en esta base. */
   available: boolean
+  /** `false` = falta la 022: se cargan presupuestos, pero sin desglose por ítems. */
+  itemsAvailable: boolean
   responses: Array<QuoteResponse>
   partners: Array<PartnerOption>
   /** `quote_requests.proposals_count`: lo que se le dijo a la persona que se le pasó. */
@@ -242,6 +294,7 @@ export function QuoteResponses({
                     response={r}
                     quoteRequestId={quoteRequestId}
                     partners={partners}
+                    itemsAvailable={itemsAvailable}
                     onDone={() => setEditingId(null)}
                     onCancel={() => setEditingId(null)}
                     onError={setError}
@@ -273,6 +326,7 @@ export function QuoteResponses({
             mode="add"
             quoteRequestId={quoteRequestId}
             partners={partners}
+            itemsAvailable={itemsAvailable}
             onDone={() => setAdding(false)}
             onCancel={() => setAdding(false)}
             onError={setError}
@@ -426,6 +480,8 @@ function ResponseRow({
 
       {contactLine ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{contactLine}</p> : null}
 
+      {r.items.length > 0 ? <ItemsSummary items={r.items} currency={r.currency} /> : null}
+
       <div className="mt-1">
         <p className={cn('whitespace-pre-wrap text-sm leading-relaxed', !expanded && detailIsLong && 'line-clamp-2')}>
           {r.detail}
@@ -559,11 +615,13 @@ function ResponseForm({
   onDone,
   onCancel,
   onError,
+  itemsAvailable,
 }: {
   mode: 'add' | 'edit'
   response?: QuoteResponse
   quoteRequestId: string
   partners: Array<PartnerOption>
+  itemsAvailable: boolean
   onDone: () => void
   onCancel: () => void
   onError: (message: string | null) => void
@@ -586,9 +644,19 @@ function ResponseForm({
     setF((prev) => ({ ...prev, [key]: value }))
 
   const usesPartner = f.partnerId !== NO_PARTNER
-  const amounts = readAmounts(f)
+  const itemized = f.items.length > 0
+  const parsedItems = readItems(f)
+  // Con desglose, «desde/hasta» no cuentan: el precio sale de los ítems.
+  const amounts = itemized ? { invalid: false } : readAmounts(f)
+  const totals = quoteItemsTotals(parsedItems.items)
   const providerOk = usesPartner || f.providerName.trim() !== ''
-  const valid = providerOk && !amounts.invalid && f.detail.trim() !== ''
+  const valid = providerOk && !amounts.invalid && !parsedItems.invalid && f.detail.trim() !== ''
+
+  const setItem = (key: string, patch: Partial<Omit<ItemDraft, 'key'>>) =>
+    setF((prev) => ({ ...prev, items: prev.items.map((it) => (it.key === key ? { ...it, ...patch } : it)) }))
+  const addItem = (optional: boolean) =>
+    setF((prev) => ({ ...prev, items: [...prev.items, { key: newItemKey(), label: '', amount: '', optional }] }))
+  const removeItem = (key: string) => setF((prev) => ({ ...prev, items: prev.items.filter((it) => it.key !== key) }))
 
   async function submit() {
     if (!valid) return
@@ -601,8 +669,11 @@ function ResponseForm({
       // directorio lo tiene en `partners`, y el SP rechaza una copia acá.
       providerAddress: usesPartner ? undefined : f.providerAddress.trim() || undefined,
       providerPhone: usesPartner ? undefined : f.providerPhone.trim() || undefined,
-      amountMin: amounts.min,
-      amountMax: amounts.max,
+      amountMin: itemized ? undefined : amounts.min,
+      amountMax: itemized ? undefined : amounts.max,
+      // Con la 022, viajan siempre (`[]` = sin desglose): la edición es reemplazo
+      // completo. Sin la 022 no se mandan: el SP de la 015 no los conoce.
+      items: itemsAvailable ? parsedItems.items : undefined,
       currency: f.currency,
       detail: f.detail.trim(),
       internalNotes: f.internalNotes.trim() || undefined,
@@ -715,38 +786,73 @@ function ResponseForm({
         </Hint>
       </Field>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Precio desde" htmlFor={ids.min}>
-          <Input
-            id={ids.min}
-            value={f.amountMin}
-            onChange={(e) => {
-              const v = e.currentTarget.value
-              set('amountMin', v)
-            }}
-            inputMode="decimal"
-            autoComplete="off"
-            placeholder="vacío = sin precio"
-            className="text-xs tabular-nums"
-          />
-          <Hint>Vacío si el taller no pasó precio. `0` es «sin cargo», que sí es una respuesta.</Hint>
-        </Field>
+      {itemsAvailable ? (
+        <ItemsEditor
+          items={f.items}
+          currency={f.currency}
+          totals={totals}
+          onChange={setItem}
+          onAdd={addItem}
+          onRemove={removeItem}
+        />
+      ) : (
+        // Esconderlo en silencio hacía creer que la función no existía: se dice por qué no está.
+        <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
+          Detalle por ítems y opcionales: todavía no disponible en esta base — falta aplicar la migración 022
+          (<code className="font-mono">pnpm db:migrate</code>, o el próximo deploy de producción).
+        </p>
+      )}
 
-        <Field label="Precio hasta" htmlFor={ids.max}>
-          <Input
-            id={ids.max}
-            value={f.amountMax}
-            onChange={(e) => {
-              const v = e.currentTarget.value
-              set('amountMax', v)
-            }}
-            inputMode="decimal"
-            autoComplete="off"
-            placeholder="vacío = precio cerrado"
-            className="text-xs tabular-nums"
-          />
-          <Hint>El punto es separador de miles y la coma, decimal.</Hint>
-        </Field>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {itemized ? (
+          <div className="sm:col-span-2">
+            <span className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">Precio</span>
+            <p className="text-sm">
+              {totals.base === null ? (
+                <span className="text-muted-foreground">sin precio base — sólo opcionales</span>
+              ) : (
+                <span className="font-semibold tabular-nums">
+                  {totals.base === 0 ? 'Sin cargo' : formatAmount(totals.base, f.currency)}
+                </span>
+              )}
+            </p>
+            <Hint>Es la suma de los ítems que no son opcionales. Se calcula solo.</Hint>
+          </div>
+        ) : (
+          <>
+            <Field label="Precio desde" htmlFor={ids.min}>
+              <Input
+                id={ids.min}
+                value={f.amountMin}
+                onChange={(e) => {
+                  const v = e.currentTarget.value
+                  set('amountMin', v)
+                }}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="vacío = sin precio"
+                className="text-xs tabular-nums"
+              />
+              <Hint>Vacío si el taller no pasó precio. `0` es «sin cargo», que sí es una respuesta.</Hint>
+            </Field>
+
+            <Field label="Precio hasta" htmlFor={ids.max}>
+              <Input
+                id={ids.max}
+                value={f.amountMax}
+                onChange={(e) => {
+                  const v = e.currentTarget.value
+                  set('amountMax', v)
+                }}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="vacío = precio cerrado"
+                className="text-xs tabular-nums"
+              />
+              <Hint>El punto es separador de miles y la coma, decimal.</Hint>
+            </Field>
+          </>
+        )}
 
         <Field label="Moneda" htmlFor={`${ids.min}-currency`}>
           <Select value={f.currency} onValueChange={(v) => set('currency', v as QuoteCurrency)}>
@@ -814,7 +920,9 @@ function ResponseForm({
           <span className="self-center text-xs text-muted-foreground">
             {!providerOk
               ? 'Falta el taller.'
-              : amounts.invalid
+              : parsedItems.invalid
+                ? 'Revisá los ítems: cada uno necesita qué es y un precio (0 vale).'
+                : amounts.invalid
                 ? 'Revisá el precio: cargá «desde» (o las dos puntas, con desde ≤ hasta), o dejá los dos vacíos.'
                 : 'Falta qué contestó el taller.'}
           </span>
@@ -1077,4 +1185,176 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
 
 function Hint({ children }: { children: ReactNode }) {
   return <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
+}
+
+// ── El desglose por ítems (022) ─────────────────────────────────────────────
+
+/**
+ * Filas de ítem con su precio; los opcionales van aparte y no suman al total.
+ * El total que se ve es una VISTA PREVIA: el que se guarda lo calcula el SP con
+ * la misma regla (`ops._quote_response_items_total`), así que no pueden
+ * contradecirse.
+ */
+function ItemsEditor({
+  items,
+  currency,
+  totals,
+  onChange,
+  onAdd,
+  onRemove,
+}: {
+  items: Array<ItemDraft>
+  currency: string
+  totals: { base: number | null; optional: number; withOptional: number }
+  onChange: (key: string, patch: Partial<Omit<ItemDraft, 'key'>>) => void
+  onAdd: (optional: boolean) => void
+  onRemove: (key: string) => void
+}) {
+  const required = items.filter((it) => !it.optional)
+  const optional = items.filter((it) => it.optional)
+  const full = items.length >= MAX_QUOTE_ITEMS
+
+  const renderRow = (it: ItemDraft) => {
+    const badAmount = it.amount.trim() !== '' && parseAmount(it.amount.trim()) === null
+    return (
+      <li key={it.key} className="flex flex-wrap items-center gap-2">
+        <Input
+          value={it.label}
+          onChange={(e) => {
+            const v = e.currentTarget.value
+            onChange(it.key, { label: v })
+          }}
+          maxLength={200}
+          autoComplete="off"
+          placeholder={it.optional ? 'Rectificar discos' : 'Cambio de pastillas'}
+          aria-label="Qué es"
+          className="h-8 min-w-0 flex-1 text-xs"
+        />
+        <Input
+          value={it.amount}
+          onChange={(e) => {
+            const v = e.currentTarget.value
+            onChange(it.key, { amount: v })
+          }}
+          inputMode="decimal"
+          autoComplete="off"
+          placeholder="60.000"
+          aria-label="Precio"
+          aria-invalid={badAmount}
+          className="h-8 w-28 text-right text-xs tabular-nums"
+        />
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={it.optional}
+            onChange={(e) => {
+              const v = e.currentTarget.checked
+              onChange(it.key, { optional: v })
+            }}
+          />
+          opcional
+        </label>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => onRemove(it.key)}
+          aria-label="Sacar el ítem"
+          className="size-7 p-0"
+        >
+          <X className="size-3.5" aria-hidden />
+        </Button>
+      </li>
+    )
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-card p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">Detalle por ítems (opcional)</span>
+        <div className="flex gap-1.5">
+          <Button type="button" size="sm" variant="outline" disabled={full} onClick={() => onAdd(false)} className="h-7 gap-1">
+            <Plus className="size-3.5" aria-hidden />
+            Ítem
+          </Button>
+          <Button type="button" size="sm" variant="outline" disabled={full} onClick={() => onAdd(true)} className="h-7 gap-1">
+            <Plus className="size-3.5" aria-hidden />
+            Opcional
+          </Button>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <Hint>
+          Si el taller pasó el precio desglosado, cargalo por ítems y el total se suma solo. Los opcionales se muestran
+          aparte, con su precio, y no suman al total.
+        </Hint>
+      ) : (
+        <>
+          {required.length > 0 ? <ul className="space-y-1.5">{required.map(renderRow)}</ul> : null}
+          {optional.length > 0 ? (
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Opcionales</span>
+              <ul className="space-y-1.5">{optional.map(renderRow)}</ul>
+            </div>
+          ) : null}
+
+          <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-0.5 border-t border-border pt-2 text-xs">
+            <dt className="text-muted-foreground">Total</dt>
+            <dd className="text-right font-semibold tabular-nums">
+              {totals.base === null ? '—' : totals.base === 0 ? 'Sin cargo' : formatAmount(totals.base, currency)}
+            </dd>
+            {totals.optional > 0 || optional.length > 0 ? (
+              <>
+                <dt className="text-muted-foreground">Opcionales</dt>
+                <dd className="text-right tabular-nums">+ {formatAmount(totals.optional, currency)}</dd>
+                <dt className="text-muted-foreground">Con todos los opcionales</dt>
+                <dd className="text-right tabular-nums">{formatAmount(totals.withOptional, currency)}</dd>
+              </>
+            ) : null}
+          </dl>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** El desglose de un presupuesto ya cargado, en la fila de la lista. */
+function ItemsSummary({ items, currency }: { items: Array<{ label: string; amount: number; optional: boolean }>; currency: string }) {
+  const required = items.filter((it) => !it.optional)
+  const optional = items.filter((it) => it.optional)
+  const totals = quoteItemsTotals(items)
+  const money = (n: number) => (n === 0 ? 'sin cargo' : formatAmount(n, currency))
+
+  return (
+    <div className="mt-1.5 rounded border border-border px-2 py-1.5 text-xs">
+      {required.length > 0 ? (
+        <ul className="space-y-0.5">
+          {required.map((it, i) => (
+            <li key={`r-${i}`} className="flex justify-between gap-3">
+              <span className="min-w-0 truncate">{it.label}</span>
+              <span className="shrink-0 tabular-nums">{money(it.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {optional.length > 0 ? (
+        <div className={cn(required.length > 0 && 'mt-1 border-t border-border pt-1')}>
+          <span className="text-muted-foreground">Opcionales</span>
+          <ul className="space-y-0.5">
+            {optional.map((it, i) => (
+              <li key={`o-${i}`} className="flex justify-between gap-3 text-muted-foreground">
+                <span className="min-w-0 truncate">+ {it.label}</span>
+                <span className="shrink-0 tabular-nums">{money(it.amount)}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-0.5 flex justify-between gap-3 text-muted-foreground">
+            <span>Con todos los opcionales</span>
+            <span className="tabular-nums">{formatAmount(totals.withOptional, currency)}</span>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
 }

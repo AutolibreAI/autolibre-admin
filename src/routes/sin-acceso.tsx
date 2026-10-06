@@ -15,7 +15,7 @@ import { Card, CardContent } from '~/components/ui/card'
 export const Route = createFileRoute('/sin-acceso')({
   beforeLoad: ({ context }) => {
     // Don't strand an admin here if they land on the URL directly.
-    if (context.user?.role === 'admin') throw redirect({ to: '/dashboard' })
+    if (context.user?.role === 'admin') throw redirect({ to: '/metricas' })
   },
 
   head: () => ({ meta: [{ title: 'Sin acceso — AutoLibre' }] }),

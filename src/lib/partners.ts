@@ -169,15 +169,6 @@ export const applicationSearchSchema = z.object({
 
 export type ApplicationSearch = z.infer<typeof applicationSearchSchema>
 
-/**
- * Zona de cobertura: texto libre, y es lo que el usuario ve en la ficha.
- * Escribila como la leería una persona ("CABA y GBA Norte"), no como un código.
- */
-export const approveSchema = z.object({
-  applicationId: z.uuid(),
-  coverageZone: z.string().trim().min(3).max(120),
-})
-
 export const updateStatusSchema = z.object({
   applicationId: z.uuid(),
   status: z.enum(MANUAL_STATUSES),
@@ -225,6 +216,29 @@ export const editApplicationSchema = z.object({
 })
 
 export type EditApplicationInput = z.infer<typeof editApplicationSchema>
+
+/** Los campos del editor, sin el id: lo que viaja pegado a una aprobación. */
+export const applicationEditsSchema = editApplicationSchema.omit({ applicationId: true })
+
+export type ApplicationEdits = z.infer<typeof applicationEditsSchema>
+
+/**
+ * Zona de cobertura: texto libre, y es lo que el usuario ve en la ficha.
+ * Escribila como la leería una persona ("CABA y GBA Norte"), no como un código.
+ *
+ * `edits` es lo que el operador tipeó en el editor y todavía no guardó. Viaja
+ * con la aprobación y se guarda en la MISMA transacción, antes de que
+ * `approve_partner_application()` copie la solicitud al partner. Sin esto,
+ * aprobar tomaba lo que estaba en la base y lo tipeado se perdía en silencio
+ * (relevado el 2026-10-06: ninguna de las últimas 8 solicitudes tenía una
+ * edición guardada antes de aprobarse, y todas se corrigieron después en la
+ * ficha del partner).
+ */
+export const approveSchema = z.object({
+  applicationId: z.uuid(),
+  coverageZone: z.string().trim().min(3).max(120),
+  edits: applicationEditsSchema.optional(),
+})
 
 /**
  * `EditApplicationInput` (camelCase) → las claves snake_case que espera el

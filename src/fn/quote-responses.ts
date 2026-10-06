@@ -11,6 +11,7 @@ import {
   addQuoteResponse,
   deleteQuoteResponse,
   listQuoteResponses,
+  quoteResponseItemsAvailable,
   quoteResponsesAvailable,
   reorderQuoteResponses,
   updateQuoteResponse,
@@ -50,7 +51,11 @@ export const listQuoteResponsesFn = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<QuoteResponsesResult> => {
     const signal = requestSignal()
     if (!(await quoteResponsesAvailable({ signal }))) return { available: false }
-    return { available: true, rows: await listQuoteResponses(data.quoteRequestId, { signal }) }
+    const [rows, itemsAvailable] = await Promise.all([
+      listQuoteResponses(data.quoteRequestId, { signal }),
+      quoteResponseItemsAvailable(),
+    ])
+    return { available: true, rows, itemsAvailable }
   })
 
 // ── Escrituras ──────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, createFileRoute, notFound, useRouter } from '@tanstack/react-router'
 import { AlertTriangle, ArrowLeft, CheckCircle2 } from 'lucide-react'
 import {
@@ -14,7 +14,7 @@ import {
   updatePartnerApplicationStatus,
 } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
-import { ApplicationEditor } from '~/components/ApplicationEditor'
+import { ApplicationEditor, type ApplicationDraft } from '~/components/ApplicationEditor'
 import { ApplicationStatusBadge } from '~/components/ApplicationStatusBadge'
 import { ResolvedServicesSummary } from '~/components/ResolvedServicesSummary'
 import { Button } from '~/components/ui/button'
@@ -51,6 +51,8 @@ export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
 
 function ApplicationDetailPage() {
   const { app, catalog } = Route.useLoaderData()
+  const [draft, setDraftState] = useState<ApplicationDraft | null>(null)
+  const setDraft = useCallback((next: ApplicationDraft) => setDraftState(next), [])
 
   return (
     <>
@@ -77,7 +79,7 @@ function ApplicationDetailPage() {
 
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="min-w-0">
-          <ApplicationEditor app={app} catalog={catalog} />
+          <ApplicationEditor app={app} catalog={catalog} onDraftChange={setDraft} />
         </div>
 
         <div className="space-y-4">
@@ -102,7 +104,7 @@ function ApplicationDetailPage() {
             <PublishedPanel app={app} />
           ) : (
             <>
-              <ApprovePanel app={app} />
+              <ApprovePanel app={app} draft={draft} />
               <StatusPanel app={app} />
             </>
           )}
@@ -202,14 +204,19 @@ function PublishedPanel({ app }: { app: ApplicationDetail }) {
  * transacción (`approveApplication` en el repo), así que o pasan los dos o no
  * pasa ninguno.
  */
-function ApprovePanel({ app }: { app: ApplicationDetail }) {
+function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: ApplicationDraft | null }) {
   const router = useRouter()
   const [coverageZone, setCoverageZone] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmedInvisible, setConfirmedInvisible] = useState(false)
 
-  const wouldBeInvisible = app.resolved.totalServices === 0
+  // Con cambios sin guardar, lo que se va a aprobar es lo que está en pantalla:
+  // la cuenta de rubros sale de lo tildado, no de lo guardado. Las etiquetas
+  // "sin reconocer" no cuentan — el INSERT de la aprobación tampoco las matchea.
+  const pending = draft?.dirty ? draft : null
+  const servicesToLoad = pending ? pending.serviceCount : app.resolved.totalServices
+  const wouldBeInvisible = servicesToLoad === 0
   const blocked = wouldBeInvisible && !confirmedInvisible
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -218,14 +225,21 @@ function ApprovePanel({ app }: { app: ApplicationDetail }) {
     setError(null)
     try {
       await approvePartnerApplication({
-        data: { applicationId: app.id, coverageZone: coverageZone.trim() },
+        data: {
+          applicationId: app.id,
+          coverageZone: coverageZone.trim(),
+          ...(pending ? { edits: pending.edits } : {}),
+        },
       })
       await router.invalidate()
     } catch (cause) {
+      const raw = cause instanceof Error ? cause.message : String(cause)
       setError(
-        cause instanceof Error && cause.message.includes('inexistente o ya aprobada')
+        raw.includes('inexistente o ya aprobada')
           ? 'La función rechazó la solicitud: no existe o ya fue aprobada. Si está en acuerdo verbal sin partner, destrabala primero.'
-          : 'No pudimos aprobar la solicitud. No se creó nada — la operación es transaccional.',
+          : /_REQUIRED|INVALID_FOLLOW_UP_DATE|too_small/i.test(raw)
+            ? 'Hay un campo obligatorio vacío o inválido en el formulario (nombre, email, WhatsApp, dirección o fecha). Corregilo y volvé a aprobar.'
+            : 'No pudimos aprobar la solicitud. No se creó ni se guardó nada — la operación es transaccional.',
       )
     } finally {
       setBusy(false)
@@ -259,6 +273,13 @@ function ApprovePanel({ app }: { app: ApplicationDetail }) {
               </label>
             </AlertDescription>
           </Alert>
+        ) : null}
+
+        {pending ? (
+          <p className="mb-3 rounded-md border border-status-yellow/30 bg-status-yellow-bg p-2.5 text-xs leading-relaxed text-muted-foreground">
+            Tenés cambios sin guardar en el formulario. Se guardan junto con la aprobación, y el
+            partner se crea con esos datos.
+          </p>
         ) : null}
 
         <form onSubmit={onSubmit} className="space-y-3">
@@ -299,8 +320,12 @@ function ApprovePanel({ app }: { app: ApplicationDetail }) {
             {busy
               ? 'Aprobando…'
               : wouldBeInvisible
-                ? 'Aprobar igual'
-                : `Aprobar y cargar ${app.resolved.totalServices} rubros`}
+                ? pending
+                  ? 'Guardar cambios y aprobar igual'
+                  : 'Aprobar igual'
+                : pending
+                  ? `Guardar cambios y aprobar (${servicesToLoad} rubros)`
+                  : `Aprobar y cargar ${servicesToLoad} rubros`}
           </Button>
         </form>
       </CardContent>
