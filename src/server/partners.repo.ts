@@ -280,6 +280,7 @@ interface DetailRow extends QueueRow {
   service_other: string | null
   how_found_other: string | null
   contact_channel: string | null
+  whatsapp_message: string | null
   first_contacted_at: string | null
   agreement_type: string | null
   agreement_detail: string | null
@@ -304,6 +305,7 @@ export async function findApplication(
             a.created_at,
             a.brand_specialized, a.declared_brands, a.declared_fuel_types,
             a.vehicle_types, a.service_other, a.how_found_other, a.contact_channel,
+            a.whatsapp_message,
             a.first_contacted_at, a.agreement_type, a.agreement_detail,
             a.internal_notes, a.review_note, a.reviewed_at,
             (p.id IS NOT NULL)                       AS already_published,
@@ -344,6 +346,7 @@ export async function findApplication(
     serviceOther: row.service_other,
     howFoundOther: row.how_found_other,
     contactChannel: row.contact_channel,
+    whatsappMessage: row.whatsapp_message,
     firstContactedAt: row.first_contacted_at,
     agreementType: row.agreement_type,
     agreementDetail: row.agreement_detail,
