@@ -83,6 +83,13 @@ export function ApplicationEditor({
     address: app.address,
     brandSpecialized: app.brandSpecialized,
     contactChannel: app.contactChannel ?? '',
+    // Default solo al sembrar: si el taller tiene WhatsApp y todavia nadie
+    // cargo un mensaje, se precarga el mismo texto que mobile usaba como
+    // fallback hardcodeado (AUT-120). Sin whatsapp, queda vacio -- no hay
+    // numero al que asociarle un mensaje.
+    whatsappMessage:
+      app.whatsappMessage ??
+      (app.whatsapp.trim() ? `Hola ${app.businessName}, te contacto desde AutoLibre.` : ''),
     howFound: app.howFound ?? '',
     howFoundOther: app.howFoundOther ?? '',
     serviceOther: app.serviceOther ?? '',
@@ -167,6 +174,7 @@ export function ApplicationEditor({
           <TextField label="Email" value={form.email} onChange={set('email')} required />
           <TextField label="WhatsApp" value={form.whatsapp} onChange={set('whatsapp')} required />
           <TextField label="Canal de contacto" value={form.contactChannel} onChange={set('contactChannel')} placeholder="whatsapp, email…" />
+          <AreaField label="Mensaje de WhatsApp" value={form.whatsappMessage} onChange={set('whatsappMessage')} />
           <TextField label="Dirección" value={form.address} onChange={set('address')} required className="sm:col-span-2" />
         </CardContent>
       </Card>

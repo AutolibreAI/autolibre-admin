@@ -119,6 +119,7 @@ export interface ApplicationDetail extends ApplicationListItem {
   serviceOther: string | null
   howFoundOther: string | null
   contactChannel: string | null
+  whatsappMessage: string | null
   firstContactedAt: string | null
   agreementType: string | null
   agreementDetail: string | null
@@ -209,6 +210,7 @@ export const editApplicationSchema = z.object({
   address: z.string().trim().min(1, 'La dirección no puede quedar vacía.').max(300),
   brandSpecialized: z.boolean(),
   contactChannel: z.string().trim().max(120).default(''),
+  whatsappMessage: z.string().trim().max(1000).default(''),
   howFound: z.string().trim().max(200).default(''),
   howFoundOther: z.string().trim().max(200).default(''),
   serviceOther: z.string().trim().max(500).default(''),
@@ -360,6 +362,7 @@ export const APPLICATION_PATCH_KEYS: Record<
   address: 'address',
   brandSpecialized: 'brand_specialized',
   contactChannel: 'contact_channel',
+  whatsappMessage: 'whatsapp_message',
   howFound: 'how_found',
   howFoundOther: 'how_found_other',
   serviceOther: 'service_other',
