@@ -38,6 +38,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PulseRow } from '~/components/PulseCards'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { GrowthChart } from '~/components/GrowthChart'
+import { getActiveUsersSeries } from '~/fn/activity-feed'
 import { SortHeader } from '~/components/SortHeader'
 import {
   Table,
@@ -100,6 +101,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       quoteSeries,
       locations,
       channels,
+      activeUsers,
     ] = await Promise.all([
       getOpsPulse({ signal }),
       getUsageAdoption({ signal }),
@@ -113,6 +115,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       getQuoteRequestSeriesFn({ data: deps, signal }),
       getVehicleLocationBreakdownFn({ signal }),
       getChannelPeople({ data: deps, signal }),
+      getActiveUsersSeries({ data: deps, signal }),
     ])
     return {
       pulse,
@@ -127,6 +130,7 @@ export const Route = createFileRoute('/_authed/metricas')({
       quoteSeries,
       locations,
       channels,
+      activeUsers,
     }
   },
 
@@ -168,6 +172,7 @@ function MetricasPage() {
     quoteSeries,
     locations,
     channels,
+    activeUsers,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -217,6 +222,39 @@ function MetricasPage() {
               </Chip>
             ))}
           </FilterGroup>
+        </div>
+
+        <div className="mb-4">
+          <GrowthChart
+            buckets={activeUsers.points.map((p) => p.bucket)}
+            unit={activeUsers.unit}
+            label="Usuarios activos"
+            summaryPrefix=""
+            bars={[
+              {
+                values: activeUsers.points.map((p) => p.withAction),
+                color: 'var(--color-brand)',
+                label: 'hicieron algo',
+              },
+              {
+                values: activeUsers.points.map((p) => p.onlyOpened),
+                color: 'var(--color-brand-muted)',
+                label: 'sólo abrieron la app',
+              },
+            ]}
+            lines={[]}
+          />
+          <p className="mt-2 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            Personas distintas que usaron la app en cada período. «Hicieron algo»
+            = lo mismo que cuenta <Link to="/actividad" className="underline underline-offset-2">Actividad</Link>{' '}
+            (alta, auto, chat, escaneo, documento, pedido, login…) más cada mensaje al
+            asistente. «Sólo abrieron» sale del token de notificaciones, que la app
+            renueva al abrirse — pero la base guarda sólo la ÚLTIMA apertura de cada
+            teléfono, así que esa capa es completa para los últimos días y casi vacía
+            para los viejos: un día de hace un mes cuenta a quien abrió{' '}
+            <em>y además</em> hizo algo. No existe un registro de cada apertura;
+            medirlo de verdad requiere que la app lo informe.
+          </p>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">

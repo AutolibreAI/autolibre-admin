@@ -3,6 +3,8 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import { FAILED, NO_DATA, OK } from './scanners.repo'
 import { notDuplicatePredicate, quoteRequestsAvailability } from './quote-requests.repo'
+import { INTERNAL_PREDICATE, PG_UNIT } from './ops.repo'
+import { METRICS_TZ, type ActiveUsersSeries, type GrowthUnit } from '~/lib/ops'
 import {
   ACTIVITY_KINDS,
   ACTIVITY_LIMIT,
@@ -528,6 +530,104 @@ export async function listActivity(
       outcome: r.outcome,
     }),
   )
+}
+
+// ── Usuarios activos por período (/metricas) ────────────────────────────────
+
+interface ActiveUsersRow {
+  bucket: string
+  with_action: number | string
+  only_opened: number | string
+}
+
+/**
+ * Cuántas personas reales usaron la app en cada período (`ActiveUsersSeries`).
+ *
+ * "Hizo algo" son las MISMAS 16 ramas del feed, no una lista nueva: si el feed
+ * y este gráfico dijeran cosas distintas sobre qué es actividad de una persona,
+ * nada lo delataría. Se les suman dos señales que el feed no muestra a
+ * propósito, porque allá serían ruido fila por fila y acá son justo el dato:
+ *
+ *  - cada mensaje del usuario al asistente (`conversation_messages`): la rama
+ *    `chat` fecha la CONVERSACIÓN, y volver a escribir en una vieja es usar la
+ *    app ese día;
+ *  - el refresh del token push (`expo_push_tokens.updated_at`): la app lo
+ *    re-registra al abrirse. Es la única huella de "abrió y no hizo nada", y
+ *    guarda sólo la última — por eso es una capa aparte y no se mezcla.
+ *
+ * Arrastra las columnas de detalle de cada rama (un par de subconsultas que
+ * nadie lee acá). Con ~1.000 eventos no cuesta nada; el día que cueste, la
+ * respuesta es parametrizar `branch()`, no copiar las 16 ramas.
+ *
+ * Período en hora de Buenos Aires, como el resto de Crecimiento. Sin cuentas
+ * internas (`INTERNAL_PREDICATE`, el mismo de "Usuarios reales").
+ */
+export async function activeUsersSeries(
+  unit: GrowthUnit,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ActiveUsersSeries> {
+  void opts.signal
+
+  // Mismo guard que el feed: sin `quote_requests`, la rama se saca y se sigue.
+  const kinds = (await quoteRequestsAvailability()).available
+    ? [...ACTIVITY_KINDS]
+    : ACTIVITY_KINDS.filter((k) => k !== 'pedido')
+
+  const rows = await sql<ActiveUsersRow>(
+    `
+    with signals as (
+      select s.user_id, s.occurred_at, true as is_action
+        from (
+          ${kinds.map((k) => BRANCHES[k]).join(' union all ')}
+        ) s
+      union all
+      select c.user_id, m.sent_at, true
+        from conversation_messages m
+        join conversations c on c.id = m.conversation_id
+       where m.author::text = 'user'
+      union all
+      select ept.user_id, ept.updated_at, false
+        from expo_push_tokens ept
+    ),
+    per_user as (
+      select date_trunc($1, sg.occurred_at at time zone $2) as bucket,
+             sg.user_id,
+             bool_or(sg.is_action) as acted
+        from signals sg
+        join users u on u.id = sg.user_id
+       where sg.occurred_at is not null
+         and not ${INTERNAL_PREDICATE}
+       group by 1, 2
+    ),
+    counts as (
+      select bucket,
+             count(*) filter (where acted)::int as with_action,
+             count(*) filter (where not acted)::int as only_opened
+        from per_user
+       group by 1
+    ),
+    span as (select min(bucket) as lo, max(bucket) as hi from counts),
+    buckets as (
+      select generate_series(span.lo, span.hi, ('1 ' || $1)::interval) as bucket from span
+    )
+    select to_char(b.bucket, 'YYYY-MM-DD') as bucket,
+           coalesce(c.with_action, 0) as with_action,
+           coalesce(c.only_opened, 0) as only_opened
+      from buckets b
+      left join counts c using (bucket)
+     order by b.bucket
+    `,
+    [PG_UNIT[unit], METRICS_TZ],
+  )
+
+  return {
+    unit,
+    points: rows.map((r) => ({
+      bucket: r.bucket,
+      withAction: toInt(r.with_action),
+      onlyOpened: toInt(r.only_opened),
+    })),
+  }
 }
 
 // ── El detalle de un evento sin pantalla dueña ───────────────────────────────

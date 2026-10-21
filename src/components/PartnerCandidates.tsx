@@ -75,6 +75,18 @@ import type { ServiceFamily } from '~/lib/catalog'
  *
  * "Mapa" muestra el pedido y los candidatos VISIBLES (mismos filtros que la
  * lista). Vista y orden van en `useState` por el mismo motivo que zona.
+ *
+ * ── Servicios dentro de los rubros — desde el 2026-10-21 ────────────────────
+ *
+ * Un rubro es ancho ("Motor" son una docena de servicios) y el pedido suele
+ * ser uno puntual. El segundo selector ofrece los `services` del CATÁLOGO de
+ * los rubros elegidos —no sólo los que algún candidato cubre: uno que no cubre
+ * nadie es un dato, y sale con "(0)"— y poda contra `matchedServices`, que ya
+ * viene en cada candidato. Dentro del selector es O (cubre alguno de los
+ * elegidos), igual que los multiselect de `/partners/listado`. Filtro de
+ * cliente, en `useState`, por el mismo motivo que zona. Si se saca un rubro,
+ * sus servicios dejan de filtrar solos (se intersecan con las opciones), en
+ * vez de dejar un filtro invisible que vacía la lista.
  */
 
 type CandidateOrder = 'distance' | 'coverage'
@@ -146,6 +158,7 @@ export function PartnerCandidates({
   const [savingRubro, setSavingRubro] = useState(false)
   const [rubroError, setRubroError] = useState<string | null>(null)
   const [zoneFilter, setZoneFilter] = useState<Array<string>>([])
+  const [serviceFilter, setServiceFilter] = useState<Array<string>>([])
   const [onlyFounding, setOnlyFounding] = useState(false)
   const [order, setOrder] = useState<CandidateOrder>('distance')
   const [view, setView] = useState<CandidateView>('list')
@@ -155,6 +168,23 @@ export function PartnerCandidates({
   const selectedSet = new Set(selectedCategorySlugs)
   const dirty =
     selectedSet.size !== savedSet.size || selectedCategorySlugs.some((s) => !savedSet.has(s))
+
+  // Los servicios de los rubros elegidos, en orden de catálogo. Con más de un
+  // rubro, el nombre lleva el rubro adelante: "Frenos" de dos familias distintas
+  // no se distinguirían en el selector.
+  const serviceCoverage = new Map<string, number>()
+  for (const c of candidates) {
+    for (const s of c.matchedServices) serviceCoverage.set(s.slug, (serviceCoverage.get(s.slug) ?? 0) + 1)
+  }
+  const selectedFamilies = catalog.filter((f) => selectedSet.has(f.slug))
+  const serviceOptions = selectedFamilies.flatMap((f) =>
+    f.services.map((s) => ({
+      value: s.slug,
+      label: `${selectedFamilies.length > 1 ? `${f.name} · ` : ''}${s.name} (${serviceCoverage.get(s.slug) ?? 0})`,
+    })),
+  )
+  const serviceOptionSet = new Set(serviceOptions.map((o) => o.value))
+  const activeServiceFilter = serviceFilter.filter((slug) => serviceOptionSet.has(slug))
 
   // Mismo texto para todos los candidatos — sólo cambia el destinatario. Se
   // arma una vez acá, no por fila, y sin `responses`: la plantilla «red» no
@@ -174,6 +204,12 @@ export function PartnerCandidates({
   const visibleCandidates = candidates
     .filter((c) => {
       if (onlyFounding && c.tier !== 'founding') return false
+      if (
+        activeServiceFilter.length > 0 &&
+        !c.matchedServices.some((s) => activeServiceFilter.includes(s.slug))
+      ) {
+        return false
+      }
       if (zoneFilter.length === 0) return true
       const zone = c.coverageZone.toLowerCase()
       return zoneFilter.some((z) => zone.includes(z.toLowerCase()))
@@ -222,7 +258,7 @@ export function PartnerCandidates({
   const remote = visibleCandidates.filter((c) => isRemoteModality(c.modality))
   const local = visibleCandidates.filter((c) => !isRemoteModality(c.modality))
 
-  const zoneFilterActive = zoneFilter.length > 0 || onlyFounding
+  const filterActive = zoneFilter.length > 0 || onlyFounding || activeServiceFilter.length > 0
 
   return (
     <Card className="mb-4">
@@ -274,6 +310,23 @@ export function PartnerCandidates({
           <div className="space-y-4">
             {candidates.length > 0 ? (
               <div className="flex flex-wrap items-end gap-4">
+                {serviceOptions.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      Servicio
+                    </span>
+                    <MultiSelect
+                      label="Servicio"
+                      options={serviceOptions}
+                      selected={activeServiceFilter}
+                      onChange={setServiceFilter}
+                      placeholder="Todos los del rubro"
+                      searchPlaceholder="Buscar servicio…"
+                      className="w-64"
+                    />
+                  </div>
+                ) : null}
+
                 <div className="space-y-1.5">
                   <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Zona
@@ -348,7 +401,7 @@ export function PartnerCandidates({
               </p>
             ) : visibleCandidates.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Ningún candidato con este filtro{zoneFilterActive ? ' de zona / aliado' : ''}.
+                Ningún candidato con {filterActive ? 'estos filtros de servicio / zona / aliado' : 'este filtro'}.
               </p>
             ) : view === 'map' ? (
               <div className="space-y-2">

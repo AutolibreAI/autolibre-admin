@@ -92,6 +92,7 @@ export function GrowthChart({
   lines,
   lineMax,
   emptyMessage = 'Todavía no hay registros para graficar.',
+  summaryPrefix = '+',
 }: {
   buckets: Array<string>
   unit: GrowthUnit
@@ -102,6 +103,11 @@ export function GrowthChart({
   /** Escala fija de las líneas (por ejemplo 100 para un %). Si se omite, se usa el máximo observado. */
   lineMax?: number
   emptyMessage?: string
+  /**
+   * El signo del resumen de arriba. `+` para altas ("+12 en el último día");
+   * vacío para algo que no se suma de un período al otro (usuarios activos).
+   */
+  summaryPrefix?: '+' | ''
 }) {
   if (buckets.length === 0) {
     return (
@@ -169,7 +175,8 @@ export function GrowthChart({
       </div>
 
       <p className="mb-3 text-xs text-muted-foreground">
-        +{formatInt(current)} en el último {GROWTH_UNIT_SINGULAR[unit]}
+        {summaryPrefix}
+        {formatInt(current)} en el último {GROWTH_UNIT_SINGULAR[unit]}
         {resolvedLines.map((l) => {
           const v = l.values[l.values.length - 1]!
           return v === null ? null : (

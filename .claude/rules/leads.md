@@ -804,6 +804,16 @@ la misma clave semántica — un tercer nombre genérico repetiría la colisión
 está MIRANDO (no persiste nada); la precedencia es **el search param gana, si
 no está el default es el rubro guardado** en `ops.quote_request_rubro`.
 
+### Filtrar candidatos por servicio — desde el 2026-10-21, filtro de CLIENTE
+
+Un rubro es ancho («Motor» son una docena de servicios). El selector «Servicio» de
+`PartnerCandidates` ofrece los `services` del CATÁLOGO de los rubros elegidos —también los que no
+cubre nadie, con «(0)»: eso es un dato— y poda contra `matchedServices` de cada candidato, que ya
+venía del repo. Dentro del selector es O (cubre alguno), igual que los multiselect de
+`/partners/listado`. `useState`, sin search param, por el mismo motivo que zona (abajo). Al sacar un
+rubro, sus servicios dejan de filtrar solos (se intersecan con las opciones vigentes): un filtro
+invisible que vacía la lista es peor que perder la selección.
+
 ### Filtrar candidatos por zona y por aliado — desde el 2026-09-17, filtros de CLIENTE
 
 `.claude/plans/cambios-2026-09-17.md`, punto C. Al 2026-09-17, **0 de 48

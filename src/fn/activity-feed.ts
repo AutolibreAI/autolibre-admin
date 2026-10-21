@@ -1,9 +1,10 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 import { ACTIVITY_DETAIL_KINDS, activitySearchSchema } from '~/lib/activity-feed'
-import { findActivityEvent, listActivity } from '~/server/activity-feed.repo'
+import { activeUsersSeries, findActivityEvent, listActivity } from '~/server/activity-feed.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
+import { growthSearchSchema, type ActiveUsersSeries } from '~/lib/ops'
 import type { ActivityEvent, ActivityEventDetail } from '~/lib/activity-feed'
 
 /**
@@ -48,3 +49,15 @@ export const getAppActivityEvent = createServerFn({ method: 'GET' })
     if (!found) throw new Error(`NOT_FOUND:${data.activityId}`)
     return found
   })
+
+/**
+ * El gráfico «Usuarios activos» de `/metricas`. Mismo guard: es la cuenta de
+ * quién usó la app cada día, salida del mismo cruce que el feed.
+ */
+export const getActiveUsersSeries = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(growthSearchSchema)
+  .handler(
+    async ({ data }): Promise<ActiveUsersSeries> =>
+      activeUsersSeries(data.unit, { signal: requestSignal() }),
+  )

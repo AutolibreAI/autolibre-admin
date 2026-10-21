@@ -175,6 +175,34 @@ export interface OnboardingSeries {
   points: Array<OnboardingPoint>
 }
 
+// ── Usuarios activos por período (sección Crecimiento) ─────────────────────
+
+/**
+ * Cuántas personas reales usaron la app en cada período, partidas en dos capas
+ * que NO se suman sin decirlo:
+ *
+ *  - `withAction`: hicieron algo que quedó escrito ese día (las 16 ramas del
+ *    feed de `/actividad` + cada mensaje que le mandaron al asistente).
+ *  - `onlyOpened`: ese día no hicieron nada que quede escrito, pero el teléfono
+ *    refrescó su token push — la app lo re-registra al abrirse
+ *    (`expo_push_tokens.updated_at`).
+ *
+ * No existe un registro de "abrió la app" (relevado el 2026-10-21, base y
+ * backend). El token es lo más parecido, y guarda sólo la ÚLTIMA apertura por
+ * teléfono: hoy y ayer están casi completos, un día de hace un mes sólo cuenta
+ * a quien abrió y además hizo algo. La pantalla lo dice. → `metricas.md`
+ */
+export interface ActiveUsersPoint {
+  bucket: string
+  withAction: number
+  onlyOpened: number
+}
+
+export interface ActiveUsersSeries {
+  unit: GrowthUnit
+  points: Array<ActiveUsersPoint>
+}
+
 // ── Distribución de vehículos por usuario (tabla de /metricas) ───────────────
 
 /**
@@ -640,6 +668,11 @@ export const CANT_MEASURE_YET: ReadonlyArray<CantMeasureItem> = [
     question: 'Pedidos y búsqueda de proveedores desde el chat',
     why: '`assistant_proposal_type` tiene un solo valor: `maintenance`.',
     needs: 'Un valor nuevo en el enum del backend.',
+  },
+  {
+    question: 'Cuántas veces abre la app cada persona, y qué días',
+    why: 'Ninguna tabla registra una apertura. El refresh del token push (`expo_push_tokens.updated_at`) se acerca, pero guarda sólo la última por teléfono: el gráfico «Usuarios activos» es exacto para hoy y un piso para los días viejos.',
+    needs: 'Que la app informe cada apertura y el backend la guarde append-only (por ejemplo, `app_opens(user_id, opened_at, platform, app_version)`).',
   },
 ]
 

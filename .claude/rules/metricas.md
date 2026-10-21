@@ -473,3 +473,27 @@ valen lo mismo y nunca se suman sin decirlo (`~/lib/channels`). Sin `quote_reque
 "Usuarios reales" de la app como antes. Cuadre: el número grande = "Personas únicas" de la tabla de
 canales; el "N app" = "Usuarios reales".
 
+
+## Usuarios activos por período — desde el 2026-10-21
+
+`activeUsersSeries(unit)` en `activity-feed.repo.ts` (no en `ops.repo.ts`: reusa las ramas del feed),
+`getActiveUsersSeries` en `src/fn/activity-feed.ts`, primer gráfico de Crecimiento.
+
+**No existe un registro de "abrió la app"**, relevado el 2026-10-21 en la base y en el backend
+(`git grep` sobre `fc27d38`: ningún `last_seen`/`app_open`). `login_events` son los
+`session.created` de Clerk: un login, no una apertura — la sesión dura semanas. Lo que se grafica son
+personas reales distintas por período, en dos capas que no se mezclan:
+
+- **«Hicieron algo»**: las MISMAS 16 ramas de `BRANCHES` (se importan, no se recopian — si el feed y
+  este gráfico dijeran cosas distintas de qué es actividad, nada lo delataría) + cada mensaje del
+  usuario al asistente (la rama `chat` fecha la conversación, no los mensajes).
+- **«Sólo abrieron»**: ese período no hicieron nada que quede escrito, pero el teléfono renovó el
+  token push (`expo_push_tokens.updated_at`; la app lo re-registra al abrirse: 270 de 384 tokens
+  tienen `updated_at` posterior al alta). **Guarda sólo la ÚLTIMA apertura por teléfono**: la capa es
+  completa para los últimos días y casi vacía para los viejos. La pantalla lo dice, y está en
+  `CANT_MEASURE_YET` con lo que haría falta (que la app informe cada apertura, append-only).
+
+`bool_or(is_action)` por persona y período: alguien con las dos señales cuenta en «hicieron algo»,
+una sola vez. Con semana/mes es "activos en la semana", no la suma de los días. Sin cuentas internas
+(`INTERNAL_PREDICATE`). Cuadre (`tmp/probe-activos.mjs`, producción, 2026-10-21): hoy 29 usuarios
+reales con token renovado ⊆ 34 activos del gráfico.
