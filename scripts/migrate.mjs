@@ -194,7 +194,7 @@ function withoutUrlSslParams(url) {
 function readMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) return []
 
-  return fs
+  const migrations = fs
     .readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql') && !f.endsWith('.test.sql'))
     .sort()
@@ -236,6 +236,26 @@ function readMigrations() {
           .digest('hex'),
       }
     })
+
+  /**
+   * Dos archivos con el mismo número son la MISMA versión para
+   * `ops.schema_migrations`: el segundo nunca se aplica y el runner lo reporta
+   * como "cambió en disco" — un diagnóstico que manda a buscar una corrupción
+   * que no existe. Pasó el 2026-10-22 con dos `020_*` mergeadas desde ramas
+   * distintas, y rompió el deploy. Se corta acá, con el motivo real.
+   */
+  const byVersion = new Map()
+  for (const m of migrations) {
+    const prev = byVersion.get(m.version)
+    if (prev) {
+      throw new Error(
+        `Dos migraciones con la versión ${m.version}: "${prev}" y "${m.file}". ` +
+          'Renumerá la que NO está aplicada al próximo número libre.',
+      )
+    }
+    byVersion.set(m.version, m.file)
+  }
+  return migrations
 }
 
 /**

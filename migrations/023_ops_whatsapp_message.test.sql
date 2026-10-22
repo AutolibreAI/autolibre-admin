@@ -1,8 +1,8 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- Pruebas de la migración 020 (AUT-120: whatsapp_message en update_partner_application).
+-- Pruebas de la migración 023 (AUT-120: whatsapp_message en update_partner_application).
 --
 --   node .claude/skills/db-connect/query.mjs --allow-write \
---        --file migrations/020_ops_whatsapp_message.test.sql
+--        --file migrations/023_ops_whatsapp_message.test.sql
 --
 -- Empieza en BEGIN y termina en ROLLBACK, mismo patrón que la 010. No repite
 -- los guardrails de forma ni los casos de negocio ya cubiertos por el test de

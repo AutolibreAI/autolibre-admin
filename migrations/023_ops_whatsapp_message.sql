@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- 020 — Mensaje de WhatsApp en la edición de la solicitud (AUT-120).
+-- 023 — Mensaje de WhatsApp en la edición de la solicitud (AUT-120).
 --
 -- `ops.update_partner_application` (migración 010) ya maneja los campos de
 -- texto libre nullable con el mismo patrón (`nullif(btrim(coalesce(...)), '')`,
