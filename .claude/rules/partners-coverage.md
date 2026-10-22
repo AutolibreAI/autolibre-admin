@@ -12,6 +12,12 @@ El editor de rubros de la ficha (`/partners/$partnerId`) sigue en
 `.claude/rules/ops-write-actions.md`. Acá **no se escribe nada** — las dos
 pantallas son solo lectura.
 
+> **El tablero de cobertura se reemplazó el 2026-10-22** por el mapa de demanda contra oferta
+> → `.claude/rules/coverage-map.md`. Las secciones de abajo sobre el tablero (eje de zonas en
+> crudo, `categoryTotals`, huecos, punto único de falla, `coverageRubros`, la altura de las dos
+> cards) describen `partnerCoverageBoard()`, que sigue en el servidor pero ya no tiene pantalla.
+> Lo del listado sigue valiendo.
+
 ## `/partners` es un layout, no una pantalla
 
 Mismo patrón exacto que `/leads` y `/vehiculos`: `partners.tsx` es la barra de

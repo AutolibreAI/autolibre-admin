@@ -49,6 +49,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
+import { serviceRubro } from '~/lib/coverage-map'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
@@ -752,10 +753,13 @@ function UnsolvedTasksTable({ data }: { data: UnsolvedTasks }) {
                   <TableCell className="text-sm">
                     {r.kind === 'no_service' ? (
                       <span className="text-muted-foreground italic">(sin rubro)</span>
-                    ) : r.kind === 'no_partner' && r.categorySlug ? (
+                    ) : r.kind === 'no_partner' ? (
                       <Link
                         to="/partners/cobertura"
-                        search={{ coverageRubros: [r.categorySlug] }}
+                        search={{
+                          coverageView: 'tabla',
+                          coverageRubro: (r.serviceName && serviceRubro(r.serviceName)) || 'todos',
+                        }}
                         className="font-medium text-brand hover:underline"
                       >
                         {r.serviceName ?? r.serviceSlug}
