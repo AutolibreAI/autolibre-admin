@@ -1,4 +1,5 @@
 import '@tanstack/react-start/server-only'
+import { applicationLogoUrl } from '~/lib/application-logo'
 
 import { sql, sqlOne, withTransaction } from './db'
 import {
@@ -273,6 +274,7 @@ export async function listApplications(
 // ── Detalle ──────────────────────────────────────────────────────────────────
 
 interface DetailRow extends QueueRow {
+  logo_url: string | null
   brand_specialized: boolean
   declared_brands: Array<string>
   declared_fuel_types: Array<string>
@@ -303,6 +305,7 @@ export async function findApplication(
     `SELECT a.id, a.business_name, a.email, a.whatsapp, a.address, a.status,
             a.next_step, a.follow_up_date, a.declared_services, a.how_found,
             a.created_at,
+            a.raw_submission->>'logoUrl' AS logo_url,
             a.brand_specialized, a.declared_brands, a.declared_fuel_types,
             a.vehicle_types, a.service_other, a.how_found_other, a.contact_channel,
             a.whatsapp_message,
@@ -339,6 +342,7 @@ export async function findApplication(
     createdAt: row.created_at,
     alreadyPublished: row.already_published,
     resolved,
+    logoUrl: applicationLogoUrl(row.logo_url),
     brandSpecialized: row.brand_specialized,
     declaredBrands: row.declared_brands,
     declaredFuelTypes: row.declared_fuel_types,

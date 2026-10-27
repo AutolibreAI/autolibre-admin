@@ -14,6 +14,7 @@ import {
   updatePartnerApplicationStatus,
 } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { ApplicationLogo } from '~/components/ApplicationLogo'
 import { ApplicationEditor, type ApplicationDraft } from '~/components/ApplicationEditor'
 import { ApplicationStatusBadge } from '~/components/ApplicationStatusBadge'
 import { ResolvedServicesSummary } from '~/components/ResolvedServicesSummary'
@@ -79,6 +80,7 @@ function ApplicationDetailPage() {
 
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="min-w-0">
+          <ApplicationLogo key={app.logoUrl} url={app.logoUrl} name={app.businessName} />
           <ApplicationEditor app={app} catalog={catalog} onDraftChange={setDraft} />
         </div>
 
