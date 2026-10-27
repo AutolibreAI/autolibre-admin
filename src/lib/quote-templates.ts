@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
 import { formatAmount, formatQuoteAmount, type QuoteResponse } from '~/lib/quote-responses'
 import { formatDate } from '~/lib/format'
+import { partnerProfileUrl } from '~/lib/partners'
 
 /**
  * Plantillas de mensajes para la ficha de un pedido (`/leads/pedidos/:id`).
@@ -462,6 +463,10 @@ function responsesBlock(responses: ReadonlyArray<QuoteResponse>): string {
       if (r.address) lines.push(`📍 ${r.address}`)
       if (r.phone) lines.push(`📞 ${r.phone}`)
       if (r.hours) lines.push(`🕘 ${r.hours}`)
+      // El perfil público del taller en la web (pedido del 2026-10-27), para que
+      // la persona vea más del taller que lo que entra en el mensaje. Sólo con
+      // slug: un taller de afuera no tiene perfil, y uno pausado da 404.
+      if (r.partnerSlug) lines.push(`🔗 Perfil: ${partnerProfileUrl(r.partnerSlug)}`)
       const amount = formatQuoteAmount(r)
       if (amount) lines.push(`💵 ${amount}`)
       // El desglose (022): los obligatorios debajo del total que suman; los

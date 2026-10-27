@@ -329,6 +329,21 @@ export interface PartnerCandidate {
  */
 export const AR_WHATSAPP_PHONE = /^549\d{10}$/
 
+/**
+ * El perfil público de un partner en la web (`autolibre.ai/proveedores/<slug>`).
+ *
+ * El slug NO se deriva del nombre: lo asigna el backend en
+ * `public.partner_slugs` (drizzle 0107) y queda fijo aunque el partner se
+ * renombre, con sufijo si choca. Relevado el 2026-10-27: derivarlo del nombre
+ * acertaba 113 de 116 y fallaba feo en los otros tres — "La Esquina del
+ * Neumático (Olivos)" habría linkeado a la sucursal de Nordelta.
+ */
+export const PUBLIC_SITE_ORIGIN = 'https://autolibre.ai'
+
+export function partnerProfileUrl(slug: string): string {
+  return `${PUBLIC_SITE_ORIGIN}/proveedores/${encodeURIComponent(slug)}`
+}
+
 /** Sólo los dígitos, si el número YA está en la forma canónica. `null` si no se puede confiar. */
 export function canonicalWhatsAppDigits(phone: string): string | null {
   const digits = phone.replace(/\D/g, '')

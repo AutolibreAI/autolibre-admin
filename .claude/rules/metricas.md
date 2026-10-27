@@ -497,3 +497,14 @@ personas reales distintas por período, en dos capas que no se mezclan:
 una sola vez. Con semana/mes es "activos en la semana", no la suma de los días. Sin cuentas internas
 (`INTERNAL_PREDICATE`). Cuadre (`tmp/probe-activos.mjs`, producción, 2026-10-21): hoy 29 usuarios
 reales con token renovado ⊆ 34 activos del gráfico.
+
+## Orden y bloques plegados — desde el 2026-10-27
+
+Orden pedido, de arriba abajo: las 4 cards → Crecimiento (activos, usuarios, vehículos, partners,
+WhatsApp/web, y debajo «Altas con vehículo en el mismo proceso») → Personas por canal → Pedidos →
+«Más métricas». Todo lo de «Más métricas» va en `MetricBlock` (`<details>` nativo, cerrado por
+default, con un número de tamaño al lado del título): radicación, adopción por función, deuda por
+vehículo, recurrencia de escaneo, qué produce el chat, tareas sin solución, lo que no se puede medir
+y vehículos por usuario. `VehicleLocationSection` ya no trae título propio: lo pone el desplegable.
+
+Un bloque nuevo de tabla va adentro de «Más métricas» como `MetricBlock`, no como sección suelta.

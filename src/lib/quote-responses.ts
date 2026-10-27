@@ -106,6 +106,12 @@ export interface QuoteResponse {
   partnerStatus: string | null
   /** `partners.tier` actual. `null` para un taller de afuera. */
   partnerTier: string | null
+  /**
+   * El slug vigente de su perfil público (`partner_slugs.is_current`). `null`
+   * para un taller de afuera, un partner que no está `active` (la web no lo
+   * publica) o una base sin `partner_slugs`.
+   */
+  partnerSlug: string | null
   /** Los campos CRUDOS del taller de afuera, para sembrar el formulario. */
   providerName: string | null
   providerAddress: string | null

@@ -234,95 +234,11 @@ function QuoteRequestScreen() {
         }
       />
 
-      <QuoteTemplates detail={d} responses={responseRows} templates={templates} />
-
-      <Card className="mb-4">
-        <CardContent className="pt-6">
-          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Estado">
-              <QuoteStatusBadge status={d.status} />
-              {d.uncontacted ? (
-                <div className="mt-1 text-xs font-medium text-status-yellow">
-                  sin contactar hace {formatInt(d.ageHours)} h (lectura del reloj)
-                </div>
-              ) : null}
-            </Field>
-            <Field label="Propuestas devueltas">
-              <span className="text-sm tabular-nums">
-                {d.proposalsCount === null ? '—' : formatInt(d.proposalsCount)}
-              </span>
-            </Field>
-            {/*
-              Dos resultados y no uno: el del operador (le preguntó) y el que
-              declaró la persona desde la app. `null` del operador es "todavía no
-              se preguntó", que NO es "No respondió".
-            */}
-            <Field label="Resultado (operador)">
-              <span className="text-sm">
-                {d.outcome ? (
-                  quoteOutcomeLabel(d.outcome)
-                ) : (
-                  <span className="text-muted-foreground">Todavía no se preguntó</span>
-                )}
-              </span>
-            </Field>
-            <Field label="Resultado (usuario)">
-              <span className="text-sm">
-                {d.userOutcome ? (
-                  quoteUserOutcomeLabel(d.userOutcome)
-                ) : (
-                  <span className="text-muted-foreground">No declaró</span>
-                )}
-              </span>
-            </Field>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Las fotos del problema: las de la app y las que llegan por WhatsApp. */}
-      <QuoteRequestPhotos key={`photos-${d.id}`} quoteRequestId={d.id} data={photos} />
-
       {/*
-        Los presupuestos van ANTES de las acciones porque ése es el orden real
-        del trabajo: el operador llama a los talleres, carga lo que consiguió,
-        y recién ahí marca el pedido como respondido — que es el botón de la
-        tarjeta de abajo, y el único que escribe `proposals_count`.
+        Contacto, vehículo y pedido van ARRIBA de todo (pedido del 2026-10-27):
+        es lo que se mira antes de llamar, y abajo están los presupuestos y los
+        candidatos, que con varios talleres son una pantalla entera de scroll.
       */}
-      <QuoteResponses
-        key={`responses-${d.id}`}
-        quoteRequestId={d.id}
-        available={responses.available}
-        itemsAvailable={responses.available && responses.itemsAvailable}
-        responses={responseRows}
-        partners={partnerOptions}
-        proposalsCount={d.proposalsCount}
-        status={d.status}
-      />
-
-      {/* `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar. */}
-      <QuoteRequestActions
-        key={d.id}
-        quoteRequestId={d.id}
-        status={d.status}
-        closeReasonCode={d.closeReasonCode}
-        loadedProposals={responseRows.length}
-      />
-
-      <PartnerCandidates
-        key={d.id}
-        quoteRequestId={d.id}
-        publicNumber={d.publicNumber}
-        detail={d}
-        templates={templates}
-        pedidoHasLocation={quoteMapLocation(d) !== null}
-        catalog={catalog}
-        zones={zones}
-        savedCategorySlugs={d.rubroCategorySlugs}
-        selectedCategorySlugs={effectiveCategorySlugs}
-        candidates={candidates}
-        onChangeCategories={setQuoteRubros}
-      />
-
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardContent className="space-y-4 pt-6">
@@ -458,6 +374,95 @@ function QuoteRequestScreen() {
         lectura: no hay ningún botón acá.
       */}
       {d.vehicleId && vehicleProfile ? <QuoteVehicleProfileCard profile={vehicleProfile} /> : null}
+
+      <QuoteTemplates detail={d} responses={responseRows} templates={templates} />
+
+      <Card className="mb-4">
+        <CardContent className="pt-6">
+          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Estado">
+              <QuoteStatusBadge status={d.status} />
+              {d.uncontacted ? (
+                <div className="mt-1 text-xs font-medium text-status-yellow">
+                  sin contactar hace {formatInt(d.ageHours)} h (lectura del reloj)
+                </div>
+              ) : null}
+            </Field>
+            <Field label="Propuestas devueltas">
+              <span className="text-sm tabular-nums">
+                {d.proposalsCount === null ? '—' : formatInt(d.proposalsCount)}
+              </span>
+            </Field>
+            {/*
+              Dos resultados y no uno: el del operador (le preguntó) y el que
+              declaró la persona desde la app. `null` del operador es "todavía no
+              se preguntó", que NO es "No respondió".
+            */}
+            <Field label="Resultado (operador)">
+              <span className="text-sm">
+                {d.outcome ? (
+                  quoteOutcomeLabel(d.outcome)
+                ) : (
+                  <span className="text-muted-foreground">Todavía no se preguntó</span>
+                )}
+              </span>
+            </Field>
+            <Field label="Resultado (usuario)">
+              <span className="text-sm">
+                {d.userOutcome ? (
+                  quoteUserOutcomeLabel(d.userOutcome)
+                ) : (
+                  <span className="text-muted-foreground">No declaró</span>
+                )}
+              </span>
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Las fotos del problema: las de la app y las que llegan por WhatsApp. */}
+      <QuoteRequestPhotos key={`photos-${d.id}`} quoteRequestId={d.id} data={photos} />
+
+      {/*
+        Los presupuestos van ANTES de las acciones porque ése es el orden real
+        del trabajo: el operador llama a los talleres, carga lo que consiguió,
+        y recién ahí marca el pedido como respondido — que es el botón de la
+        tarjeta de abajo, y el único que escribe `proposals_count`.
+      */}
+      <QuoteResponses
+        key={`responses-${d.id}`}
+        quoteRequestId={d.id}
+        available={responses.available}
+        itemsAvailable={responses.available && responses.itemsAvailable}
+        responses={responseRows}
+        partners={partnerOptions}
+        proposalsCount={d.proposalsCount}
+        status={d.status}
+      />
+
+      {/* `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar. */}
+      <QuoteRequestActions
+        key={d.id}
+        quoteRequestId={d.id}
+        status={d.status}
+        closeReasonCode={d.closeReasonCode}
+        loadedProposals={responseRows.length}
+      />
+
+      <PartnerCandidates
+        key={d.id}
+        quoteRequestId={d.id}
+        publicNumber={d.publicNumber}
+        detail={d}
+        templates={templates}
+        pedidoHasLocation={quoteMapLocation(d) !== null}
+        catalog={catalog}
+        zones={zones}
+        savedCategorySlugs={d.rubroCategorySlugs}
+        selectedCategorySlugs={effectiveCategorySlugs}
+        candidates={candidates}
+        onChangeCategories={setQuoteRubros}
+      />
 
       <div className="mb-4 grid gap-4 lg:grid-cols-2">
         <Card>

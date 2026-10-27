@@ -35,6 +35,7 @@ import { cn } from '~/lib/utils'
  *
  * → `.claude/rules/vehicle-location.md`
  */
+/** Sin título propio: lo pone el desplegable de `/metricas`. */
 export function VehicleLocationSection({ data }: { data: VehicleLocationBreakdown }) {
   const sum = (rows: Array<LocationBreakdownRow>) => ({
     vehicles: rows.reduce((n, r) => n + r.vehicles, 0),
@@ -59,8 +60,7 @@ export function VehicleLocationSection({ data }: { data: VehicleLocationBreakdow
   const pct = (n: number, d: number) => (d === 0 ? null : (n / d) * 100)
 
   return (
-    <section className="mt-8">
-      <h2 className="mb-1 font-heading text-base font-semibold">Dónde están radicados</h2>
+    <div>
       <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
         {formatInt(data.totalVehicles)} autos activos de usuarios reales ·{' '}
         {formatInt(data.totalUniquePlates)} patentes únicas. Es el domicilio del
@@ -181,7 +181,7 @@ export function VehicleLocationSection({ data }: { data: VehicleLocationBreakdow
           </ul>
         </div>
       ) : null}
-    </section>
+    </div>
   )
 }
 

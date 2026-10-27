@@ -1,4 +1,6 @@
+import type { ReactNode } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { ChevronRight } from 'lucide-react'
 import {
   CANT_MEASURE_YET,
   GROWTH_UNITS,
@@ -142,19 +144,18 @@ export const Route = createFileRoute('/_authed/metricas')({
 /**
  * Métricas — el estado y la evolución del producto en números.
  *
- * De arriba abajo:
- *  1. Las 4 cards del pulso (idénticas a Inicio): usuarios, vehículos, partners,
- *     leads. Comparten `PulseRow` — si se ven distintas, una está mal.
- *  1b. Dónde están radicados los autos (`VehicleLocationSection`): AMBA,
- *     resto de PBA, interior — `.claude/rules/vehicle-location.md`.
- *  2. `Preguntas`: los bloques que contestan (o dicen por qué no se puede
- *     contestar) preguntas de producto. Adopción por función, deuda de patente
- *     y multas por vehículo (grano distinto: es el auto, no el usuario, y el %
- *     es sobre los consultados), recurrencia de escaneo, qué produce el chat,
- *     tareas sin solución, y un bloque ámbar con lo que todavía no se puede
- *     medir.
- *  3. Crecimiento: altas de `users`/`vehicles` por período + la distribución de
- *     autos por usuario. Es lo que Inicio no muestra: la curva, no el snapshot.
+ * De arriba abajo (orden pedido el 2026-10-27):
+ *  1. Las 4 cards del pulso. `PulseRow`.
+ *  2. Crecimiento: usuarios activos, altas de usuarios/vehículos/partners y
+ *     personas por WhatsApp/web, y debajo las altas con vehículo en el mismo
+ *     proceso.
+ *  3. Personas por canal.
+ *  4. Pedidos: las cuatro series de `quoteRequestSeries`.
+ *  5. «Más métricas», cada bloque PLEGADO (`MetricBlock`): radicación
+ *     (`.claude/rules/vehicle-location.md`), adopción por función, deuda de
+ *     patente y multas por vehículo, recurrencia de escaneo, qué produce el
+ *     chat, tareas sin solución, lo que todavía no se puede medir, y vehículos
+ *     por usuario.
  *
  * Los números excluyen las cuentas internas / E2E, igual que "Usuarios reales"
  * en Inicio.
@@ -193,24 +194,6 @@ function MetricasPage() {
       />
 
       <PulseRow pulse={pulse} channels={channels} />
-
-      <VehicleLocationSection data={locations} />
-
-      <section className="mt-8">
-        <h2 className="font-heading text-base font-semibold">Preguntas</h2>
-        <p className="mt-1 mb-2 max-w-3xl text-xs leading-relaxed text-muted-foreground">
-          Qué funciones usa la gente, cada cuánto vuelve, qué produce el chat y a
-          qué tareas no le podemos ofrecer un taller. El último bloque —ámbar— es
-          lo que todavía no se puede medir desde acá.
-        </p>
-
-        <AdoptionTable data={usage} />
-        <VehicleDebtTable data={debts} />
-        <ScanRecurrenceTable data={recurrence} />
-        <ProposalStatsBlock data={proposals} />
-        <UnsolvedTasksTable data={unsolved} />
-        <CantMeasureYetBlock />
-      </section>
 
       <section className="mt-8">
         <h2 className="mb-3 font-heading text-base font-semibold">Crecimiento</h2>
@@ -302,10 +285,6 @@ function MetricasPage() {
           />
         </div>
 
-        <ChannelPeopleTable data={channels} />
-
-        <OnboardingChart data={onboarding} />
-
         <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
           Las barras son las altas de cada período; la línea (default) es el
           acumulado. El total de vehículos cuenta los registros históricos
@@ -318,135 +297,210 @@ function MetricasPage() {
           en hora de Buenos Aires, no UTC — un alta de las 22 h local cae en su
           propio día, no en el siguiente.
         </p>
+
+        <OnboardingChart data={onboarding} />
       </section>
+
+      <ChannelPeopleTable data={channels} />
 
       <QuoteRequestsSection data={quoteSeries} unit={series.unit} />
 
-      <section className="mt-8">
-        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-          <h2 className="font-heading text-base font-semibold">Vehículos por usuario</h2>
-          <FilterGroup label="Contar">
-            {VEHICLE_DIST_SCOPES.map((s) => (
-              <Chip key={s} active={distribution.scope === s} onClick={() => setScope(s)}>
-                {VEHICLE_DIST_SCOPE_LABELS[s]}
-              </Chip>
-            ))}
-          </FilterGroup>
-        </div>
-
-        <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-          Cuántos usuarios reales tienen 0, 1, 2… autos.{' '}
-          {formatInt(distribution.totalUsers)} usuarios ·{' '}
-          {formatInt(distribution.totalFleet)} autos en total. «Autos en el
-          segmento» es cantidad × usuarios; «% de la flota» es qué porción del
-          padrón concentra ese segmento.
+      {/*
+        Todo lo de acá abajo va plegado: son tablas de consulta, no de lectura
+        diaria. `<details>` nativo, cerrado por default — mismo criterio que
+        «Más filtros» de `/vehiculos/listado`.
+      */}
+      <section className="mt-10">
+        <h2 className="font-heading text-base font-semibold">Más métricas</h2>
+        <p className="mt-1 mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+          Dónde están los autos, qué funciones usa la gente, cada cuánto vuelve, qué
+          produce el chat y a qué tareas no le podemos ofrecer un taller. Tocá un
+          título para desplegarlo.
         </p>
 
-        {distribution.buckets.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
-            Todavía no hay usuarios reales para contar.
-          </p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <SortHeader
-                    label="Vehículos"
-                    sortKey="vehicles"
-                    active={search.sort === 'vehicles'}
-                    dir={search.dir}
-                    to="/metricas"
-                    align="right"
-                    firstClick="asc"
-                  />
-                  <SortHeader
-                    label="Usuarios"
-                    sortKey="users"
-                    active={search.sort === 'users'}
-                    dir={search.dir}
-                    to="/metricas"
-                    align="right"
-                    firstClick="desc"
-                  />
-                  <SortHeader
-                    label="% de usuarios"
-                    sortKey="pctUsers"
-                    active={search.sort === 'pctUsers'}
-                    dir={search.dir}
-                    to="/metricas"
-                    align="right"
-                    firstClick="desc"
-                  />
-                  <SortHeader
-                    label="Autos en el segmento"
-                    sortKey="segmentVehicles"
-                    active={search.sort === 'segmentVehicles'}
-                    dir={search.dir}
-                    to="/metricas"
-                    align="right"
-                    firstClick="desc"
-                  />
-                  <SortHeader
-                    label="% de la flota"
-                    sortKey="pctFleet"
-                    active={search.sort === 'pctFleet'}
-                    dir={search.dir}
-                    to="/metricas"
-                    align="right"
-                    firstClick="desc"
-                  />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {distribution.buckets.map((b) => (
-                  <TableRow key={b.vehicles}>
-                    <TableCell className="text-right font-medium tabular-nums">
-                      {formatInt(b.vehicles)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatInt(b.users)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {b.pctUsers.toFixed(1)}%
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatInt(b.segmentVehicles)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {b.pctFleet.toFixed(1)}%
-                    </TableCell>
-                  </TableRow>
+        <div className="space-y-2">
+          <MetricBlock
+            title="Dónde están radicados"
+            hint={`${formatInt(locations.totalVehicles)} autos activos`}
+          >
+            <VehicleLocationSection data={locations} />
+          </MetricBlock>
+          <AdoptionTable data={usage} />
+          <VehicleDebtTable data={debts} />
+          <ScanRecurrenceTable data={recurrence} />
+          <ProposalStatsBlock data={proposals} />
+          <UnsolvedTasksTable data={unsolved} />
+          <CantMeasureYetBlock />
+          <MetricBlock
+            title="Vehículos por usuario"
+            hint={`${formatInt(distribution.totalUsers)} usuarios · ${formatInt(distribution.totalFleet)} autos`}
+          >
+            <div className="mb-3">
+              <FilterGroup label="Contar">
+                {VEHICLE_DIST_SCOPES.map((s) => (
+                  <Chip key={s} active={distribution.scope === s} onClick={() => setScope(s)}>
+                    {VEHICLE_DIST_SCOPE_LABELS[s]}
+                  </Chip>
                 ))}
-              </TableBody>
-              {/*
-                El pie cuadra la tabla: usuarios suma el total, los dos % dan 100,
-                y «autos en el segmento» suma el padrón. Si una columna no cierra,
-                el filtro o el cálculo está mal — mismo criterio que la columna
-                `users` de la tabla de dominios excluidos.
-              */}
-              <TableFooter>
-                <TableRow>
-                  <TableCell className="text-right text-muted-foreground">Total</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatInt(distribution.totalUsers)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    100,0%
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatInt(distribution.totalFleet)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {distribution.totalFleet === 0 ? '0,0%' : '100,0%'}
-                  </TableCell>
-                </TableRow>
-              </TableFooter>
-            </Table>
-          </div>
-        )}
+              </FilterGroup>
+            </div>
+
+            <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+              Cuántos usuarios reales tienen 0, 1, 2… autos.{' '}
+              {formatInt(distribution.totalUsers)} usuarios ·{' '}
+              {formatInt(distribution.totalFleet)} autos en total. «Autos en el
+              segmento» es cantidad × usuarios; «% de la flota» es qué porción del
+              padrón concentra ese segmento.
+            </p>
+
+            {distribution.buckets.length === 0 ? (
+              <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+                Todavía no hay usuarios reales para contar.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-border bg-card">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <SortHeader
+                        label="Vehículos"
+                        sortKey="vehicles"
+                        active={search.sort === 'vehicles'}
+                        dir={search.dir}
+                        to="/metricas"
+                        align="right"
+                        firstClick="asc"
+                      />
+                      <SortHeader
+                        label="Usuarios"
+                        sortKey="users"
+                        active={search.sort === 'users'}
+                        dir={search.dir}
+                        to="/metricas"
+                        align="right"
+                        firstClick="desc"
+                      />
+                      <SortHeader
+                        label="% de usuarios"
+                        sortKey="pctUsers"
+                        active={search.sort === 'pctUsers'}
+                        dir={search.dir}
+                        to="/metricas"
+                        align="right"
+                        firstClick="desc"
+                      />
+                      <SortHeader
+                        label="Autos en el segmento"
+                        sortKey="segmentVehicles"
+                        active={search.sort === 'segmentVehicles'}
+                        dir={search.dir}
+                        to="/metricas"
+                        align="right"
+                        firstClick="desc"
+                      />
+                      <SortHeader
+                        label="% de la flota"
+                        sortKey="pctFleet"
+                        active={search.sort === 'pctFleet'}
+                        dir={search.dir}
+                        to="/metricas"
+                        align="right"
+                        firstClick="desc"
+                      />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {distribution.buckets.map((b) => (
+                      <TableRow key={b.vehicles}>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {formatInt(b.vehicles)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatInt(b.users)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {b.pctUsers.toFixed(1)}%
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatInt(b.segmentVehicles)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {b.pctFleet.toFixed(1)}%
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                  {/*
+                    El pie cuadra la tabla: usuarios suma el total, los dos % dan 100,
+                    y «autos en el segmento» suma el padrón. Si una columna no cierra,
+                    el filtro o el cálculo está mal — mismo criterio que la columna
+                    `users` de la tabla de dominios excluidos.
+                  */}
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell className="text-right text-muted-foreground">Total</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatInt(distribution.totalUsers)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        100,0%
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatInt(distribution.totalFleet)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {distribution.totalFleet === 0 ? '0,0%' : '100,0%'}
+                      </TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </div>
+            )}
+          </MetricBlock>
+        </div>
       </section>
     </>
+  )
+}
+
+/**
+ * Un bloque plegable de «Más métricas». `<details>` nativo: abre y cierra sin
+ * estado de React, anda con teclado, y el contenido igual se renderiza (las
+ * consultas ya vinieron en el loader). `hint` es el número que dice de qué
+ * tamaño es el bloque sin abrirlo.
+ */
+function MetricBlock({
+  title,
+  hint,
+  tone,
+  children,
+}: {
+  title: string
+  hint?: string
+  tone?: 'warn'
+  children: ReactNode
+}) {
+  return (
+    <details
+      className={cn(
+        'group rounded-lg border bg-card',
+        tone === 'warn' ? 'border-status-yellow/40' : 'border-border',
+      )}
+    >
+      <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg px-4 py-3 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          aria-hidden
+          className="size-4 shrink-0 self-center text-muted-foreground transition-transform group-open:rotate-90"
+        />
+        <span
+          className={cn('font-heading text-sm font-semibold', tone === 'warn' && 'text-status-yellow')}
+        >
+          {title}
+        </span>
+        {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
+      </summary>
+      <div className="border-t border-border px-4 py-4">{children}</div>
+    </details>
   )
 }
 
@@ -466,8 +520,7 @@ function AdoptionTable({ data }: { data: UsageAdoption }) {
   const rows = [...data.features].sort((a, b) => b.pct - a.pct)
 
   return (
-    <section className="mt-6">
-      <h3 className="mb-1 font-heading text-sm font-semibold">Adopción por función</h3>
+    <MetricBlock title="Adopción por función" hint={`sobre ${formatInt(data.totalUsers)} usuarios reales`}>
       <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
         Sobre {formatInt(data.totalUsers)} usuarios reales (cuentas internas de
         test excluidas). Cada fila cuenta a los usuarios que usaron esa función al
@@ -511,7 +564,7 @@ function AdoptionTable({ data }: { data: UsageAdoption }) {
           </Table>
         </div>
       )}
-    </section>
+    </MetricBlock>
   )
 }
 
@@ -527,10 +580,7 @@ function AdoptionTable({ data }: { data: UsageAdoption }) {
  */
 function VehicleDebtTable({ data }: { data: VehicleDebtAdoption }) {
   return (
-    <section className="mt-8">
-      <h3 className="mb-1 font-heading text-sm font-semibold">
-        Deuda de patente y de multas
-      </h3>
+    <MetricBlock title="Deuda de patente y de multas" hint="por vehículo consultado">
       <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
         Grano = vehículo, no usuario. El % es sobre los autos a los que se les
         consultó esa deuda, no sobre el padrón entero.
@@ -564,7 +614,7 @@ function VehicleDebtTable({ data }: { data: VehicleDebtAdoption }) {
           </TableBody>
         </Table>
       </div>
-    </section>
+    </MetricBlock>
   )
 }
 
@@ -578,8 +628,10 @@ function VehicleDebtTable({ data }: { data: VehicleDebtAdoption }) {
  */
 function ScanRecurrenceTable({ data }: { data: ScanRecurrence }) {
   return (
-    <section className="mt-8">
-      <h3 className="mb-1 font-heading text-sm font-semibold">Recurrencia de escaneo</h3>
+    <MetricBlock
+      title="Recurrencia de escaneo"
+      hint={`${formatInt(data.totalUsers)} usuarios · ${formatInt(data.totalSessions)} sesiones`}
+    >
       <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
         {formatInt(data.totalUsers)} usuarios escanearon alguna vez ·{' '}
         {formatInt(data.totalSessions)} sesiones en total. «Días» es el lapso entre
@@ -628,7 +680,7 @@ function ScanRecurrenceTable({ data }: { data: ScanRecurrence }) {
           </Table>
         </div>
       )}
-    </section>
+    </MetricBlock>
   )
 }
 
@@ -645,8 +697,10 @@ function ProposalStatsBlock({ data }: { data: ProposalStats }) {
   const onlyMaintenance = data.types.length === 1 && data.types[0] === 'maintenance'
 
   return (
-    <section className="mt-8">
-      <h3 className="mb-1 font-heading text-sm font-semibold">Qué produce el chat</h3>
+    <MetricBlock
+      title="Qué produce el chat"
+      hint={`${formatInt(data.total)} propuesta${data.total === 1 ? '' : 's'}`}
+    >
       <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
         {formatInt(data.total)} propuesta{data.total === 1 ? '' : 's'} del asistente.{' '}
         {onlyMaintenance ? (
@@ -702,7 +756,7 @@ function ProposalStatsBlock({ data }: { data: ProposalStats }) {
           </Table>
         </div>
       )}
-    </section>
+    </MetricBlock>
   )
 }
 
@@ -722,8 +776,7 @@ const UNSOLVED_KIND_LABEL: Record<UnsolvedTasks['rows'][number]['kind'], string>
  */
 function UnsolvedTasksTable({ data }: { data: UnsolvedTasks }) {
   return (
-    <section className="mt-8">
-      <h3 className="mb-1 font-heading text-sm font-semibold">Tareas sin solución</h3>
+    <MetricBlock title="Tareas sin solución" hint={`${formatInt(data.totalTasks)} tareas creadas a mano`}>
       <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
         Tareas que el usuario creó a mano (no las autogeneró un plan). «La app no
         lo clasificó» es un bug de la app; «sin taller en la red» es un hueco del
@@ -815,7 +868,7 @@ function UnsolvedTasksTable({ data }: { data: UnsolvedTasks }) {
           </Table>
         </div>
       )}
-    </section>
+    </MetricBlock>
   )
 }
 
@@ -827,12 +880,13 @@ function UnsolvedTasksTable({ data }: { data: UnsolvedTasks }) {
  */
 function CantMeasureYetBlock() {
   return (
-    <section className="mt-8">
-      <div className="rounded-lg border border-status-yellow/40 bg-status-yellow-bg p-4">
-        <h3 className="text-sm font-semibold text-status-yellow">
-          Lo que todavía no se puede medir
-        </h3>
-        <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">
+    <MetricBlock
+      title="Lo que todavía no se puede medir"
+      hint={`${CANT_MEASURE_YET.length} preguntas`}
+      tone="warn"
+    >
+      <div className="rounded-lg bg-status-yellow-bg p-4">
+        <p className="max-w-3xl text-xs text-muted-foreground">
           Cuatro de las nueve preguntas necesitan que el backend escriba un dato
           que hoy no persiste. No se resuelven inventando un proxy — mismo criterio
           que la medición de tokens de IA y los clicks de WhatsApp a partners.
@@ -853,7 +907,7 @@ function CantMeasureYetBlock() {
           ))}
         </ul>
       </div>
-    </section>
+    </MetricBlock>
   )
 }
 
@@ -1061,8 +1115,8 @@ function ChannelPeopleTable({ data }: { data: ChannelPeople }) {
   const total = data.appUsers + data.whatsappOnly + data.webOnly
 
   return (
-    <section className="mt-6">
-      <h3 className="mb-1 font-heading text-sm font-semibold">Personas por canal</h3>
+    <section className="mt-8">
+      <h2 className="mb-1 font-heading text-base font-semibold">Personas por canal</h2>
       <p className="mb-3 max-w-3xl text-xs leading-relaxed text-muted-foreground">
         Una persona de WhatsApp o web es un teléfono o un email de sus pedidos de
         presupuesto (sin los cerrados como duplicado o prueba). Si después pidió

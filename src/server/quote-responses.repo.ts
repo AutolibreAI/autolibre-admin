@@ -87,6 +87,28 @@ export async function quoteResponseItemsAvailable(): Promise<boolean> {
   return row?.ok === true
 }
 
+/**
+ * ¿Existe `public.partner_slugs`? Es del BACKEND (drizzle 0107), así que una
+ * base que no la migró todavía no la tiene. Mismo motivo que el guard de la
+ * 022: nombrarla en el SELECT sin que exista explota al planificarse.
+ */
+async function partnerSlugsAvailable(): Promise<boolean> {
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.partner_slugs') is not null as ok`,
+  )
+  return row?.ok === true
+}
+
+/**
+ * El slug VIGENTE del perfil público, sólo para un partner `active`: la web no
+ * publica pausados ni archivados, y un link a un perfil que da 404 en un
+ * mensaje a la persona es peor que no mandarlo. Subconsulta escalar: el índice
+ * único parcial `idx_partner_slugs_current_unique` garantiza una sola fila.
+ */
+const PARTNER_SLUG_COLUMN = `case when p.status = 'active' then (
+    select ps.slug from partner_slugs ps where ps.partner_id = p.id and ps.is_current
+  ) end as partner_slug`
+
 /** `jsonb` llega parseado de `pg`; un `to_jsonb` anidado, también. Defensivo con cualquier otra forma. */
 function toItems(v: unknown): Array<QuoteResponseItem> {
   const raw: unknown = typeof v === 'string' ? JSON.parse(v) : v
@@ -109,6 +131,7 @@ interface ResponseRow {
   partner_id: string | null
   partner_status: string | null
   partner_tier: string | null
+  partner_slug: string | null
   provider_name: string | null
   provider_address: string | null
   provider_phone: string | null
@@ -148,8 +171,9 @@ interface ResponseRow {
  * booleano distinto del que mandó el servidor, o sea un mismatch de
  * hidratación por fila. Mismo patrón que `age_minutes` en `/actividad`.
  */
-const selectColumns = (itemsAvailable: boolean): string => `
+const selectColumns = (itemsAvailable: boolean, slugsAvailable: boolean): string => `
   ${itemsAvailable ? 'r.items' : 'null::jsonb as items'},
+  ${slugsAvailable ? PARTNER_SLUG_COLUMN : 'null::text as partner_slug'},
   r.id,
   r.quote_request_id,
   r.position,
@@ -181,6 +205,7 @@ function mapRow(r: ResponseRow): QuoteResponse {
     partnerId: r.partner_id,
     partnerStatus: r.partner_status,
     partnerTier: r.partner_tier,
+    partnerSlug: r.partner_slug,
     providerName: r.provider_name,
     providerAddress: r.provider_address,
     providerPhone: r.provider_phone,
@@ -219,9 +244,12 @@ export async function listQuoteResponses(
 ): Promise<Array<QuoteResponse>> {
   void opts.signal
 
-  const itemsAvailable = await quoteResponseItemsAvailable()
+  const [itemsAvailable, slugsAvailable] = await Promise.all([
+    quoteResponseItemsAvailable(),
+    partnerSlugsAvailable(),
+  ])
   const rows = await sql<ResponseRow>(
-    `select ${selectColumns(itemsAvailable)}
+    `select ${selectColumns(itemsAvailable, slugsAvailable)}
        from ops.quote_request_response r
        left join partners p on p.id = r.partner_id
       where r.quote_request_id = $1
@@ -258,6 +286,7 @@ function fromSp(row: SpRow | null): QuoteResponse {
     ...row.r,
     partner_status: null,
     partner_tier: null,
+    partner_slug: null,
     resolved_name: row.r.provider_name ?? '(taller del directorio)',
     resolved_address: row.r.provider_address,
     resolved_phone: row.r.provider_phone,

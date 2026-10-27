@@ -1428,3 +1428,16 @@ contradecirse.
 - Un monto guardado vuelve al input con coma decimal (`amountToInput`): `parseAmount` lee el punto
   como separador de miles, y `String(60000.5)` se habría leído como 600005.
 
+
+### Cambios del 2026-10-27
+
+- **La ficha arranca con Contacto · Vehículo · Pedido** (y la tarjeta del vehículo vinculado),
+  arriba de las plantillas, los presupuestos y los candidatos — que con varios talleres son una
+  pantalla entera de scroll.
+- **El mensaje «Presupuestos» suma `🔗 Perfil: https://autolibre.ai/proveedores/<slug>`** por cada
+  taller del directorio. El slug se LEE de `public.partner_slugs` (backend, drizzle 0107,
+  `is_current`), nunca se deriva del nombre: queda fijo aunque el partner se renombre y lleva sufijo
+  si choca (`asistir24-2`, `la-esquina-del-neumatico-2` es Olivos). Derivarlo del nombre fallaba 3 de
+  116, y uno de esos mandaba a la persona a otra sucursal. Sólo partners `active` (la web no publica
+  los demás); un taller de afuera no tiene renglón. Sin `partner_slugs` en la base, no hay renglón
+  (guard con `to_regclass`). La URL base es `PUBLIC_SITE_ORIGIN` en `~/lib/partners`.
