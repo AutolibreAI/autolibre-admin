@@ -818,6 +818,11 @@ lo manda el operador por WhatsApp a mano. Así que no hay dos verdades que
 sincronizar — hay una, y es la nuestra. Ése es el hecho que hace correcta la
 decisión, y el que hay que volver a chequear si cambia.
 
+> **⚠ Corregido el 2026-10-26**: con 0120–0122 del backend, `quote_request_proposals` SÍ se lee
+> (la app la muestra a la persona) y el panel la escribe por HTTP. El párrafo de arriba y el
+> backfill de abajo quedaron viejos: el backfill no se corre (exige `send_id`/`position` y no
+> avisaría a nadie). Las dos tablas conviven → `.claude/rules/quote-proposals.md`.
+
 ### El camino de vuelta, escrito para que no se pierda
 
 El `INSERT … SELECT` del backfill está en la cabecera de la migración. Las

@@ -77,10 +77,13 @@ export function QuoteTemplates({
   detail,
   responses,
   templates,
+  hasAppSends = false,
 }: {
   detail: QuoteRequestDetail
   responses: Array<QuoteResponse>
   templates: Array<QuoteMessageTemplate>
+  /** Hubo envíos por «Propuestas en la app»: la persona ya pudo haber recibido esto. */
+  hasAppSends?: boolean
 }) {
   const router = useRouter()
   const [activeId, setActiveId] = useState(templates[0]?.id)
@@ -174,6 +177,18 @@ export function QuoteTemplates({
               </button>
             ))}
           </nav>
+        ) : null}
+
+        {/*
+          Aviso, no bloqueo: con cuenta y envíos por la app, la persona ya vio
+          propuestas ahí, y repetírselas por WhatsApp puede confundir. Copiar y
+          el botón siguen activos — el operador decide.
+        */}
+        {active.id === 'presupuestos' && hasAppSends && detail.userId !== null ? (
+          <p className="mb-3 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
+            A esta persona ya le llegaron propuestas por la app. Si le mandás este mensaje, asegurate de que no repita
+            (o contradiga) lo que ya ve ahí.
+          </p>
         ) : null}
 
         {active.id === 'presupuestos' && expired.length > 0 ? (

@@ -286,6 +286,12 @@ export interface PartnerOption {
   name: string
   coverageZone: string
   tier: string
+  /**
+   * Tiene ALGO cargado en `partners.whatsapp`. Es un aviso blando para
+   * «Propuestas en la app»: el backend exige un celular que normalice
+   * (`QUOTE_PROPOSAL_PARTNER_WITHOUT_WHATSAPP`), y acá sólo se ve si falta.
+   */
+  hasWhatsapp: boolean
 }
 
 export interface PartnerCandidate {
