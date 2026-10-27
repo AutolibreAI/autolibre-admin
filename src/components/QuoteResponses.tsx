@@ -1,10 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import { ArrowDown, ArrowUp, Check, ChevronDown, Pencil, Plus, Receipt, Trash2, X } from 'lucide-react'
-import { normalizeForMatch } from '~/lib/catalog'
+import { ArrowDown, ArrowUp, Check, Pencil, Plus, Receipt, Trash2, X } from 'lucide-react'
 import {
-  MAX_QUOTE_AMOUNT,
-  MAX_QUOTE_ITEMS,
   QUOTE_CURRENCIES,
   formatAmount,
   formatQuoteAmount,
@@ -14,6 +11,7 @@ import {
   type QuoteCurrency,
   type QuoteResponse,
 } from '~/lib/quote-responses'
+import { amountToInput, newItemKey, readAmounts, readItems, type ItemDraft } from '~/lib/amounts'
 import { splitQuoteResponsesForMessage } from '~/lib/quote-templates'
 import {
   addQuoteResponseFn,
@@ -21,6 +19,7 @@ import {
   reorderQuoteResponsesFn,
   updateQuoteResponseFn,
 } from '~/fn/quote-responses'
+import { Hint, ItemsEditor, ItemsSummary, PartnerCombobox } from '~/components/QuoteContentFields'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
@@ -81,20 +80,6 @@ interface FormState {
   items: Array<ItemDraft>
 }
 
-interface ItemDraft {
-  /** Sólo para la `key` de React: los ítems no tienen id en la base. */
-  key: string
-  label: string
-  amount: string
-  optional: boolean
-}
-
-let itemSeq = 0
-const newItemKey = (): string => `item-${++itemSeq}`
-
-/** Un número guardado, de vuelta al formato que lee `parseAmount` (coma decimal, sin miles). */
-const amountToInput = (n: number): string => String(n).replace('.', ',')
-
 function emptyForm(): FormState {
   return {
     partnerId: NO_PARTNER,
@@ -139,59 +124,6 @@ function formFrom(r: QuoteResponse): FormState {
   }
 }
 
-/**
- * Los ítems tipeados, ya leídos. `invalid` = alguno sin descripción o con un
- * precio que no es un número: no se puede guardar, y el formulario dice cuál.
- */
-function readItems(f: FormState): {
-  items: Array<{ label: string; amount: number; optional: boolean }>
-  invalid: boolean
-} {
-  let invalid = false
-  const items = f.items.map((it) => {
-    const amount = parseAmount(it.amount.trim())
-    if (it.label.trim() === '' || amount === null) invalid = true
-    return { label: it.label.trim(), amount: amount ?? 0, optional: it.optional }
-  })
-  return { items, invalid }
-}
-
-/**
- * Lee un monto tipeado en castellano rioplatense: `180.000` son ciento ochenta
- * mil, `180,50` son ciento ochenta con cincuenta. El punto es separador de
- * miles y la coma es decimal — al revés que el default de `Number()`, que
- * leería `180.000` como ciento ochenta.
- *
- * `0` es un valor VÁLIDO y significa "sin cargo"; el vacío es "no pasó
- * precio", y de eso se ocupa el llamador, no esta función.
- */
-function parseAmount(raw: string): number | null {
-  const cleaned = raw.replace(/[\s.]/g, '').replace(',', '.')
-  if (cleaned === '' || !/^\d+(\.\d+)?$/.test(cleaned)) return null
-  const n = Number(cleaned)
-  return Number.isFinite(n) && n >= 0 && n <= MAX_QUOTE_AMOUNT ? n : null
-}
-
-/**
- * Las dos puntas del precio, o `undefined` en las dos si el taller no pasó
- * ninguno. `invalid` separa "no cargó precio" (válido) de "cargó algo que no
- * es un precio" (hay que avisar).
- */
-function readAmounts(f: FormState): { min?: number; max?: number; invalid: boolean } {
-  const rawMin = f.amountMin.trim()
-  const rawMax = f.amountMax.trim()
-  if (rawMin === '' && rawMax === '') return { invalid: false }
-  // "Hasta" sin "desde" no es un rango ni un precio cerrado: falta la punta
-  // que la base necesita para las dos columnas.
-  if (rawMin === '') return { invalid: true }
-  const min = parseAmount(rawMin)
-  if (min === null) return { invalid: true }
-  if (rawMax === '') return { min, max: min, invalid: false }
-  const max = parseAmount(rawMax)
-  if (max === null || min > max) return { invalid: true }
-  return { min, max, invalid: false }
-}
-
 export function QuoteResponses({
   quoteRequestId,
   available,
@@ -200,6 +132,7 @@ export function QuoteResponses({
   partners,
   proposalsCount,
   status,
+  hasAppSends = false,
 }: {
   quoteRequestId: string
   /** `false` = falta aplicar la 015 en esta base. */
@@ -211,6 +144,12 @@ export function QuoteResponses({
   /** `quote_requests.proposals_count`: lo que se le dijo a la persona que se le pasó. */
   proposalsCount: number | null
   status: string
+  /**
+   * Hubo envíos por la app («Propuestas en la app»). Desde el primero,
+   * `proposals_count` lo escribe el BACKEND (= propuestas activas) y deja de
+   * compararse contra las filas de acá: el aviso de abajo no aplica.
+   */
+  hasAppSends?: boolean
 }) {
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -233,7 +172,7 @@ export function QuoteResponses({
   // `proposals_count` lo escribe `ops.mark_quote_request_answered` y esta
   // tarjeta no lo toca (ver la cabecera). Que no coincidan es un dato, no un
   // error: ámbar, no rojo — mismo criterio que `stuck` y `atrasada`.
-  const countMismatch = proposalsCount !== null && proposalsCount !== responses.length
+  const countMismatch = !hasAppSends && proposalsCount !== null && proposalsCount !== responses.length
   const { expired } = splitQuoteResponsesForMessage(responses)
 
   return (
@@ -262,6 +201,13 @@ export function QuoteResponses({
             al pedido se le anotaron {formatInt(proposalsCount)}. Los dos números son independientes:{' '}
             <code className="font-mono">proposals_count</code> lo escribe «Marcar respondido» y no se sincroniza solo.
           </Warn>
+        ) : null}
+
+        {hasAppSends ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Este pedido ya tuvo envíos por la app: desde el primero, «Propuestas devueltas» lo maneja el backend y es la
+            cantidad de propuestas activas en la app — no la de presupuestos cargados acá.
+          </p>
         ) : null}
 
         {expired.length > 0 ? (
@@ -932,244 +878,6 @@ function ResponseForm({
   )
 }
 
-// ── El buscador de taller ───────────────────────────────────────────────────
-
-/** Cuántas opciones se ven sin scrollear. El resto sigue ahí, con scroll. */
-const VISIBLE_OPTIONS = 8
-
-/**
- * Un solo campo para las dos clases de taller que admite la tabla.
- *
- * El `<Select>` que había acá era una lista de 50 partners activos en orden
- * fijo, más una opción "otro taller" que recién entonces mostraba un input
- * aparte: dos controles para una decisión, y 50 renglones para scrollear. Acá
- * se tipea el nombre y la lista se filtra.
- *
- * ── El filtrado es en el CLIENTE, no una búsqueda al servidor ──────────────
- *
- * Al 2026-09-22 hay 50 partners activos y ya vienen enteros en el loader de la
- * ficha (`listPartnerOptions`). Filtrar sobre un array de 50 es instantáneo y
- * no tiene estados de carga, de error ni de carrera — a diferencia del picker
- * de destinatarios de `BroadcastComposer`, que SÍ va al servidor con debounce
- * porque su universo son miles de usuarios y no se pueden traer todos. El día
- * que el directorio tenga cientos, esto pasa a ser un `searchPartnersFn` con
- * la misma forma que aquél.
- *
- * `normalizeForMatch` (de `~/lib/catalog`) saca acentos y puntuación, así que
- * "perez" encuentra "Pérez" y "cars service" encuentra "H&G Cars Service". Es
- * el mismo normalizador que usa el matcheo de rubros declarados en la
- * aprobación de partners.
- *
- * ── Tipear NO vincula: vincular es elegir de la lista ──────────────────────
- *
- * Escribir "Autech" deja un taller de AFUERA llamado "Autech", aunque Autech
- * esté en el directorio — `partner_id` sólo se setea eligiendo una opción. Eso
- * puede sorprender, así que el campo dice en qué modo está en todo momento, y
- * si el texto tipeado coincide con un partner real lo avisa y ofrece
- * vincularlo. La alternativa —adivinar el id por nombre— es exactamente lo que
- * `partner-approval.md` ya desaconseja con `nameCollisions`: dos partners se
- * pueden llamar igual.
- */
-function PartnerCombobox({
-  inputId,
-  partners,
-  partnerId,
-  providerName,
-  selectedLabelFallback,
-  onChange,
-}: {
-  inputId: string
-  partners: Array<PartnerOption>
-  /** `null` = taller de afuera; el nombre vive en `providerName`. */
-  partnerId: string | null
-  providerName: string
-  /** El nombre del partner cuando NO está en las opciones (p. ej. se pausó). */
-  selectedLabelFallback: string | null
-  onChange: (next: { partnerId: string | null; providerName: string }) => void
-}) {
-  const listId = `${inputId}-list`
-  const boxRef = useRef<HTMLDivElement>(null)
-  const selected = partnerId === null ? null : (partners.find((p) => p.id === partnerId) ?? null)
-  const selectedLabel =
-    partnerId === null ? null : (selected?.name ?? selectedLabelFallback ?? 'taller del directorio')
-
-  const [query, setQuery] = useState(() => selectedLabel ?? providerName)
-  const [open, setOpen] = useState(false)
-  const [highlight, setHighlight] = useState(0)
-
-  const matches = useMemo(() => {
-    const needle = normalizeForMatch(query)
-    if (needle === '') return partners
-    return partners.filter((p) => normalizeForMatch(`${p.name} ${p.coverageZone}`).includes(needle))
-  }, [partners, query])
-
-  // Cerrar al clickear afuera. Sin esto la lista queda abierta tapando el
-  // resto del formulario, que en una tarjeta angosta es peor que inútil.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
-  function pickPartner(p: PartnerOption) {
-    setQuery(p.name)
-    setOpen(false)
-    onChange({ partnerId: p.id, providerName: '' })
-  }
-
-  const trimmed = query.trim()
-  // El partner que se llama EXACTAMENTE como lo tipeado, si hay uno y todavía
-  // no se vinculó. Comparación normalizada: "autech" y "Autech" son el mismo.
-  const exact =
-    partnerId === null && trimmed !== ''
-      ? (partners.find((p) => normalizeForMatch(p.name) === normalizeForMatch(trimmed)) ?? null)
-      : null
-
-  return (
-    <div ref={boxRef} className="relative">
-      <div className="relative">
-        <Input
-          id={inputId}
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={open && matches[highlight] ? `${listId}-${highlight}` : undefined}
-          autoComplete="off"
-          maxLength={200}
-          value={query}
-          placeholder="Buscar en el directorio, o escribir el nombre"
-          onChange={(e) => {
-            const v = e.currentTarget.value
-            setQuery(v)
-            setHighlight(0)
-            setOpen(true)
-            // Tipear DESVINCULA: el id que había dejaría de corresponderse con
-            // lo que se lee en pantalla, y ese desacuerdo es invisible.
-            onChange({ partnerId: null, providerName: v })
-          }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-              e.preventDefault()
-              if (!open) {
-                setOpen(true)
-                return
-              }
-              if (matches.length === 0) return
-              const delta = e.key === 'ArrowDown' ? 1 : -1
-              setHighlight((h) => (h + delta + matches.length) % matches.length)
-              return
-            }
-            if (e.key === 'Enter') {
-              // Sólo intercepta con la lista abierta y algo resaltado: si no,
-              // deja que el Enter mande el formulario, como en cualquier input.
-              const candidate = open ? matches[highlight] : undefined
-              if (candidate) {
-                e.preventDefault()
-                pickPartner(candidate)
-              }
-              return
-            }
-            if (e.key === 'Escape' && open) {
-              e.preventDefault()
-              setOpen(false)
-            }
-          }}
-          className="pr-8 text-xs"
-        />
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-hidden
-          onClick={() => setOpen((o) => !o)}
-          className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-muted-foreground"
-        >
-          <ChevronDown className="size-3.5" />
-        </button>
-      </div>
-
-      {open ? (
-        <ul
-          id={listId}
-          role="listbox"
-          className="absolute z-20 mt-1 w-full overflow-y-auto rounded-md border border-border bg-card py-1"
-          style={{ maxHeight: `${VISIBLE_OPTIONS * 2.25}rem` }}
-        >
-          {matches.length === 0 ? (
-            <li className="px-3 py-1.5 text-xs text-muted-foreground">
-              Ningún taller del directorio coincide con «{trimmed}». Se guarda como taller de afuera.
-            </li>
-          ) : (
-            matches.map((p, i) => (
-              <li key={p.id} id={`${listId}-${i}`} role="option" aria-selected={i === highlight}>
-                <button
-                  type="button"
-                  // `onMouseDown` y no `onClick`: el blur del input llega
-                  // primero y cerraría la lista antes de que el click resuelva.
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    pickPartner(p)
-                  }}
-                  onMouseEnter={() => setHighlight(i)}
-                  className={cn(
-                    'flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-xs',
-                    i === highlight ? 'bg-secondary' : undefined,
-                  )}
-                >
-                  <span className="truncate">{p.name}</span>
-                  <span className="shrink-0 text-muted-foreground">
-                    {p.tier === 'founding' ? 'Aliado · ' : ''}
-                    {p.coverageZone || 'sin zona'}
-                  </span>
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
-      ) : null}
-
-      {partnerId !== null ? (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          <Badge variant="outline" className="border-brand/30 bg-brand-soft text-brand">
-            del directorio
-          </Badge>
-          <button
-            type="button"
-            onClick={() => {
-              const text = selectedLabel ?? ''
-              setQuery(text)
-              setOpen(false)
-              onChange({ partnerId: null, providerName: text })
-            }}
-            className="rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            desvincular
-          </button>
-        </div>
-      ) : (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          <Badge variant="outline" className="border-border text-muted-foreground">
-            taller de afuera
-          </Badge>
-          {exact ? (
-            <button
-              type="button"
-              onClick={() => pickPartner(exact)}
-              className="rounded text-xs text-status-yellow underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              «{exact.name}» está en el directorio — vincularlo
-            </button>
-          ) : null}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Piezas ──────────────────────────────────────────────────────────────────
 
 function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
@@ -1179,182 +887,6 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
         {label}
       </label>
       {children}
-    </div>
-  )
-}
-
-function Hint({ children }: { children: ReactNode }) {
-  return <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
-}
-
-// ── El desglose por ítems (022) ─────────────────────────────────────────────
-
-/**
- * Filas de ítem con su precio; los opcionales van aparte y no suman al total.
- * El total que se ve es una VISTA PREVIA: el que se guarda lo calcula el SP con
- * la misma regla (`ops._quote_response_items_total`), así que no pueden
- * contradecirse.
- */
-function ItemsEditor({
-  items,
-  currency,
-  totals,
-  onChange,
-  onAdd,
-  onRemove,
-}: {
-  items: Array<ItemDraft>
-  currency: string
-  totals: { base: number | null; optional: number; withOptional: number }
-  onChange: (key: string, patch: Partial<Omit<ItemDraft, 'key'>>) => void
-  onAdd: (optional: boolean) => void
-  onRemove: (key: string) => void
-}) {
-  const required = items.filter((it) => !it.optional)
-  const optional = items.filter((it) => it.optional)
-  const full = items.length >= MAX_QUOTE_ITEMS
-
-  const renderRow = (it: ItemDraft) => {
-    const badAmount = it.amount.trim() !== '' && parseAmount(it.amount.trim()) === null
-    return (
-      <li key={it.key} className="flex flex-wrap items-center gap-2">
-        <Input
-          value={it.label}
-          onChange={(e) => {
-            const v = e.currentTarget.value
-            onChange(it.key, { label: v })
-          }}
-          maxLength={200}
-          autoComplete="off"
-          placeholder={it.optional ? 'Rectificar discos' : 'Cambio de pastillas'}
-          aria-label="Qué es"
-          className="h-8 min-w-0 flex-1 text-xs"
-        />
-        <Input
-          value={it.amount}
-          onChange={(e) => {
-            const v = e.currentTarget.value
-            onChange(it.key, { amount: v })
-          }}
-          inputMode="decimal"
-          autoComplete="off"
-          placeholder="60.000"
-          aria-label="Precio"
-          aria-invalid={badAmount}
-          className="h-8 w-28 text-right text-xs tabular-nums"
-        />
-        <label className="flex items-center gap-1 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={it.optional}
-            onChange={(e) => {
-              const v = e.currentTarget.checked
-              onChange(it.key, { optional: v })
-            }}
-          />
-          opcional
-        </label>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={() => onRemove(it.key)}
-          aria-label="Sacar el ítem"
-          className="size-7 p-0"
-        >
-          <X className="size-3.5" aria-hidden />
-        </Button>
-      </li>
-    )
-  }
-
-  return (
-    <div className="space-y-2 rounded-md border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs uppercase tracking-wider text-muted-foreground">Detalle por ítems (opcional)</span>
-        <div className="flex gap-1.5">
-          <Button type="button" size="sm" variant="outline" disabled={full} onClick={() => onAdd(false)} className="h-7 gap-1">
-            <Plus className="size-3.5" aria-hidden />
-            Ítem
-          </Button>
-          <Button type="button" size="sm" variant="outline" disabled={full} onClick={() => onAdd(true)} className="h-7 gap-1">
-            <Plus className="size-3.5" aria-hidden />
-            Opcional
-          </Button>
-        </div>
-      </div>
-
-      {items.length === 0 ? (
-        <Hint>
-          Si el taller pasó el precio desglosado, cargalo por ítems y el total se suma solo. Los opcionales se muestran
-          aparte, con su precio, y no suman al total.
-        </Hint>
-      ) : (
-        <>
-          {required.length > 0 ? <ul className="space-y-1.5">{required.map(renderRow)}</ul> : null}
-          {optional.length > 0 ? (
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Opcionales</span>
-              <ul className="space-y-1.5">{optional.map(renderRow)}</ul>
-            </div>
-          ) : null}
-
-          <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-0.5 border-t border-border pt-2 text-xs">
-            <dt className="text-muted-foreground">Total</dt>
-            <dd className="text-right font-semibold tabular-nums">
-              {totals.base === null ? '—' : totals.base === 0 ? 'Sin cargo' : formatAmount(totals.base, currency)}
-            </dd>
-            {totals.optional > 0 || optional.length > 0 ? (
-              <>
-                <dt className="text-muted-foreground">Opcionales</dt>
-                <dd className="text-right tabular-nums">+ {formatAmount(totals.optional, currency)}</dd>
-                <dt className="text-muted-foreground">Con todos los opcionales</dt>
-                <dd className="text-right tabular-nums">{formatAmount(totals.withOptional, currency)}</dd>
-              </>
-            ) : null}
-          </dl>
-        </>
-      )}
-    </div>
-  )
-}
-
-/** El desglose de un presupuesto ya cargado, en la fila de la lista. */
-function ItemsSummary({ items, currency }: { items: Array<{ label: string; amount: number; optional: boolean }>; currency: string }) {
-  const required = items.filter((it) => !it.optional)
-  const optional = items.filter((it) => it.optional)
-  const totals = quoteItemsTotals(items)
-  const money = (n: number) => (n === 0 ? 'sin cargo' : formatAmount(n, currency))
-
-  return (
-    <div className="mt-1.5 rounded border border-border px-2 py-1.5 text-xs">
-      {required.length > 0 ? (
-        <ul className="space-y-0.5">
-          {required.map((it, i) => (
-            <li key={`r-${i}`} className="flex justify-between gap-3">
-              <span className="min-w-0 truncate">{it.label}</span>
-              <span className="shrink-0 tabular-nums">{money(it.amount)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {optional.length > 0 ? (
-        <div className={cn(required.length > 0 && 'mt-1 border-t border-border pt-1')}>
-          <span className="text-muted-foreground">Opcionales</span>
-          <ul className="space-y-0.5">
-            {optional.map((it, i) => (
-              <li key={`o-${i}`} className="flex justify-between gap-3 text-muted-foreground">
-                <span className="min-w-0 truncate">+ {it.label}</span>
-                <span className="shrink-0 tabular-nums">{money(it.amount)}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-0.5 flex justify-between gap-3 text-muted-foreground">
-            <span>Con todos los opcionales</span>
-            <span className="tabular-nums">{formatAmount(totals.withOptional, currency)}</span>
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }

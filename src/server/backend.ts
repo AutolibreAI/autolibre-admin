@@ -126,6 +126,13 @@ interface BackendErrorBody {
   statusCode?: number
   message?: unknown
   code?: unknown
+  /**
+   * `details` de `ApplicationException`, que `ApplicationExceptionFilter`
+   * esparce en el cuerpo TOP-LEVEL. Hoy sólo los usan las propuestas de
+   * presupuesto: qué propuesta del envío falló (0-based) y qué partner.
+   */
+  proposalIndex?: unknown
+  partnerId?: unknown
 }
 
 /**
@@ -142,7 +149,7 @@ interface BackendErrorBody {
 async function backendError(
   response: Response,
   what: string,
-  opts: { detailed?: boolean } = {},
+  opts: { detailed?: boolean; proposal?: boolean } = {},
 ): Promise<Error> {
   let body: BackendErrorBody | null = null
 
@@ -184,6 +191,30 @@ async function backendError(
    * manuales), y cambiar la sentinela para todos rompía esa lectura sin que
    * `tsc` dijera nada — son strings.
    */
+  /**
+   * Modo `proposal` — opt-in, lo usan sólo las escrituras de propuestas de
+   * presupuesto (2026-10-26).
+   *
+   * No reusa `detailed` por dos motivos: ahí el 404 se aplana a una sola
+   * sentinela, y acá un 404 significa TRES cosas (pedido, propuesta o partner
+   * inexistente, cada una con su code) más una cuarta sin code (la ruta no
+   * existe: backend sin desplegar); y `detailed` pierde `proposalIndex` /
+   * `partnerId`, que son lo que permite pintar el error en la fila correcta.
+   * Cambiar `detailed` rompía conocimiento y fotos sin que `tsc` avisara.
+   *
+   * Formato: `QUOTE_PROPOSAL_ERROR:<status>:<code>:<proposalIndex>:<partnerId>:<msg>`,
+   * con vacío donde no hay dato y el mensaje ÚLTIMO (puede traer `:`). Lo lee
+   * `parseQuoteProposalError` de `~/lib/quote-proposals`.
+   */
+  if (opts.proposal) {
+    const detail = message ?? `${what} falló sin explicación`
+    const code = typeof body?.code === 'string' ? body.code : ''
+    const index =
+      typeof body?.proposalIndex === 'number' && Number.isInteger(body.proposalIndex) ? String(body.proposalIndex) : ''
+    const partnerId = typeof body?.partnerId === 'string' ? body.partnerId : ''
+    return new Error(`QUOTE_PROPOSAL_ERROR:${response.status}:${code}:${index}:${partnerId}:${detail}`)
+  }
+
   if (opts.detailed) {
     const detail = message ?? `${what} falló sin explicación`
     if (response.status === 400) {
@@ -600,4 +631,162 @@ export async function uploadMarkdownKnowledgeDocument(input: {
   }
 
   return { id: body.id }
+}
+
+// ── Propuestas de presupuesto en la app ──────────────────────────────────────
+
+/**
+ * Las escrituras de «Propuestas en la app» — `AdminQuoteRequestController` del
+ * backend (`quotes/quote-request/presentation`, rama `feat/quote-proposals`,
+ * migraciones 0120–0122).
+ *
+ * ── Por qué HTTP y no SQL ───────────────────────────────────────────────────
+ *
+ * El grep da POSITIVO: los cuatro endpoints existen con `AdminGuard` en cada
+ * handler. Y un SQL estaría mal, no sólo de más: el backend asigna los lugares
+ * 1..3, le manda el push a la persona, deduplica por `sendId`/`closureId`,
+ * mueve el pedido a `answered` y recalcula `proposals_count`. Nada de eso
+ * existe en una sentencia. → `.claude/rules/leads.md`
+ *
+ * ── El contrato ─────────────────────────────────────────────────────────────
+ *
+ *  - `sendId` y `closureId` los genera el CLIENTE, una vez por intento lógico
+ *    (como `broadcastId`). Por eso NO se generan acá.
+ *  - Un opcional vacío NO viaja: el backend rechaza un blanco
+ *    (`providerAddress cannot be blank`) y valida con `forbidNonWhitelisted`.
+ *  - withdraw y close-search devuelven 204 SIN cuerpo: leer JSON tiraría, y
+ *    ese throw se leería como "no se aplicó" cuando sí se aplicó.
+ *  - Los errores van en modo `{ proposal: true }` (ver `backendError`).
+ *  - Un fetch que ni llega es `BACKEND_UNREACHABLE:<url>`, igual que
+ *    `adminFileSignedUrl`: en producción hoy el backend no tiene estos
+ *    endpoints, y "fetch failed" no le dice a nadie qué arreglar.
+ */
+
+/** El contenido de una propuesta, tal como lo valida `quoteProposalContentSchema`. */
+export interface BackendQuoteProposalContent {
+  partnerId?: string
+  providerName?: string
+  providerAddress?: string
+  providerPhone?: string
+  description: string
+  amountMin?: number
+  amountMax?: number
+  currency: string
+  items?: Array<{ label: string; amount: number; optional: boolean }>
+  validUntil?: string
+  internalNotes?: string
+  isRecommended: boolean
+  recommendationReason?: string
+}
+
+/** Saca los vacíos: un `''` es un 400 del otro lado, un ausente es "no hay". */
+function proposalBody(c: BackendQuoteProposalContent): Record<string, unknown> {
+  const text = (v: string | undefined) => (v !== undefined && v.trim() !== '' ? v.trim() : undefined)
+  return {
+    partnerId: c.partnerId,
+    providerName: text(c.providerName),
+    providerAddress: text(c.providerAddress),
+    providerPhone: text(c.providerPhone),
+    description: c.description.trim(),
+    amountMin: c.amountMin,
+    amountMax: c.amountMax,
+    currency: c.currency,
+    items: c.items && c.items.length > 0 ? c.items : undefined,
+    validUntil: text(c.validUntil),
+    internalNotes: text(c.internalNotes),
+    isRecommended: c.isRecommended,
+    // El backend rechaza un motivo en una propuesta NO recomendada.
+    recommendationReason: c.isRecommended ? text(c.recommendationReason) : undefined,
+  }
+}
+
+/** Un fetch JSON con token, que distingue "no llegó" de "llegó y falló". */
+async function proposalFetch(path: string, init: { method: 'POST' | 'PUT'; body?: unknown }, what: string) {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: init.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    // Un timeout NO es "no llegó": pudo haberse guardado. Se deja pasar tal
+    // cual para que la UI diga "recargá antes de reintentar".
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, what, { proposal: true })
+  return response
+}
+
+/**
+ * Mandarle 1..3 propuestas a la persona. 201 con lo guardado; reintentar el
+ * mismo `sendId` sobre el mismo pedido devuelve lo mismo sin repetir el push.
+ */
+export async function sendQuoteProposals(input: {
+  quoteRequestId: string
+  sendId: string
+  closesSearch: boolean
+  proposals: Array<BackendQuoteProposalContent>
+}): Promise<{ proposals: Array<{ id: string; position: number }>; proposalsCount: number | null }> {
+  const response = await proposalFetch(
+    `/admin/quote-requests/${input.quoteRequestId}/proposal-sends`,
+    {
+      method: 'POST',
+      body: {
+        sendId: input.sendId,
+        closesSearch: input.closesSearch,
+        proposals: input.proposals.map(proposalBody),
+      },
+    },
+    'El envío de propuestas',
+  )
+
+  const body = (await response.json().catch(() => null)) as {
+    proposals?: unknown
+    proposalsCount?: unknown
+  } | null
+  const proposals = Array.isArray(body?.proposals)
+    ? body.proposals.filter(
+        (p): p is { id: string; position: number } =>
+          typeof p === 'object' && p !== null && typeof (p as { id?: unknown }).id === 'string',
+      )
+    : []
+  return { proposals, proposalsCount: typeof body?.proposalsCount === 'number' ? body.proposalsCount : null }
+}
+
+/** PUT: reemplazo COMPLETO del contenido, sin push. Lo que no viaja queda vacío. */
+export async function correctQuoteProposal(input: {
+  proposalId: string
+  content: BackendQuoteProposalContent
+}): Promise<void> {
+  await proposalFetch(
+    `/admin/quote-request-proposals/${input.proposalId}`,
+    { method: 'PUT', body: proposalBody(input.content) },
+    'La corrección de la propuesta',
+  )
+}
+
+/** Retirar (borrado lógico): libera el lugar y limpia selección y recomendación. 204, idempotente. */
+export async function withdrawQuoteProposal(proposalId: string): Promise<void> {
+  await proposalFetch(`/admin/quote-request-proposals/${proposalId}/withdraw`, { method: 'POST' }, 'El retiro de la propuesta')
+}
+
+/**
+ * "No buscamos más": cierra la BÚSQUEDA, nunca el pedido. 204, idempotente por
+ * `closureId`. Con 0 activas y una persona con cuenta, el backend manda el push
+ * de "no conseguimos".
+ */
+export async function closeQuoteProposalsSearch(input: { quoteRequestId: string; closureId: string }): Promise<void> {
+  await proposalFetch(
+    `/admin/quote-requests/${input.quoteRequestId}/close-search`,
+    { method: 'POST', body: { closureId: input.closureId } },
+    'El cierre de la búsqueda',
+  )
 }

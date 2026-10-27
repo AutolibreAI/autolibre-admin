@@ -373,14 +373,26 @@ Así que lo que el panel escribe es **`ops.quote_request_response`**, nuestra
 (migración 015). Que la tabla del backend exista no la vuelve la tabla del
 dominio de esto: describe *una oferta con precio*, y lo que el operador maneja
 es *la respuesta de un taller*, de la cual el precio es un atributo a veces
-ausente. Y al 2026-09-22 **nada lee `quote_request_proposals`** —0 filas en
-producción, todo se lo manda el operador por WhatsApp a mano— así que no hay
-dos verdades que sincronizar.
+ausente.
 
-El camino de vuelta está escrito, con el `INSERT … SELECT` y todo, en la
-cabecera de la migración: el día que el backend acepte precio nulo y sume el
-contacto del taller de afuera, el subconjunto con precio se backfillea y esto
-se retira.
+> **⚠ Corregido el 2026-10-26.** Esta sección decía *"al 2026-09-22 nada lee
+> `quote_request_proposals`"* y que el camino de vuelta era backfillear `ops`
+> con el `INSERT … SELECT` de la cabecera de la 015. **Las dos cosas quedaron
+> viejas** con las migraciones 0120–0122 del backend: `quote_request_proposals`
+> es ahora lo que la persona ve y elige EN LA APP (hasta 3 activas, con push), y
+> la ficha la lee y la escribe por HTTP → `.claude/rules/quote-proposals.md`.
+>
+> - **Las dos tablas conviven y no son lo mismo.** `ops.quote_request_response`
+>   sigue siendo lo que contestó cada taller (con o sin precio) y alimenta el
+>   WhatsApp; `quote_request_proposals` es lo que se le PUBLICA a la persona.
+>   Un presupuesto de `ops` siembra una propuesta si el operador lo tilda; nunca
+>   al revés, y nunca solo.
+> - **El backfill de la cabecera de la 015 NO se corre.** Las filas del backend
+>   ahora exigen `send_id` y `position` (NOT NULL), que un `INSERT … SELECT`
+>   desde `ops` no tiene de dónde sacar, y una fila insertada así no le
+>   avisaría a nadie. La cabecera no se editó (cambiaría el checksum).
+> - **Ninguna escritura SQL a `quote_request_proposals`**, nunca: va por el
+>   backend.
 
 Lo que sigue sin tabla, y por eso sigue siendo nota interna, es la
 **derivación** ("a qué taller le mandé este pedido") — ver `PartnerCandidates`.
@@ -920,7 +932,8 @@ separador de miles y la coma es decimal, al revés que `Number()`, que leería
 
 `chk_ops_qrr_provider_identified` es `num_nonnulls(partner_id, provider_name) = 1`
 — el mismo invariante que el backend eligió para su tabla, copiado a propósito
-para que el backfill futuro no tenga que limpiar nada.
+para que el backfill futuro no tenga que limpiar nada. *(Ese backfill ya no aplica: ver la
+corrección del 2026-10-26 más arriba.)*
 
 - **Del directorio**: se guarda el `partner_id` y **nada más**. Dirección,
   teléfono y horarios se leen de `partners` al mostrar, así que siguen al

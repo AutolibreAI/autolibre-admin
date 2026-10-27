@@ -29,6 +29,8 @@ import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteRequestPhotos } from '~/components/QuoteRequestPhotos'
 import { listQuoteRequestPhotosFn } from '~/fn/quote-photos'
 import { QuoteResponses } from '~/components/QuoteResponses'
+import { QuoteProposals } from '~/components/QuoteProposals'
+import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
@@ -108,6 +110,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         templates: [],
         vehicleProfile: null,
         photos: { available: false as const },
+        proposals: { available: false as const },
       }
 
     // Los presupuestos, el directorio y las plantillas van en el MISMO
@@ -116,7 +119,9 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     // varios. El perfil del vehículo sólo se pide si el pedido tiene uno
     // vinculado — el caso más común (`web`/`whatsapp` sin cuenta) no tiene
     // nada que pedir acá.
-    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos] = await Promise.all([
+    // Las propuestas en la app tienen su PROPIO guard (0120–0122 del backend):
+    // en una base sin ellas vuelven `{ available: false }`, nunca un 500.
+    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
       listQuoteResponsesFn({ data: params, signal }),
@@ -126,6 +131,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         ? getQuoteVehicleProfileFn({ data: { vehicleId: result.detail.vehicleId }, signal })
         : Promise.resolve(null),
       listQuoteRequestPhotosFn({ data: { quoteRequestId: params.quoteRequestId }, signal }),
+      listQuoteProposalsFn({ data: params, signal }),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
@@ -156,6 +162,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       templates,
       vehicleProfile,
       photos,
+      proposals,
     }
   },
 
@@ -185,6 +192,7 @@ function QuoteRequestScreen() {
     templates,
     vehicleProfile,
     photos,
+    proposals,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -214,6 +222,9 @@ function QuoteRequestScreen() {
 
   const d = result.detail
   const responseRows = responses.available ? responses.rows : []
+  // Hubo al menos un envío por la app: desde ahí `proposals_count` lo lleva el
+  // backend y la plantilla «Presupuestos» puede repetir lo que ya le llegó.
+  const hasAppSends = proposals.available && proposals.hasAppSends
 
   return (
     <>
@@ -234,7 +245,7 @@ function QuoteRequestScreen() {
         }
       />
 
-      <QuoteTemplates detail={d} responses={responseRows} templates={templates} />
+      <QuoteTemplates detail={d} responses={responseRows} templates={templates} hasAppSends={hasAppSends} />
 
       <Card className="mb-4">
         <CardContent className="pt-6">
@@ -296,6 +307,22 @@ function QuoteRequestScreen() {
         responses={responseRows}
         partners={partnerOptions}
         proposalsCount={d.proposalsCount}
+        status={d.status}
+        hasAppSends={hasAppSends}
+      />
+
+      {/*
+        Lo que se le PUBLICA a la persona en la app (backend, por HTTP), debajo
+        de lo que contestó cada taller (ops): un presupuesto puede sembrar una
+        propuesta, nunca al revés. → `.claude/rules/quote-proposals.md`
+      */}
+      <QuoteProposals
+        key={`proposals-${d.id}`}
+        quoteRequestId={d.id}
+        data={proposals}
+        responses={responseRows}
+        partners={partnerOptions}
+        hasUser={d.userId !== null}
         status={d.status}
       />
 

@@ -87,11 +87,18 @@ export const QUOTE_REQUEST_OUTCOME_LABELS: Record<QuoteRequestOutcome, string> =
   no_response: 'No respondió',
 }
 
-/** El resultado DECLARADO por el usuario desde la app. Eje aparte del de arriba. */
-export const QUOTE_REQUEST_USER_OUTCOMES = ['hired', 'not_hired'] as const
+/**
+ * El resultado DECLARADO por el usuario desde la app. Eje aparte del de arriba.
+ *
+ * `pending` llegó con «Propuestas en la app» (0120–0122 del backend): la persona
+ * recibió propuestas y todavía no eligió ninguna. Se dice «Sin elegir», nunca
+ * el crudo — un `pending` en pantalla se lee como un estado roto.
+ */
+export const QUOTE_REQUEST_USER_OUTCOMES = ['pending', 'hired', 'not_hired'] as const
 export type QuoteRequestUserOutcome = (typeof QUOTE_REQUEST_USER_OUTCOMES)[number]
 
 export const QUOTE_REQUEST_USER_OUTCOME_LABELS: Record<QuoteRequestUserOutcome, string> = {
+  pending: 'Sin elegir',
   hired: 'Contrató',
   not_hired: 'No contrató',
 }

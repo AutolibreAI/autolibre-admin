@@ -842,8 +842,9 @@ export async function listPartnerOptions(
 ): Promise<Array<PartnerOption>> {
   void opts.signal
 
-  const rows = await sql<{ id: string; name: string; coverage_zone: string; tier: string }>(
-    `SELECT p.id, p.name, btrim(coalesce(p.coverage_zone, '')) AS coverage_zone, p.tier::text AS tier
+  const rows = await sql<{ id: string; name: string; coverage_zone: string; tier: string; has_whatsapp: boolean }>(
+    `SELECT p.id, p.name, btrim(coalesce(p.coverage_zone, '')) AS coverage_zone, p.tier::text AS tier,
+            coalesce(btrim(p.whatsapp), '') <> '' AS has_whatsapp
        FROM partners p
       WHERE p.status = 'active'
       ORDER BY (p.tier = 'founding') DESC, p.name ASC`,
@@ -853,6 +854,7 @@ export async function listPartnerOptions(
     name: r.name,
     coverageZone: r.coverage_zone,
     tier: r.tier,
+    hasWhatsapp: r.has_whatsapp === true,
   }))
 }
 
