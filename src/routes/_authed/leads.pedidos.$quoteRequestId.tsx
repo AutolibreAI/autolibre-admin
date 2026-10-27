@@ -467,9 +467,13 @@ function QuoteRequestScreen() {
         status={d.status}
       />
 
-      {/* `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar. */}
+      {/*
+        `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar.
+        Con prefijo, igual que los hermanos de arriba: dos hermanos con el MISMO key
+        dejan nodos huérfanos en el DOM que sobreviven a la navegación.
+      */}
       <QuoteRequestActions
-        key={d.id}
+        key={`actions-${d.id}`}
         quoteRequestId={d.id}
         status={d.status}
         closeReasonCode={d.closeReasonCode}
@@ -477,7 +481,7 @@ function QuoteRequestScreen() {
       />
 
       <PartnerCandidates
-        key={d.id}
+        key={`candidates-${d.id}`}
         quoteRequestId={d.id}
         publicNumber={d.publicNumber}
         detail={d}
