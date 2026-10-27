@@ -652,9 +652,10 @@ export interface QuoteRequestListItem {
   proposalsCount: number | null
   /**
    * Presupuestos CARGADOS por el operador (`ops.quote_request_response`, 015):
-   * lo que contestó cada taller. Es otro número que `proposalsCount` (la
-   * cantidad que el operador declaró al marcar respondido) y no se sincronizan
-   * — `.claude/rules/leads.md`. `null` = la 015 no está aplicada en esta base.
+   * …y desde el 2026-10-27, las PROPUESTAS ACTIVAS del pedido
+   * (`quote_request_proposals`, sin las retiradas): es lo único que se carga.
+   * El nombre del campo quedó por compatibilidad (`sort=responses`).
+   * `null` = esta base no tiene 0120–0122 del backend.
    */
   responseCount: number | null
   /** Archivos en `quote_request_files` (fotos de la app o cargadas desde el panel). `null` = esta base no tiene la tabla. */

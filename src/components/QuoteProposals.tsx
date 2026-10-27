@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type ReactNode } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import { Check, Pencil, Plus, Send, SearchX, Smartphone, Star, Undo2, X } from 'lucide-react'
+import { Check, Pencil, Plus, SearchX, Smartphone, Star, Undo2, X } from 'lucide-react'
 import {
   MAX_PROPOSAL_DESCRIPTION,
   MAX_PROPOSAL_INTERNAL_NOTES,
@@ -43,6 +43,7 @@ import { Textarea } from '~/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '~/components/ui/sheet'
 import { formatDate, formatDateTime, formatInt } from '~/lib/format'
+import { quoteChannelLabel } from '~/lib/quote-requests'
 import { cn } from '~/lib/utils'
 import type { PartnerOption } from '~/lib/partners'
 
@@ -51,10 +52,13 @@ import type { PartnerOption } from '~/lib/partners'
  * push: hasta 3 propuestas activas por pedido en `public.quote_request_proposals`
  * (backend, 0120–0122). → `.claude/rules/quote-proposals.md`
  *
- * No es la tarjeta de Presupuestos de arriba: aquélla es lo que contestó cada
- * taller (`ops.quote_request_response`, nuestro) y alimenta el WhatsApp. Un
- * presupuesto puede SEMBRAR una propuesta (el operador lo tilda), pero nunca se
- * publica solo.
+ * Desde el 2026-10-27 es el ÚNICO lugar donde el operador carga lo que
+ * consiguió, llegue el pedido por la app o por WhatsApp: la tarjeta de
+ * Presupuestos (`ops.quote_request_response`) se sacó de la ficha, y las
+ * propuestas activas arman el mensaje «Presupuestos» de WhatsApp. Sin cuenta
+ * no le llegan a ninguna app — se guardan igual y viajan por ese mensaje. Los
+ * presupuestos viejos de `ops` todavía pueden SEMBRAR una propuesta (el
+ * operador los tilda), nunca se publican solos.
  *
  * ── Lee por SQL, escribe por HTTP ───────────────────────────────────────────
  *
@@ -80,15 +84,18 @@ export function QuoteProposals({
   responses,
   partners,
   hasUser,
+  channel,
   status,
 }: {
   quoteRequestId: string
   data: QuoteProposalsResult
-  /** Los presupuestos de `ops`, para precargar. */
+  /** Los presupuestos viejos de `ops` (antes del 2026-10-27), sólo para precargar. */
   responses: Array<QuoteResponse>
   partners: Array<PartnerOption>
   /** El pedido tiene cuenta de AutoLibre: hay a quién mandarle el push. */
   hasUser: boolean
+  /** Por dónde entró, para decir por dónde le llegan las propuestas. */
+  channel: string
   status: string
 }) {
   if (!data.available) {
@@ -99,7 +106,8 @@ export function QuoteProposals({
           <p className="mt-2 max-w-prose text-sm text-muted-foreground">
             Esta base todavía no tiene las migraciones 0120–0122 del backend (la tabla de envíos y las columnas nuevas
             de <code className="font-mono">quote_request_proposals</code>). Hasta que se desplieguen, no se pueden
-            mandar propuestas por la app desde acá — el resto de la ficha funciona igual.
+            cargar propuestas desde acá, y el mensaje «Presupuestos» sale sin ellas — el resto de la ficha funciona
+            igual.
           </p>
         </CardContent>
       </Card>
@@ -125,6 +133,7 @@ export function QuoteProposals({
                   responses={responses}
                   partners={partners}
                   otherRecommended={recommended}
+                  hasUser={hasUser}
                 />
               ) : null}
               {data.searchClosedAt === null ? (
@@ -135,18 +144,19 @@ export function QuoteProposals({
         </div>
 
         {closed ? (
-          <Warn>El pedido está cerrado: no admite envíos nuevos ni cambios en las propuestas.</Warn>
+          <Warn>El pedido está cerrado: no admite propuestas nuevas ni cambios en las cargadas.</Warn>
         ) : data.freeSlots === 0 ? (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Los {formatInt(MAX_QUOTE_PROPOSAL_SLOTS)} lugares están ocupados. Para mandar otra, retirá una de las
+            Los {formatInt(MAX_QUOTE_PROPOSAL_SLOTS)} lugares están ocupados. Para cargar otra, retirá una de las
             activas.
           </p>
         ) : null}
 
         {!hasUser ? (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            El pedido no tiene cuenta de AutoLibre: las propuestas se guardan, pero no hay a quién mandarle el push ni
-            quién las vea en la app.
+            {channel === 'app' ? 'Entró por la app sin cuenta' : `Entró por ${quoteChannelLabel(channel)}`} y no tiene
+            cuenta de AutoLibre: las propuestas se guardan pero no le llegan a ninguna app. Mandáselas con el mensaje
+            «Presupuestos» de arriba, que se arma con estas mismas.
           </p>
         ) : null}
 
@@ -217,9 +227,11 @@ export function QuoteProposals({
         ) : null}
 
         <p className="border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
-          Cada envío le llega a la persona como push y queda en la app; el backend lo registra a tu nombre. Corregir no
-          avisa de nuevo. Desde el primer envío, «Propuestas devueltas» del pedido lo lleva el backend: es la cantidad
-          de propuestas activas acá.
+          {hasUser
+            ? 'Cada carga le llega a la persona como push y queda en la app; corregir no avisa de nuevo. '
+            : ''}
+          Las activas arman el mensaje «Presupuestos» de WhatsApp. El backend registra cada carga a tu nombre, y desde
+          la primera «Propuestas devueltas» del pedido lo lleva él: es la cantidad de activas acá.
         </p>
       </CardContent>
     </Card>
@@ -231,7 +243,7 @@ function SectionHeader({ count }: { count: number | null }) {
     <div>
       <h2 className="flex items-center gap-1.5 font-heading text-base font-semibold">
         <Smartphone className="size-4 text-muted-foreground" aria-hidden />
-        Propuestas en la app
+        Propuestas
         {count !== null && count > 0 ? (
           <span className="text-sm font-normal text-muted-foreground">
             ({formatInt(count)} de {formatInt(MAX_QUOTE_PROPOSAL_SLOTS)})
@@ -239,7 +251,8 @@ function SectionHeader({ count }: { count: number | null }) {
         ) : null}
       </h2>
       <p className="mt-0.5 max-w-prose text-sm text-muted-foreground">
-        Lo que la persona ve y elige desde la app. Hasta {formatInt(MAX_QUOTE_PROPOSAL_SLOTS)} activas por pedido.
+        Lo que conseguiste para este pedido. Con cuenta, la persona las ve y elige en la app; siempre, arman el
+        mensaje «Presupuestos» de WhatsApp. Hasta {formatInt(MAX_QUOTE_PROPOSAL_SLOTS)} activas por pedido.
       </p>
     </div>
   )
@@ -699,6 +712,8 @@ type SheetProps =
       partners: Array<PartnerOption>
       /** La activa que ya es recomendada: con ella, una 2ª daría 409. */
       otherRecommended: QuoteProposal | null
+      /** Con cuenta, cargar = push a la persona. Sin cuenta, sólo queda guardada. */
+      hasUser: boolean
     }
   | {
       mode: 'edit'
@@ -826,8 +841,8 @@ function ProposalSheet(props: SheetProps) {
   const trigger =
     mode === 'send' ? (
       <Button type="button" size="sm" className="gap-1.5">
-        <Send className="size-3.5" aria-hidden />
-        Enviar propuestas
+        <Plus className="size-3.5" aria-hidden />
+        Cargar propuesta
       </Button>
     ) : (
       <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-1.5 text-xs">
@@ -848,10 +863,14 @@ function ProposalSheet(props: SheetProps) {
           }}
         >
           <div className="border-b border-border px-5 py-4 pr-10">
-            <SheetTitle>{mode === 'send' ? 'Enviar propuestas por la app' : `Corregir la propuesta ${props.mode === 'edit' ? props.proposal.position : ''}`}</SheetTitle>
+            <SheetTitle>{mode === 'send' ? 'Cargar propuestas' : `Corregir la propuesta ${props.mode === 'edit' ? props.proposal.position : ''}`}</SheetTitle>
             <SheetDescription className="mt-0.5 leading-relaxed">
               {mode === 'send'
-                ? `Hasta ${formatInt(freeSlots)} ${freeSlots === 1 ? 'propuesta' : 'propuestas'} (los lugares libres). Le llegan a la persona como push y las ve en la app.`
+                ? `Hasta ${formatInt(freeSlots)} ${freeSlots === 1 ? 'propuesta' : 'propuestas'} (los lugares libres). ${
+                    props.mode === 'send' && props.hasUser
+                      ? 'Le llegan a la persona como push y las ve en la app; también arman el mensaje «Presupuestos».'
+                      : 'Sin cuenta no le llegan a ninguna app: quedan guardadas y arman el mensaje «Presupuestos» para WhatsApp.'
+                  }`
                 : 'Se reemplaza la propuesta entera: lo que quede vacío se borra, el precio incluido. A la persona NO se le avisa del cambio.'}
             </SheetDescription>
           </div>
@@ -860,11 +879,11 @@ function ProposalSheet(props: SheetProps) {
             {mode === 'send' && responses.length > 0 ? (
               <section className="space-y-1.5">
                 <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  Precargar desde presupuestos
+                  Precargar desde presupuestos anteriores
                 </h3>
                 <Hint>
-                  Tildá los que quieras publicar: siembran el formulario y los revisás antes de enviar. Nada se envía
-                  solo.
+                  Lo que se había cargado en la tarjeta vieja de Presupuestos. Tildá los que quieras: siembran el
+                  formulario y los revisás antes de cargar. Nada se carga solo.
                 </Hint>
                 <ul className="space-y-1">
                   {responses.map((r) => {
@@ -964,20 +983,20 @@ function ProposalSheet(props: SheetProps) {
             {error ? <ErrorText>{error}</ErrorText> : null}
             {attempted && !busy && mode === 'send' ? (
               <Warn>
-                El intento anterior pudo haberse guardado. Reintentar es seguro —es el mismo envío y no se duplica—,
+                El intento anterior pudo haberse guardado. Reintentar es seguro —es la misma carga y no se duplica—,
                 pero si cambiaste el contenido y el primero sí se guardó, los cambios no se aplican: recargá y corregí
                 desde la tarjeta.
               </Warn>
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" size="sm" disabled={busy || !valid} className="gap-1.5">
-                {mode === 'send' ? <Send className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}
+                <Check className="size-3.5" aria-hidden />
                 {busy
                   ? mode === 'send'
-                    ? 'Enviando…'
+                    ? 'Cargando…'
                     : 'Guardando…'
                   : mode === 'send'
-                    ? `Enviar ${forms.length === 1 ? 'la propuesta' : `${formatInt(forms.length)} propuestas`}`
+                    ? `Cargar ${forms.length === 1 ? 'la propuesta' : `${formatInt(forms.length)} propuestas`}`
                     : 'Guardar corrección'}
               </Button>
               <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => setOpen(false)} className="gap-1.5">

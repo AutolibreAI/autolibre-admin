@@ -290,7 +290,7 @@ function BoardCard({
         {row.uncontacted ? <span className="font-medium text-status-yellow">sin contactar</span> : null}
         {row.responseCount !== null ? (
           <span className={cn(row.responseCount > 0 && 'font-medium text-foreground')}>
-            {formatInt(row.responseCount)} {row.responseCount === 1 ? 'presupuesto' : 'presupuestos'}
+            {formatInt(row.responseCount)} {row.responseCount === 1 ? 'propuesta' : 'propuestas'}
           </span>
         ) : null}
         {row.photoCount ? (

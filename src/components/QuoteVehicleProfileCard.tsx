@@ -2,8 +2,9 @@ import { ChevronDown } from 'lucide-react'
 import { MaintenanceTasks } from '~/components/MaintenanceTasks'
 import { Badge } from '~/components/ui/badge'
 import { Card, CardContent } from '~/components/ui/card'
-import { formatDateTime, formatInt } from '~/lib/format'
-import type { QuoteVehicleProfile } from '~/lib/quote-vehicle-profile'
+import { formatDate, formatDateTime, formatInt } from '~/lib/format'
+import { ODOMETER_STALE_AFTER_DAYS, type QuoteVehicleProfile } from '~/lib/quote-vehicle-profile'
+import { cn } from '~/lib/utils'
 import type { ReactNode } from 'react'
 
 const ENGINE_SOURCE_LABELS: Record<NonNullable<QuoteVehicleProfile['engineNumberSource']>, string> = {
@@ -58,7 +59,7 @@ export function QuoteVehicleProfileCard({ profile }: { profile: QuoteVehicleProf
             {profile.odometerKm === null ? (
               <Missing>sin cargar</Missing>
             ) : (
-              <span className="text-sm tabular-nums">{formatInt(profile.odometerKm)} km</span>
+              <OdometerValue km={profile.odometerKm} o={profile.odometer} />
             )}
           </Field>
 
@@ -105,6 +106,53 @@ export function QuoteVehicleProfileCard({ profile }: { profile: QuoteVehicleProf
         </details>
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * El km con CUÁNDO se cargó, para no tomar por bueno un número de hace meses.
+ * Ámbar pasado `ODOMETER_STALE_AFTER_DAYS`. Sin fecha exacta lo dice, con el
+ * rango que sí se conoce — nunca una fecha inventada.
+ */
+function OdometerValue({ km, o }: { km: number; o: QuoteVehicleProfile['odometer'] }) {
+  const stale = o.daysSince !== null && o.daysSince > ODOMETER_STALE_AFTER_DAYS
+  const ago =
+    o.daysSince === null
+      ? null
+      : o.daysSinceIsLowerBound
+        ? `hace más de ${formatInt(o.daysSince)} días`
+        : o.daysSince === 0
+          ? 'hoy'
+          : o.daysSince === 1
+            ? 'ayer'
+            : `hace ${formatInt(o.daysSince)} días`
+
+  return (
+    <>
+      <span className="text-sm tabular-nums">{formatInt(km)} km</span>
+      <div className={cn('text-xs leading-relaxed', stale ? 'font-medium text-status-yellow' : 'text-muted-foreground')}>
+        {ago ? <div>Actualizado {ago}{stale ? ' — puede estar viejo' : ''}</div> : null}
+        {o.manualKm !== null ? (
+          <div>
+            {o.manualSource === 'reading' && o.manualAt
+              ? `Cargado a mano el ${formatDate(o.manualAt)}`
+              : o.manualSource === 'alta' && o.manualAt
+                ? `Cargado al dar de alta el auto, el ${formatDate(o.manualAt)}`
+                : o.historyStartAt
+                  ? `Cargado a mano sin fecha exacta: entre el alta (${formatDate(o.vehicleCreatedAt)}) y el ${formatDate(o.historyStartAt)}`
+                  : 'Cargado a mano, sin fecha registrada'}
+            {o.ecuDeltaKm !== 0 ? ` (${formatInt(o.manualKm)} km)` : ''}
+          </div>
+        ) : null}
+        {o.ecuDeltaKm !== 0 ? (
+          <div>
+            {o.ecuDeltaKm > 0 ? '+' : ''}
+            {formatInt(o.ecuDeltaKm)} km que contó el escáner
+            {o.ecuAt ? `, última lectura el ${formatDate(o.ecuAt)}` : ''}
+          </div>
+        ) : null}
+      </div>
+    </>
   )
 }
 

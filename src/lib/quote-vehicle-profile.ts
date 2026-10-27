@@ -24,7 +24,16 @@ export interface QuoteVehicleProfile {
    * 87%. `null` cuando ninguno de los tres lo tiene.
    */
   engineNumberSource: 'vehicle' | 'registration_card' | 'insurance' | null
+  /**
+   * El kilometraje que ve la persona en la app — NO `vehicles.odometer_value`
+   * a secas. El backend lo COMPONE (`Vehicle.currentOdometer`): la base que
+   * cargó a mano más lo que el contador de la ECU avanzó desde el baseline
+   * (`current_distance_since_dtc_clear_km − distance_since_dtc_clear_baseline_km`).
+   * `null` = no hay nada cargado (base en 0 y sin escáner).
+   */
   odometerKm: number | null
+  /** De dónde sale `odometerKm` y CUÁNDO, para saber si está viejo. */
+  odometer: QuoteOdometerFreshness
   /**
    * Los códigos DTC de la sesión de `vehicle_last_dtc_scans` (el escaneo más
    * reciente), con el título del catálogo local si está cargado — mismo
@@ -38,6 +47,51 @@ export interface QuoteVehicleProfile {
   dtcCodes: Array<{ code: string; title: string | null }>
   dtcScannedAt: string | null
   tasks: Array<UserMaintenanceTask>
+}
+
+/**
+ * Pasado esto, el km se pinta ámbar: un auto anda ~1.000 km por mes, y un
+ * número de hace un trimestre ya puede estar corrido un service entero.
+ */
+export const ODOMETER_STALE_AFTER_DAYS = 90
+
+/**
+ * Cuándo se cargó el kilometraje. No hay una columna "fecha del km": se arma
+ * con lo que sí queda escrito.
+ *
+ * - **La base a mano**: la última fila `field = 'odometer'` de
+ *   `vehicle_audit_logs`. El backend la escribe en CADA cambio que hace la
+ *   persona (no en el alta, y no si confirma el mismo número), y empezó a
+ *   escribirla el `historyStartAt` (13/09/2026 en producción).
+ *   - Sin fila y el auto se dio de alta DESPUÉS de esa fecha ⇒ el km viene del
+ *     alta (`'alta'`, fecha = alta del auto).
+ *   - Sin fila y el auto es ANTERIOR ⇒ no se sabe (`'unknown'`): se cargó
+ *     entre el alta y `historyStartAt`. Se dice así, no se inventa una fecha.
+ * - **Lo que sumó el escáner**: `dtc_clear_reading_at`, la última lectura de
+ *   la ECU. Sólo cuenta si movió el número (`ecuDeltaKm ≠ 0`).
+ */
+export interface QuoteOdometerFreshness {
+  /** La base que cargó la persona. `null` si está en 0. */
+  manualKm: number | null
+  manualAt: string | null
+  manualSource: 'reading' | 'alta' | 'unknown'
+  /** Alta del auto, para el caso `'unknown'` ("entre el alta y …"). */
+  vehicleCreatedAt: string
+  /** Desde cuándo el backend registra los cambios. `null` = esta base no tiene ninguno. */
+  historyStartAt: string | null
+  /** Km que contó la ECU sobre la base. `0` = el escáner no movió el número. */
+  ecuDeltaKm: number
+  /** Última lectura de la ECU, sólo si `ecuDeltaKm ≠ 0`. */
+  ecuAt: string | null
+  /**
+   * Días (hora de Buenos Aires) desde la fecha más nueva que se conoce, base o
+   * escáner. Lo calcula Postgres: la ficha es SSR y el reloj del navegador
+   * daría un mismatch de hidratación. Con `'unknown'` y sin escáner es el
+   * mínimo: los días desde `historyStartAt` ("hace más de N").
+   */
+  daysSince: number | null
+  /** `daysSince` es un piso, no el número exacto. */
+  daysSinceIsLowerBound: boolean
 }
 
 export const getQuoteVehicleProfileSchema = z.object({ vehicleId: z.uuid() })

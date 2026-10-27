@@ -18,9 +18,9 @@ elige una desde la app. Esta tarjeta es la única forma de publicarlas: el
 backend no tiene otra UI de admin, y el `curl` con token de Clerk copiado a mano
 sería la alternativa.
 
-**No es `ops.quote_request_response`, y conviven.** Aquélla es lo que contestó
-cada taller (con o sin precio, de afuera del directorio también) y alimenta el
-WhatsApp; ésta es lo que se le PUBLICA a la persona. Un presupuesto de `ops`
+**No es `ops.quote_request_response`, y conviven** — aunque desde el 2026-10-27 aquélla ya no
+tiene tarjeta y el WhatsApp sale de acá (ver la sección de esa fecha, abajo). Aquélla era lo que
+contestó cada taller; ésta es lo que se carga y se le PUBLICA a la persona. Un presupuesto de `ops`
 **siembra** una propuesta si el operador lo tilda en «Precargar desde
 presupuestos» (`responseToProposalDraft`), nunca se publica solo. → `leads.md`,
 corrección del 2026-10-26.
@@ -149,6 +149,37 @@ mostrando "falta desplegar" — sin que nada del panel esté roto.
 
 Orden: backend (0120–0122) primero; el panel puede ir antes o después, el guard
 lo cubre.
+
+## Desde el 2026-10-27: es el ÚNICO lugar de carga, y arma el WhatsApp
+
+Pedido del operador: un solo lugar para cargar lo que consiguió, llegue el pedido por la app, la web o
+WhatsApp. Tres cambios, y no se vuelven atrás sin decidirlo de nuevo:
+
+1. **La tarjeta de Presupuestos (`ops.quote_request_response`) se sacó de la ficha** y
+   `QuoteResponses.tsx` se borró. La tabla, la 015/022, el repo y los server functions de escritura
+   siguen en el repo (sin pantalla): lo cargado antes se lee para **«Precargar desde presupuestos
+   anteriores»** en el Sheet, y nada más. Si aparece una pantalla nueva que escriba esa tabla, está mal.
+2. **El mensaje «Presupuestos» sale de las propuestas ACTIVAS** (`proposalToMessageEntry` →
+   `QuoteMessageEntry` en `~/lib/quote-templates`, el único traductor). Las mismas que ve la persona
+   en la app, en el orden de sus lugares. Por eso `listQuoteProposals` resuelve dirección, WhatsApp,
+   horarios y slug del partner igual que `quote-responses.repo.ts` (con el guard de `partner_slugs`):
+   el mensaje tiene que decir lo mismo que decía. La recomendada suma `⭐ Te lo recomendamos: <motivo>`
+   con el motivo que la persona ya lee en la app; las notas internas no viajan. Una vencida no entra.
+3. **Se carga sin cuenta también.** El backend guarda las propuestas de un pedido sin `user_id`; no
+   le llegan a ninguna app y viajan por el WhatsApp. La UI lo dice: «Cargar propuesta» (no «Enviar»),
+   y la descripción del Sheet cambia según haya cuenta.
+
+Con eso, arriba de la ficha va `ChannelBanner`: «Entró por WhatsApp/Web/App», bien grande, y una
+segunda línea que decide por **cuenta**, no por canal — un pedido `app` por el endpoint público no
+tiene `user_id`, y a ése tampoco le llega nada a la app.
+
+La columna «Propuestas» de `/leads/pedidos` y el «N propuestas» del tablero cuentan las activas de
+`quote_request_proposals` (con `quoteProposalsAvailability`, no `to_regclass`); el campo sigue
+llamándose `responseCount` y el sort `responses`, por compatibilidad de links.
+
+**Lo que quedó leyendo la tabla vieja**: la sección Pedidos de `/metricas` (2b propuestas por pedido,
+2d red vs afuera) sale de `ops.quote_request_response` (`metricas.md`), así que desde esta fecha deja de
+crecer. Pasarla a `quote_request_proposals` es trabajo aparte.
 
 ## Cómo verificar un cambio acá
 

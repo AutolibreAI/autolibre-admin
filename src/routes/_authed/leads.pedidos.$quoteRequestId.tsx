@@ -1,5 +1,5 @@
 import { Link, createFileRoute, notFound } from '@tanstack/react-router'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Globe, MessageCircle, Smartphone } from 'lucide-react'
 import {
   formatMinutes,
   parseInternalNotes,
@@ -17,6 +17,7 @@ import {
 import { getQuoteRequestFn } from '~/fn/quote-requests'
 import { listQuoteResponsesFn } from '~/fn/quote-responses'
 import { listQuoteMessageTemplatesFn } from '~/fn/quote-message-templates'
+import { proposalToMessageEntry } from '~/lib/quote-templates'
 import { getQuoteVehicleProfileFn } from '~/fn/quote-vehicle-profile'
 import {
   getServiceCatalog,
@@ -28,7 +29,6 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteRequestPhotos } from '~/components/QuoteRequestPhotos'
 import { listQuoteRequestPhotosFn } from '~/fn/quote-photos'
-import { QuoteResponses } from '~/components/QuoteResponses'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
@@ -113,6 +113,9 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         proposals: { available: false as const },
       }
 
+    // Los presupuestos viejos de `ops` ya no tienen tarjeta (2026-10-27): se
+    // siguen leyendo sólo para PRECARGAR propuestas en los pedidos que los
+    // tenían. Sin la 015 vuelven `{ available: false }` y la precarga no aparece.
     // Los presupuestos, el directorio y las plantillas van en el MISMO
     // `Promise.all` que el catálogo: son independientes entre sí y esperar
     // uno detrás de otro sólo sumaría round trips a una ficha que ya hace
@@ -221,10 +224,15 @@ function QuoteRequestScreen() {
   }
 
   const d = result.detail
+  // Sólo para precargar propuestas desde lo que se cargó antes del 2026-10-27.
   const responseRows = responses.available ? responses.rows : []
   // Hubo al menos un envío por la app: desde ahí `proposals_count` lo lleva el
   // backend y la plantilla «Presupuestos» puede repetir lo que ya le llegó.
   const hasAppSends = proposals.available && proposals.hasAppSends
+  const activeProposals = proposals.available ? proposals.active : []
+  // El mensaje «Presupuestos» sale de las propuestas activas, las MISMAS que
+  // se ven en la tarjeta de abajo (y en la app, si la persona tiene cuenta).
+  const messageEntries = activeProposals.map(proposalToMessageEntry)
 
   return (
     <>
@@ -244,6 +252,8 @@ function QuoteRequestScreen() {
           </div>
         }
       />
+
+      <ChannelBanner detail={d} />
 
       {/*
         Contacto, vehículo y pedido van ARRIBA de todo (pedido del 2026-10-27):
@@ -386,7 +396,7 @@ function QuoteRequestScreen() {
       */}
       {d.vehicleId && vehicleProfile ? <QuoteVehicleProfileCard profile={vehicleProfile} /> : null}
 
-      <QuoteTemplates detail={d} responses={responseRows} templates={templates} hasAppSends={hasAppSends} />
+      <QuoteTemplates detail={d} entries={messageEntries} templates={templates} hasAppSends={hasAppSends} />
 
       <Card className="mb-4">
         <CardContent className="pt-6">
@@ -435,27 +445,11 @@ function QuoteRequestScreen() {
       <QuoteRequestPhotos key={`photos-${d.id}`} quoteRequestId={d.id} data={photos} />
 
       {/*
-        Los presupuestos van ANTES de las acciones porque ése es el orden real
-        del trabajo: el operador llama a los talleres, carga lo que consiguió,
-        y recién ahí marca el pedido como respondido — que es el botón de la
-        tarjeta de abajo, y el único que escribe `proposals_count`.
-      */}
-      <QuoteResponses
-        key={`responses-${d.id}`}
-        quoteRequestId={d.id}
-        available={responses.available}
-        itemsAvailable={responses.available && responses.itemsAvailable}
-        responses={responseRows}
-        partners={partnerOptions}
-        proposalsCount={d.proposalsCount}
-        status={d.status}
-        hasAppSends={hasAppSends}
-      />
-
-      {/*
-        Lo que se le PUBLICA a la persona en la app (backend, por HTTP), debajo
-        de lo que contestó cada taller (ops): un presupuesto puede sembrar una
-        propuesta, nunca al revés. → `.claude/rules/quote-proposals.md`
+        El ÚNICO lugar donde se carga lo que consiguió el operador, llegue el
+        pedido por la app o por WhatsApp (2026-10-27: la tarjeta de
+        Presupuestos de `ops` se sacó). Con cuenta, la persona lo ve en la app;
+        siempre, arma el mensaje «Presupuestos» de arriba.
+        → `.claude/rules/quote-proposals.md`
       */}
       <QuoteProposals
         key={`proposals-${d.id}`}
@@ -464,6 +458,7 @@ function QuoteRequestScreen() {
         responses={responseRows}
         partners={partnerOptions}
         hasUser={d.userId !== null}
+        channel={d.channel}
         status={d.status}
       />
 
@@ -477,7 +472,7 @@ function QuoteRequestScreen() {
         quoteRequestId={d.id}
         status={d.status}
         closeReasonCode={d.closeReasonCode}
-        loadedProposals={responseRows.length}
+        loadedProposals={activeProposals.length}
       />
 
       <PartnerCandidates
@@ -629,6 +624,48 @@ function NotesThread({ raw }: { raw: string | null }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+/**
+ * Por dónde entró el pedido, bien grande y arriba de todo (pedido del
+ * 2026-10-27): es lo que decide cómo le llegan las propuestas a la persona.
+ *
+ * Lo que decide NO es el canal solo sino si hay CUENTA: un pedido `app` por el
+ * endpoint público no tiene `user_id`, y entonces las propuestas no le llegan
+ * a ninguna app. Por eso la segunda línea mira `userId`, y el canal es el
+ * título.
+ */
+function ChannelBanner({ detail: d }: { detail: QuoteRequestDetail }) {
+  const Icon = d.channel === 'whatsapp' ? MessageCircle : d.channel === 'web' ? Globe : Smartphone
+  const hasAccount = d.userId !== null
+  return (
+    <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-card px-4 py-3">
+      <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md bg-secondary" aria-hidden>
+        <Icon className="size-5" />
+      </span>
+      <div className="min-w-0">
+        <div className="font-heading text-lg font-semibold leading-tight">
+          Entró por {quoteChannelLabel(d.channel)}
+          {d.enteredManually ? (
+            <span className="ml-2 align-middle text-xs font-normal text-muted-foreground">cargado a mano</span>
+          ) : null}
+        </div>
+        <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
+          {hasAccount ? (
+            <>
+              <span className="font-medium text-foreground">Tiene cuenta de AutoLibre:</span> las propuestas que
+              cargues le llegan a la app con un aviso. El WhatsApp es opcional.
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-foreground">Sin cuenta de AutoLibre:</span> las propuestas no le
+              llegan a ninguna app. Mandáselas por WhatsApp con el mensaje «Presupuestos».
+            </>
+          )}
+        </p>
+      </div>
+    </div>
   )
 }
 

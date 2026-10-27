@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
-import { formatAmount, formatQuoteAmount, type QuoteResponse } from '~/lib/quote-responses'
+import { formatAmount, formatQuoteAmount } from '~/lib/quote-responses'
+import type { QuoteProposal } from '~/lib/quote-proposals'
 import { formatDate } from '~/lib/format'
 import { partnerProfileUrl } from '~/lib/partners'
 
@@ -23,8 +24,9 @@ import { partnerProfileUrl } from '~/lib/partners'
  * ── "Presupuestos" se reescribió el 2026-09-22, sobre un mensaje REAL ──────
  *
  * Tenía seis `[corchetes]` —proveedor, precio, dirección, horarios, whatsapp,
- * otros detalles— porque "no había columna de la que sacarlos". Ahora la hay
- * (`ops.quote_request_response`, migración 015) y el bloque se arma solo.
+ * otros detalles— porque "no había columna de la que sacarlos". Ahora la hay y
+ * el bloque se arma solo: hasta el 2026-10-27 desde `ops.quote_request_response`
+ * (015), desde esa fecha desde las propuestas (`QuoteMessageEntry`).
  *
  * La forma sale de un mensaje que el operador mandó de verdad, no de una idea
  * de cómo debería ser. De ahí salieron cuatro decisiones que no son obvias:
@@ -188,7 +190,7 @@ export const TEMPLATE_VARIABLES: Record<QuoteTemplateAudience, ReadonlyArray<{ k
     { key: 'pedido', label: 'La descripción del pedido' },
     { key: 'zona', label: 'La zona de la persona (localidad y provincia, nunca la dirección exacta)' },
     { key: 'intro', label: 'El párrafo de presupuestos, redactado según la cantidad' },
-    { key: 'presupuestos', label: 'El bloque numerado con lo que contestó cada taller' },
+    { key: 'presupuestos', label: 'El bloque numerado con las propuestas cargadas del pedido' },
   ],
   taller: [
     { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio' },
@@ -417,23 +419,80 @@ function localityValue(detail: QuoteRequestDetail): string {
 }
 
 /**
- * Qué respuestas entran al mensaje y cuáles no.
+ * Un renglón del bloque «Presupuestos»: lo mínimo que el mensaje necesita de un
+ * taller, sin importar de qué tabla vino.
+ *
+ * Desde el 2026-10-27 el mensaje sale de las PROPUESTAS (`quote_request_proposals`,
+ * del backend) y no de los presupuestos de `ops.quote_request_response`: el
+ * operador carga todo en un solo lugar —«Propuestas en la app»— llegue el
+ * pedido por la app o por WhatsApp, y eso mismo arma el WhatsApp. Antes eran
+ * dos cargas del mismo dato, y el mensaje y la app podían decir cosas
+ * distintas. `proposalToMessageEntry()` es el único traductor.
+ */
+export interface QuoteMessageEntry {
+  name: string
+  address: string | null
+  phone: string | null
+  /** Sólo del directorio: un taller de afuera no tiene horarios cargados. */
+  hours: string | null
+  /** El perfil público vigente. `null` para un taller de afuera o uno no `active`. */
+  partnerSlug: string | null
+  /** `null` en las dos = "a confirmar" · `0` = sin cargo. */
+  amountMin: number | null
+  amountMax: number | null
+  currency: string
+  items: ReadonlyArray<{ label: string; amount: number; optional: boolean }>
+  /** `YYYY-MM-DD`. */
+  validUntil: string | null
+  /** Contra el reloj de Postgres. `null` = sin vigencia declarada. */
+  expired: boolean | null
+  /** El párrafo que lee la persona. */
+  detail: string
+  /** Sólo en la recomendada: el motivo, que es lo que lee la persona. */
+  recommendationReason: string | null
+}
+
+/**
+ * Una propuesta ACTIVA, como renglón del mensaje. Las notas internas no viajan
+ * (son para el operador), y el motivo de recomendación sí: es texto que la
+ * persona ya lee en la app.
+ */
+export function proposalToMessageEntry(p: QuoteProposal): QuoteMessageEntry {
+  return {
+    name: p.providerName,
+    address: p.address,
+    phone: p.phone,
+    hours: p.hours,
+    partnerSlug: p.partnerSlug,
+    amountMin: p.amountMin,
+    amountMax: p.amountMax,
+    currency: p.currency,
+    items: p.items,
+    validUntil: p.validUntil,
+    expired: p.expired,
+    detail: p.description,
+    recommendationReason: p.isRecommended ? p.recommendationReason : null,
+  }
+}
+
+/**
+ * Qué entradas entran al mensaje y cuáles no.
  *
  * **Una vencida NO entra**: mandar un precio que ya caducó es peor que mandar
  * uno menos. Se devuelven las dos listas en vez de filtrar en silencio, para
  * que la pantalla pueda decir "2 de 3 entran; una venció" — un renglón que
  * desaparece sin explicación es un bug desde el lado del operador.
  *
- * `expired` lo calculó Postgres (ver `~/lib/quote-responses`), así que esta
- * partición da lo mismo en el servidor y en el cliente.
+ * `expired` lo calculó Postgres, así que esta partición da lo mismo en el
+ * servidor y en el cliente.
  */
-export function splitQuoteResponsesForMessage(responses: ReadonlyArray<QuoteResponse>): {
-  included: Array<QuoteResponse>
-  expired: Array<QuoteResponse>
+export function splitQuoteMessageEntries(entries: ReadonlyArray<QuoteMessageEntry>): {
+  included: Array<QuoteMessageEntry>
+  expired: Array<QuoteMessageEntry>
 } {
   return {
-    included: responses.filter((r) => r.expired !== true),
-    expired: responses.filter((r) => r.expired === true),
+    included: entries.filter((r) => r.expired !== true),
+    expired: entries.filter((r) => r.expired === true),
   }
 }
 
@@ -453,13 +512,15 @@ function formatItemAmount(amount: number, currency: string): string {
   return amount === 0 ? 'sin cargo' : formatAmount(amount, currency)
 }
 
-function responsesBlock(responses: ReadonlyArray<QuoteResponse>): string {
-  const { included } = splitQuoteResponsesForMessage(responses)
-  if (included.length === 0) return '[todavía no hay presupuestos cargados en el pedido]'
+function responsesBlock(entries: ReadonlyArray<QuoteMessageEntry>): string {
+  const { included } = splitQuoteMessageEntries(entries)
+  if (included.length === 0) return '[todavía no hay propuestas cargadas en el pedido]'
 
   return included
     .map((r, i) => {
       const lines = [`${i + 1}. ${r.name}`]
+      // La recomendada lo dice con el MISMO motivo que la persona lee en la app.
+      if (r.recommendationReason) lines.push(`⭐ Te lo recomendamos: ${r.recommendationReason}`)
       if (r.address) lines.push(`📍 ${r.address}`)
       if (r.phone) lines.push(`📞 ${r.phone}`)
       if (r.hours) lines.push(`🕘 ${r.hours}`)
@@ -495,15 +556,15 @@ function responsesBlock(responses: ReadonlyArray<QuoteResponse>): string {
  * pedido. Un placeholder sin valor en `values` se deja tal cual entre llaves
  * — visible y buscable — en vez de desaparecer en silencio.
  *
- * `responses` es opcional y por defecto vacío: la plantilla de Apertura no las
+ * `entries` es opcional y por defecto vacío: la plantilla de Apertura no las
  * usa, y así el llamador que sólo quiere ésa no depende de una consulta más.
  */
 export function renderQuoteTemplate(
   template: QuoteTemplate,
   detail: QuoteRequestDetail,
-  responses: ReadonlyArray<QuoteResponse> = [],
+  entries: ReadonlyArray<QuoteMessageEntry> = [],
 ): string {
-  const { included } = splitQuoteResponsesForMessage(responses)
+  const { included } = splitQuoteMessageEntries(entries)
 
   const values: Record<string, string> = {
     codigo: quotePublicCode(detail.publicNumber),
@@ -515,7 +576,7 @@ export function renderQuoteTemplate(
     zona: zoneValue(detail),
     localidad: localityValue(detail),
     intro: introSentence(included.length, vehiclePhrase(detail), detail.description),
-    presupuestos: responsesBlock(responses),
+    presupuestos: responsesBlock(entries),
   }
 
   // Una línea cuyo ÚNICO contenido es un placeholder de `OPTIONAL_LINE_KEYS`

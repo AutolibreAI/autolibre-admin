@@ -283,7 +283,7 @@ function Pedidos() {
                 <Sort label="Canal" sortKey="channel" search={search} />
                 <Sort label="Contacto" sortKey="contact" search={search} />
                 <Sort label="Vehículo" sortKey="plate" search={search} />
-                <Sort label="Presupuestos" sortKey="responses" search={search} align="right" firstClick="desc" />
+                <Sort label="Propuestas" sortKey="responses" search={search} align="right" firstClick="desc" />
                 <TableHead>Descripción</TableHead>
                 <Sort label="Zona" sortKey="location" search={search} />
                 <Sort label="Monto declarado" sortKey="declaredAmount" search={search} align="right" firstClick="desc" />
@@ -475,7 +475,7 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
         )}
       </TableCell>
 
-      {/* Presupuestos CARGADOS (lo que contestó cada taller); `—` = la 015 no está aplicada. */}
+      {/* Propuestas ACTIVAS cargadas; `—` = esta base no tiene 0120–0122 del backend. */}
       <TableCell className="text-right tabular-nums">
         {row.responseCount === null ? <Muted /> : row.responseCount === 0 ? <Muted>0</Muted> : formatInt(row.responseCount)}
       </TableCell>

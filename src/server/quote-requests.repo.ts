@@ -3,6 +3,7 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import { readQuoteGeocode } from './quote-geocode.repo'
 import { quoteResponsesAvailable } from './quote-responses.repo'
+import { quoteProposalsAvailability } from './quote-proposals.repo'
 import { mapTaskRow, type TaskRow } from './users.repo'
 import { lookupDtc } from './dtc-catalog'
 import { METRICS_TZ, type GrowthUnit } from '~/lib/ops'
@@ -477,26 +478,33 @@ export async function listQuoteRequests(
 
 /**
  * Las dos columnas de `ops` que sólo el listado necesita: el vehículo escrito
- * (018) y cuántos presupuestos se cargaron (015). Van como subconsultas
+ * (018) y cuántas propuestas activas tiene (0120–0122 del backend; hasta el
+ * 2026-10-27 contaba los presupuestos de la 015). Van como subconsultas
  * ESCALARES, no como JOINs: una fila de `quote_requests` no se multiplica.
  *
  * Cada tabla puede no existir en esta base (la migración todavía no corrió), y
  * referenciar una relación inexistente explota al planificar la sentencia — por
  * eso se mira con `to_regclass` ANTES y, sin tabla, la columna sale `NULL` en
  * vez de romper el listado. Mismo criterio que `quoteEditAvailable()`.
- * `NULL` ≠ `0`: sin la 015 no sabemos cuántos hay; con ella, cero es cero.
+ * `NULL` ≠ `0`: sin 0120–0122 no sabemos cuántas hay; con ellas, cero es cero.
+ * Las propuestas usan su PROPIO guard (`quoteProposalsAvailability`): en
+ * producción la tabla existe vieja, sin `withdrawn_at`, y un `to_regclass` solo
+ * diría "disponible".
  */
 async function listExtraColumns(): Promise<string> {
-  const row = await sqlOne<{ has_text: boolean; has_resp: boolean; has_files: boolean }>(
-    `select to_regclass('ops.quote_request_vehicle_text') is not null as has_text,
-            to_regclass('ops.quote_request_response') is not null as has_resp,
-            to_regclass('public.quote_request_files') is not null as has_files`,
-  )
+  const [row, proposalsAvailable] = await Promise.all([
+    sqlOne<{ has_text: boolean; has_files: boolean }>(
+      `select to_regclass('ops.quote_request_vehicle_text') is not null as has_text,
+              to_regclass('public.quote_request_files') is not null as has_files`,
+    ),
+    quoteProposalsAvailability(),
+  ])
   const vehicleText = row?.has_text
     ? `(select vt.vehicle_text from ops.quote_request_vehicle_text vt where vt.quote_request_id = qr.id)`
     : `null::text`
-  const responseCount = row?.has_resp
-    ? `(select count(*)::int from ops.quote_request_response rr where rr.quote_request_id = qr.id)`
+  // Propuestas ACTIVAS: las retiradas liberaron su lugar y no entran al mensaje.
+  const responseCount = proposalsAvailable
+    ? `(select count(*)::int from quote_request_proposals pr where pr.quote_request_id = qr.id and pr.withdrawn_at is null)`
     : `null::int`
   // Fotos de la persona (app) y las cargadas desde el panel (020). Todas las
   // de `quote_request_files`, también un presupuesto adjunto.
@@ -1242,12 +1250,107 @@ interface VehicleProfileRow {
   vehicle_engine_number: string | null
   reg_card_engine_number: string | null
   insurance_engine_number: string | null
-  odometer_km: number | string | null
   /** NULL si `vehicle_last_dtc_scans` no tiene fila — "nunca se escaneó". */
   lds_vehicle_id: string | null
   dtc_scanned_at: Date | string | null
   /** El array de `session_dtc_snapshots.codes` para esa sesión. `NULL` si el snapshot no existe. */
   dtc_codes: Array<string> | null
+}
+
+interface OdometerRow {
+  base_km: number | string | null
+  ecu_delta_km: number | string | null
+  ecu_at: Date | string | null
+  created_at: Date | string
+  manual_at: Date | string | null
+  log_start_at: Date | string | null
+  manual_source: 'reading' | 'alta' | 'unknown'
+  days_since: number | string | null
+  days_since_log_start: number | string | null
+}
+
+/**
+ * El km del auto TAL CUAL lo ve la persona, y cuándo se cargó.
+ *
+ * El km es la fórmula de `Vehicle.currentOdometer` del backend, copiada: base
+ * a mano + (lectura actual de la ECU − baseline). Mostrar `odometer_value` solo
+ * —lo que hacía esta tarjeta hasta el 2026-10-27— daba de menos en los autos
+ * escaneados (10 de 28 en producción ese día, hasta 841 km). Si el backend
+ * cambia esa fórmula, esto se toca con ella.
+ *
+ * `vehicle_audit_logs` es del backend y puede no existir en una base vieja:
+ * `to_regclass` antes, y sin ella la base queda `'unknown'`.
+ * → `QuoteOdometerFreshness` en `~/lib/quote-vehicle-profile`.
+ */
+async function findVehicleOdometer(
+  vehicleId: string,
+): Promise<{ km: number | null; freshness: QuoteVehicleProfile['odometer'] }> {
+  const audit = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.vehicle_audit_logs') is not null as ok`,
+  )
+  const manualAt =
+    audit?.ok === true
+      ? `(select max(a.changed_at) from vehicle_audit_logs a where a.vehicle_id = v.id and a.field = 'odometer')`
+      : `null::timestamptz`
+  const logStart =
+    audit?.ok === true
+      ? `(select min(a.changed_at) from vehicle_audit_logs a where a.field = 'odometer')`
+      : `null::timestamptz`
+
+  const row = await sqlOne<OdometerRow>(
+    `with o as (
+       select coalesce(v.odometer_value, 0) as base_km,
+              case when v.current_distance_since_dtc_clear_km is null then 0
+                   else v.current_distance_since_dtc_clear_km - coalesce(v.distance_since_dtc_clear_baseline_km, 0)
+              end as ecu_delta_km,
+              v.dtc_clear_reading_at as ecu_at,
+              v.created_at,
+              ${manualAt} as manual_at,
+              ${logStart} as log_start_at
+         from vehicles v
+        where v.id = $1
+     ), s as (
+       select o.*,
+              case when o.manual_at is not null then 'reading'
+                   when o.log_start_at is not null and o.created_at >= o.log_start_at then 'alta'
+                   else 'unknown' end as manual_source
+         from o
+     )
+     select s.*,
+            -- greatest() ignora los NULL: la fecha mas nueva que se conoce, base o escaner.
+            ((now() at time zone $2)::date - (greatest(
+               case when s.base_km > 0 then
+                 case s.manual_source when 'reading' then s.manual_at when 'alta' then s.created_at end
+               end,
+               case when s.ecu_delta_km <> 0 then s.ecu_at end
+             ) at time zone $2)::date) as days_since,
+            ((now() at time zone $2)::date - (s.log_start_at at time zone $2)::date) as days_since_log_start
+       from s`,
+    [vehicleId, METRICS_TZ],
+  )
+
+  const base = toIntOrNull(row?.base_km) ?? 0
+  const delta = toIntOrNull(row?.ecu_delta_km) ?? 0
+  const total = base + delta
+  const source = row?.manual_source ?? 'unknown'
+  const daysSince = toIntOrNull(row?.days_since)
+  // Sin fecha exacta de la base y sin escáner: lo único que se sabe es que es
+  // anterior al registro de cambios — "hace más de N días", un piso.
+  const lowerBound = daysSince === null && base > 0 && source === 'unknown' && delta === 0
+  return {
+    km: total > 0 ? total : null,
+    freshness: {
+      manualKm: base > 0 ? base : null,
+      manualAt: source === 'reading' ? toIso(row?.manual_at ?? null) : source === 'alta' ? toIso(row?.created_at ?? null) : null,
+      manualSource: source,
+      vehicleCreatedAt: toIso(row?.created_at ?? null) ?? '',
+      historyStartAt: toIso(row?.log_start_at ?? null),
+      ecuDeltaKm: delta,
+      ecuAt: delta !== 0 ? toIso(row?.ecu_at ?? null) : null,
+      daysSince: lowerBound ? toIntOrNull(row?.days_since_log_start) : daysSince,
+      daysSinceIsLowerBound: lowerBound,
+    },
+  }
 }
 
 /**
@@ -1275,7 +1378,7 @@ export async function findQuoteVehicleProfile(
 ): Promise<QuoteVehicleProfile> {
   void opts.signal
 
-  const [row, taskRows] = await Promise.all([
+  const [row, taskRows, odometer] = await Promise.all([
     sqlOne<VehicleProfileRow>(
       `select
          nullif(btrim(v.vin), '') as vin,
@@ -1288,7 +1391,6 @@ export async function findQuoteVehicleProfile(
             from insurances i
            where i.vehicle_id = v.id and coalesce(btrim(i.engine_number), '') <> ''
            order by i.archived asc, i.created_at desc limit 1) as insurance_engine_number,
-         case when coalesce(v.odometer_value, 0) > 0 then v.odometer_value end as odometer_km,
          lds.vehicle_id as lds_vehicle_id,
          lds.scanned_at as dtc_scanned_at,
          sds.codes as dtc_codes
@@ -1307,6 +1409,7 @@ export async function findQuoteVehicleProfile(
         order by coalesce(o.performed_at, o.due_date, o.created_at) desc`,
       [vehicleId],
     ),
+    findVehicleOdometer(vehicleId),
   ])
 
   let engineNumber: string | null = null
@@ -1334,7 +1437,8 @@ export async function findQuoteVehicleProfile(
     vin: row?.vin ?? null,
     engineNumber,
     engineNumberSource,
-    odometerKm: toIntOrNull(row?.odometer_km),
+    odometerKm: odometer.km,
+    odometer: odometer.freshness,
     dtcCodes,
     dtcScannedAt: row?.lds_vehicle_id ? toIso(row.dtc_scanned_at) : null,
     tasks: taskRows.map(mapTaskRow),

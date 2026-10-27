@@ -7,11 +7,13 @@ import { MAX_QUOTE_AMOUNT, QUOTE_CURRENCIES, type QuoteCurrency, type QuoteRespo
  *
  * ── No es `ops.quote_request_response`, y conviven ──────────────────────────
  *
- * Los presupuestos de `ops` (015/022, `~/lib/quote-responses`) son lo que
- * contestó cada taller y alimentan la plantilla de WhatsApp. Las propuestas de
- * acá son lo que se le PUBLICA a la persona en la app: hasta 3 activas por
- * pedido, con push. Un presupuesto de `ops` puede sembrar una propuesta
- * (`responseToProposalDraft`), pero nunca se envía solo.
+ * Los presupuestos de `ops` (015/022, `~/lib/quote-responses`) eran lo que
+ * contestó cada taller y alimentaban la plantilla de WhatsApp. Desde el
+ * 2026-10-27 la ficha ya no los carga: TODO se carga como propuesta —llegue el
+ * pedido por la app o por WhatsApp—, y las propuestas activas arman el mensaje
+ * «Presupuestos» (`proposalToMessageEntry` en `~/lib/quote-templates`). Con
+ * cuenta, además, la persona las ve en la app con push. Los presupuestos viejos
+ * de `ops` sólo quedan para precargar (`responseToProposalDraft`).
  *
  * ── Lee por SQL, escribe por HTTP ───────────────────────────────────────────
  *
@@ -67,6 +69,17 @@ export interface QuoteProposal {
   providerPhone: string | null
   /** Sólo para un partner: si su ficha tiene WhatsApp cargado. Un externo siempre lo trae. */
   partnerHasWhatsapp: boolean
+  /**
+   * Lo RESUELTO para el mensaje de WhatsApp: del partner si es del directorio
+   * (sigue al directorio si lo corrigen), del campo tipeado si es de afuera.
+   * Mismo criterio que `QuoteResponse.address/phone/hours`.
+   */
+  address: string | null
+  phone: string | null
+  /** Sólo del directorio. */
+  hours: string | null
+  /** Slug vigente del perfil público; sólo para un partner `active`. */
+  partnerSlug: string | null
   /** `null` en las dos = "a confirmar". `0` = sin cargo. Con ítems, la suma de los obligatorios. */
   amountMin: number | null
   amountMax: number | null

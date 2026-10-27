@@ -103,12 +103,12 @@ export function QuoteRequestActions({
   status: string
   closeReasonCode: string | null
   /**
-   * Cuántos presupuestos hay cargados en `quote_request_proposals` (migración
-   * 015). Sólo SIEMBRA el campo de «Marcar respondido» — la cantidad que
-   * termina en `proposals_count` es la que el operador confirme, porque son
-   * dos cosas distintas: uno es lo que se cargó en el panel, el otro es lo que
-   * se le pasó a la persona. Casi siempre coinciden; cuando no, gana lo que el
-   * operador escriba, y `<QuoteResponses/>` avisa de la diferencia.
+   * Cuántas propuestas activas hay cargadas («Propuestas en la app», desde el
+   * 2026-10-27; antes, los presupuestos de `ops`). Sólo SIEMBRA el campo de
+   * «Marcar respondido» — la cantidad que termina en `proposals_count` es la
+   * que el operador confirme. En la práctica, cargar una propuesta ya deja el
+   * pedido en `answered` (lo mueve el backend), así que esto pesa sobre todo
+   * en el caso de cero.
    */
   loadedProposals: number
 }) {
@@ -363,7 +363,7 @@ export function ProposalsCountField({
 }: {
   value: string
   onChange: (value: string) => void
-  /** Cuántos presupuestos hay cargados; `undefined` donde no se sabe (el tablero). */
+  /** Cuántas propuestas hay cargadas; `undefined` donde no se sabe (el tablero). */
   loadedProposals?: number
 }) {
   const countId = useId()
@@ -389,7 +389,7 @@ export function ProposalsCountField({
       <p className="text-xs leading-relaxed text-muted-foreground">
         Cero es válido: llamamos y no conseguimos nada.
         {loadedProposals !== undefined && loadedProposals > 0
-          ? ` Viene sembrado con los ${loadedProposals} presupuestos cargados arriba; corregilo si le pasaste otra cantidad.`
+          ? ` Viene sembrado con las ${loadedProposals} propuestas cargadas arriba; corregilo si le pasaste otra cantidad.`
           : ''}
       </p>
     </div>

@@ -879,7 +879,12 @@ mano, fuera del panel — no una dependencia de runtime. Sin ella el panel de
 candidatos funciona igual, sólo que con menos partners ubicados (lo dice en
 pantalla si son menos de la mitad).
 
-### Presupuestos (`<QuoteResponses/>`) — desde el 2026-09-22
+### Presupuestos (`<QuoteResponses/>`) — desde el 2026-09-22, SIN PANTALLA desde el 2026-10-27
+
+> **⚠ El 2026-10-27 la tarjeta se sacó y `QuoteResponses.tsx` se borró.** Todo se carga como
+> propuesta («Propuestas», `quote-proposals.md`) y el mensaje «Presupuestos» sale de las propuestas
+> activas. Lo de abajo sigue describiendo la tabla `ops.quote_request_response` (que queda, sólo
+> para precargar) y el formato del mensaje, que no cambió.
 
 Alcance: `src/lib/quote-responses.ts`, `src/server/quote-responses.repo.ts`,
 `src/fn/quote-responses.ts`, `src/components/QuoteResponses.tsx`, la migración
@@ -1243,6 +1248,18 @@ sesión—, mismo error que `.claude/rules/scan-detections.md` ya documentaba
 para otra pantalla. Los dos ahora leen la misma fuente; si vuelven a
 divergir, `/usuarios` y esta ficha van a decir dos números de DTC distintos
 para el mismo auto.
+
+**El kilometraje, desde el 2026-10-27, es el que ve la persona y lleva fecha.** No es
+`vehicles.odometer_value` a secas: el backend lo compone (`Vehicle.currentOdometer`) con la base
+que cargó a mano + lo que avanzó el contador de la ECU (`current_distance_since_dtc_clear_km −
+distance_since_dtc_clear_baseline_km`). Mostrar sólo la base daba de menos en 10 de 28 autos
+escaneados (hasta 841 km). La fecha sale de `vehicle_audit_logs` (`field = 'odometer'`, una fila por
+cada CAMBIO que hace la persona, no en el alta), que el backend escribe desde el 13/09/2026: sin
+fila y con alta posterior, el km es del alta; sin fila y con alta anterior, «sin fecha exacta: entre
+el alta y el 13/09» — nunca una fecha inventada. Lo del escáner se fecha con
+`dtc_clear_reading_at`. Ámbar pasados `ODOMETER_STALE_AFTER_DAYS` (90). `findVehicleOdometer` en
+`quote-requests.repo.ts`; si el backend cambia la fórmula, se toca con ella. **Ojo**:
+`/vehiculos/listado`, la ficha del vehículo y `/escaneres` todavía muestran la base sola.
 
 `Tasks`/`TaskRow`/`TaskStateTag` se extrajeron de `/usuarios/:id` a
 `src/components/MaintenanceTasks.tsx` (renombrado `MaintenanceTasks` en el

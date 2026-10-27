@@ -93,6 +93,10 @@ interface ProposalRow {
   provider_address: string | null
   provider_phone: string | null
   partner_has_whatsapp: boolean
+  resolved_address: string | null
+  resolved_phone: string | null
+  resolved_hours: string | null
+  partner_slug: string | null
   amount_min: string | null
   amount_max: string | null
   currency: string
@@ -131,6 +135,10 @@ function mapProposal(r: ProposalRow): QuoteProposal {
     providerAddress: r.provider_address,
     providerPhone: r.provider_phone,
     partnerHasWhatsapp: r.partner_has_whatsapp === true,
+    address: r.resolved_address,
+    phone: r.resolved_phone,
+    hours: r.resolved_hours,
+    partnerSlug: r.partner_slug,
     // `numeric` llega como string. `toNum` preserva el null: "a confirmar" ≠ "sin cargo".
     amountMin: toNum(r.amount_min),
     amountMax: toNum(r.amount_max),
@@ -160,6 +168,9 @@ function mapProposal(r: ProposalRow): QuoteProposal {
  * - El nombre se RESUELVE en el SELECT (`coalesce(pa.name, p.provider_name)`),
  *   igual que en `quote-responses.repo.ts`. `LEFT JOIN` porque `partner_id` es
  *   nullable: un `JOIN` escondería a los talleres de afuera.
+ * - Dirección, WhatsApp, horarios y slug se resuelven como en
+ *   `quote-responses.repo.ts`: son lo que arma el mensaje «Presupuestos» desde
+ *   el 2026-10-27, y tienen que decir lo mismo que decía aquél.
  * - `freeSlots` se calcula ACÁ: es el número que el envío re-lee antes del
  *   fetch, y la UI y el handler tienen que partir del mismo.
  *
@@ -171,12 +182,27 @@ export async function listQuoteProposals(
 ): Promise<Extract<QuoteProposalsResult, { available: true }>> {
   void opts.signal
 
+  // `partner_slugs` es del backend (drizzle 0107) y puede no estar: nombrarla
+  // sin que exista explota al planificarse. Mismo guard que `quote-responses.repo.ts`.
+  const slugs = await sqlOne<{ ok: boolean }>(`select to_regclass('public.partner_slugs') is not null as ok`)
+  const slugColumn =
+    slugs?.ok === true
+      ? `case when pa.status = 'active' then (
+           select ps.slug from partner_slugs ps where ps.partner_id = pa.id and ps.is_current
+         ) end as partner_slug`
+      : `null::text as partner_slug`
+
   const [proposalRows, sendRows, request] = await Promise.all([
     sql<ProposalRow>(
       `select p.id, p.send_id, p.position, p.partner_id,
               coalesce(pa.name, p.provider_name) as provider_name,
               p.provider_address, p.provider_phone,
               coalesce(btrim(pa.whatsapp), '') <> '' as partner_has_whatsapp,
+              -- Lo que va al mensaje de WhatsApp: del directorio si es partner, lo tipeado si es de afuera.
+              nullif(btrim(coalesce(pa.address, p.provider_address, '')), '') as resolved_address,
+              nullif(btrim(coalesce(pa.whatsapp, p.provider_phone, '')), '') as resolved_phone,
+              nullif(btrim(coalesce(pa.hours, '')), '') as resolved_hours,
+              ${slugColumn},
               p.amount_min, p.amount_max, p.currency::text as currency, p.items,
               p.description, p.internal_notes,
               to_char(p.valid_until, 'YYYY-MM-DD') as valid_until,

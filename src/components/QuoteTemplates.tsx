@@ -7,8 +7,9 @@ import {
   readableQuoteMessageTemplateError,
   renderQuoteTemplate,
   saveQuoteMessageTemplateSchema,
-  splitQuoteResponsesForMessage,
+  splitQuoteMessageEntries,
   whatsAppMessageUrl,
+  type QuoteMessageEntry,
   type QuoteMessageTemplate,
   type QuoteMessageTemplateVersion,
   type QuoteTemplateAudience,
@@ -16,7 +17,6 @@ import {
 import { canonicalWhatsAppDigits } from '~/lib/partners'
 import { listQuoteMessageTemplateVersionsFn, saveQuoteMessageTemplateFn } from '~/fn/quote-message-templates'
 import type { QuoteRequestDetail } from '~/lib/quote-requests'
-import type { QuoteResponse } from '~/lib/quote-responses'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -40,20 +40,19 @@ import { cn } from '~/lib/utils'
  * `PartnerCandidates` tampoco lo hace: el botón "Pedir cotización" tiene que
  * usar la MISMA plantilla `cotizacion_red` que se ve acá, editada o no.
  *
- * ── El render sale de `detail` + `responses`, no de la plantilla cruda ─────
+ * ── El render sale de `detail` + `entries`, no de la plantilla cruda ───────
  *
- * `renderQuoteTemplate(template, detail, responses)` reemplaza los
+ * `renderQuoteTemplate(template, detail, entries)` reemplaza los
  * `{{placeholders}}`. La plantilla «Presupuestos» arma el bloque numerado con
- * lo que contestó cada taller: nombre, dirección, teléfono, horarios, precio
- * si hay, y el párrafo. Un dato que no está no deja un renglón vacío — no
- * aparece.
+ * las PROPUESTAS activas del pedido (desde el 2026-10-27; antes, con los
+ * presupuestos de `ops`): nombre, dirección, teléfono, horarios, precio si hay,
+ * y el párrafo. Un dato que no está no deja un renglón vacío — no aparece.
  *
- * ── `responses` entra como PROP, no se pide acá ────────────────────────────
+ * ── `entries` entra como PROP, no se pide acá ──────────────────────────────
  *
- * Las trae el loader de la ficha, que ya las necesita para `<QuoteResponses/>`.
- * Pedirlas de nuevo desde acá sería una segunda consulta con otro snapshot, y
- * el texto que se manda podría no ser la lista que se ve dos tarjetas más
- * abajo.
+ * Las arma la ficha desde las propuestas que ya trae el loader para
+ * `<QuoteProposals/>`. Pedirlas de nuevo desde acá sería otro snapshot, y el
+ * texto que se manda podría no ser la lista que se ve en la tarjeta de abajo.
  *
  * ── De sólo lectura, desde el 2026-09-25 ───────────────────────────────────
  *
@@ -68,19 +67,19 @@ import { cn } from '~/lib/utils'
  * escritura real de este componente.
  *
  * El bloque de texto va recortado a unas pocas líneas con un toggle «ver
- * más» — mismo patrón que el detalle de cada fila en `ResponseRow`
- * (`QuoteResponses.tsx`) — para no ocupar la pantalla con un mensaje de
+ * más» — para no ocupar la pantalla con un mensaje de
  * varios párrafos que la mayoría de las veces no hace falta leer entero acá:
  * se lee (y se edita) en WhatsApp.
  */
 export function QuoteTemplates({
   detail,
-  responses,
+  entries,
   templates,
   hasAppSends = false,
 }: {
   detail: QuoteRequestDetail
-  responses: Array<QuoteResponse>
+  /** Las propuestas activas del pedido, ya traducidas (`proposalToMessageEntry`). */
+  entries: Array<QuoteMessageEntry>
   templates: Array<QuoteMessageTemplate>
   /** Hubo envíos por «Propuestas en la app»: la persona ya pudo haber recibido esto. */
   hasAppSends?: boolean
@@ -107,7 +106,7 @@ export function QuoteTemplates({
   const active = templates.find((t) => t.id === activeId) ?? templates[0]
   if (!active) return null
 
-  const text = renderQuoteTemplate(active, detail, responses)
+  const text = renderQuoteTemplate(active, detail, entries)
   // Recorte a ojo: un mensaje de menos de ~6 líneas o ~320 caracteres ya
   // entra sin recortar, así que el toggle "ver más" no aparece para nada.
   const isLong = text.split('\n').length > 6 || text.length > 320
@@ -121,7 +120,7 @@ export function QuoteTemplates({
   // adivinar la característica — adivinarla mal le escribe a otra persona.
   const digits = isForPerson ? canonicalWhatsAppDigits(detail.contactPhone) : null
   const waUrl = isForPerson ? whatsAppMessageUrl(digits, text) : null
-  const { expired } = splitQuoteResponsesForMessage(responses)
+  const { expired } = splitQuoteMessageEntries(entries)
 
   async function copy() {
     try {
@@ -180,22 +179,22 @@ export function QuoteTemplates({
         ) : null}
 
         {/*
-          Aviso, no bloqueo: con cuenta y envíos por la app, la persona ya vio
-          propuestas ahí, y repetírselas por WhatsApp puede confundir. Copiar y
-          el botón siguen activos — el operador decide.
+          Aviso, no bloqueo: con cuenta y envíos por la app, la persona ya ve
+          estas mismas propuestas ahí (el mensaje sale de ellas). Copiar y el
+          botón siguen activos — el operador decide si hace falta repetirlas.
         */}
         {active.id === 'presupuestos' && hasAppSends && detail.userId !== null ? (
           <p className="mb-3 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
-            A esta persona ya le llegaron propuestas por la app. Si le mandás este mensaje, asegurate de que no repita
-            (o contradiga) lo que ya ve ahí.
+            Esta persona tiene cuenta: estas mismas propuestas ya le llegaron a la app. Mandá este mensaje sólo si
+            además hace falta por WhatsApp.
           </p>
         ) : null}
 
         {active.id === 'presupuestos' && expired.length > 0 ? (
           <p className="mb-3 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
             {expired.length === 1
-              ? 'Un presupuesto venció y no entra en el mensaje.'
-              : `${expired.length} presupuestos vencieron y no entran en el mensaje.`}{' '}
+              ? 'Una propuesta venció y no entra en el mensaje.'
+              : `${expired.length} propuestas vencieron y no entran en el mensaje.`}{' '}
             Mandar un precio caducado es peor que mandar uno menos.
           </p>
         ) : null}
@@ -257,7 +256,7 @@ export function QuoteTemplates({
                 ? 'Este mensaje es para el taller: mandalo con el botón "Pedir cotización" del candidato elegido, o copialo y pegalo en tu WhatsApp.'
                 : !digits
                   ? 'Sin botón de WhatsApp: el teléfono del pedido no está en la forma 549 + 10 dígitos, y completar una característica sería adivinarla. Copiá el texto y mandalo desde tu WhatsApp.'
-                  : `Sin botón de WhatsApp: el mensaje tiene ${text.length} caracteres y el link soporta hasta ${WHATSAPP_TEXT_MAX}. Copialo, o acortá alguna respuesta.`}
+                  : `Sin botón de WhatsApp: el mensaje tiene ${text.length} caracteres y el link soporta hasta ${WHATSAPP_TEXT_MAX}. Copialo, o acortá alguna propuesta.`}
             </span>
           ) : null}
         </div>
@@ -271,7 +270,7 @@ export function QuoteTemplates({
         mode={editing === 'new' ? 'create' : 'edit'}
         template={editing === 'active' ? active : null}
         detail={detail}
-        responses={responses}
+        entries={entries}
         onSaved={(saved) => {
           setEditing(null)
           setActiveId(saved.id)
@@ -290,7 +289,7 @@ function TemplateEditorSheet({
   mode,
   template,
   detail,
-  responses,
+  entries,
   onSaved,
 }: {
   open: boolean
@@ -299,7 +298,7 @@ function TemplateEditorSheet({
   /** La plantilla siendo editada. `null` en modo `create`. */
   template: QuoteMessageTemplate | null
   detail: QuoteRequestDetail
-  responses: Array<QuoteResponse>
+  entries: Array<QuoteMessageEntry>
   onSaved: (template: QuoteMessageTemplate) => void
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -361,7 +360,7 @@ function TemplateEditorSheet({
     })
   }
 
-  const preview = renderQuoteTemplate({ id: template?.id ?? 'preview', title, audience, content }, detail, responses)
+  const preview = renderQuoteTemplate({ id: template?.id ?? 'preview', title, audience, content }, detail, entries)
 
   async function submit() {
     const parsed = saveQuoteMessageTemplateSchema.safeParse({
