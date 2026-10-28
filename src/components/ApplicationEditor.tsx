@@ -140,6 +140,9 @@ export function ApplicationEditor({
     address: app.address,
     brandSpecialized: app.brandSpecialized,
     contactChannel: app.contactChannel ?? '',
+    whatsappMessage:
+      app.whatsappMessage ??
+      (app.whatsapp.trim() ? `Hola ${app.businessName}, te contacto desde AutoLibre.` : ''),
     howFound: app.howFound ?? '',
     howFoundOther: app.howFoundOther ?? '',
     serviceOther: app.serviceOther ?? '',

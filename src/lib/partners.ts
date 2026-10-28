@@ -112,6 +112,7 @@ export interface ApplicationListItem {
 }
 
 export interface ApplicationDetail extends ApplicationListItem {
+  logoUrl: string | null
   brandSpecialized: boolean
   declaredBrands: Array<string>
   declaredFuelTypes: Array<string>
