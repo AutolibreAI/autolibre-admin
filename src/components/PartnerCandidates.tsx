@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
-import { Check, List, Map as MapIcon, MapPin, MessageCircle, Save, Send } from 'lucide-react'
+import { Check, List, Map as MapIcon, MapPin, MessageCircle, Save, Send, Sparkles } from 'lucide-react'
 import {
   addQuoteRequestInternalNoteFn,
   geocodeQuoteRequestFn,
@@ -13,6 +13,7 @@ import {
   type PartnerCandidate,
 } from '~/lib/partners'
 import {
+  AI_SERVICE_LOW_SCORE,
   quoteMapLocation,
   quotePublicCode,
   readableQuoteRequestError,
@@ -158,7 +159,14 @@ export function PartnerCandidates({
   const [savingRubro, setSavingRubro] = useState(false)
   const [rubroError, setRubroError] = useState<string | null>(null)
   const [zoneFilter, setZoneFilter] = useState<Array<string>>([])
-  const [serviceFilter, setServiceFilter] = useState<Array<string>>([])
+  // Los servicios que sugirió la IA (0124) arrancan tildados. Es sólo el
+  // valor inicial: el operador los cambia, y fuera de los rubros elegidos
+  // dejan de filtrar solos (`activeServiceFilter` interseca con las opciones).
+  // El componente se monta con `key` por pedido, así que no arrastra la
+  // sugerencia de otro.
+  const ai = detail.aiClassification
+  const aiServices = ai.available ? ai.services : []
+  const [serviceFilter, setServiceFilter] = useState<Array<string>>(() => aiServices.map((s) => s.serviceSlug))
   const [onlyFounding, setOnlyFounding] = useState(false)
   const [order, setOrder] = useState<CandidateOrder>('distance')
   const [view, setView] = useState<CandidateView>('list')
@@ -301,6 +309,9 @@ export function PartnerCandidates({
             {rubroError}
           </p>
         ) : null}
+
+        <AiSuggestion classification={ai} usedForRubros={savedCategorySlugs.length === 0} />
+
 
         {selectedCategorySlugs.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -665,6 +676,70 @@ function LocateFromAddress({ quoteRequestId, hasAddress }: { quoteRequestId: str
         </Button>
       ) : null}
       {error ? <span className="w-full text-destructive">{error}</span> : null}
+    </div>
+  )
+}
+
+/**
+ * Lo que sugirió el clasificador del backend (0124), a la vista: qué servicios,
+ * de qué rubro y con qué score. Los scores no están calibrados (2026-10-27): lo
+ * que queda por debajo de `AI_SERVICE_LOW_SCORE` se marca en ámbar como dudoso,
+ * no se esconde. Sin la 0124 en la base no se dice nada.
+ */
+function AiSuggestion({
+  classification,
+  usedForRubros,
+}: {
+  classification: QuoteRequestDetail['aiClassification']
+  /** Sin rubros guardados por el operador, los rubros de arriba salieron de acá. */
+  usedForRubros: boolean
+}) {
+  if (!classification.available) return null
+
+  if (classification.classifiedAt === null) {
+    return (
+      <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Sparkles className="size-3.5" aria-hidden />
+        Sin clasificación automática (todavía clasificando, o es un pedido anterior al clasificador).
+      </p>
+    )
+  }
+
+  if (classification.services.length === 0) {
+    return (
+      <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Sparkles className="size-3.5" aria-hidden />
+        La clasificación automática no encontró ningún servicio para este pedido.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-border px-3 py-2">
+      <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Sparkles className="size-3.5" aria-hidden />
+        Sugerido por la clasificación automática
+        {usedForRubros ? ' — los rubros y servicios de arriba arrancan tildados con esto' : ' — los servicios arrancan tildados'}
+        . Es una sugerencia: cambiala si no corresponde.
+      </p>
+      <ul className="flex flex-wrap gap-1.5">
+        {classification.services.map((s) => {
+          const low = s.score < AI_SERVICE_LOW_SCORE
+          return (
+            <li key={s.serviceSlug}>
+              <Badge
+                variant="outline"
+                className={cn('gap-1 font-normal', low && 'border-status-yellow/30 bg-status-yellow-bg text-status-yellow')}
+                title={low ? 'Score bajo: puede ser un falso positivo' : undefined}
+              >
+                {s.categoryName} · {s.serviceName}
+                <span className="tabular-nums text-muted-foreground">{s.score.toFixed(2)}</span>
+                {low ? <span>· dudoso</span> : null}
+              </Badge>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }

@@ -1471,3 +1471,23 @@ contradecirse.
   116, y uno de esos mandaba a la persona a otra sucursal. Sólo partners `active` (la web no publica
   los demás); un taller de afuera no tiene renglón. Sin `partner_slugs` en la base, no hay renglón
   (guard con `to_regclass`). La URL base es `PUBLIC_SITE_ORIGIN` en `~/lib/partners`.
+
+### Clasificación por IA del backend (0124) — desde el 2026-10-27
+
+El backend clasifica cada pedido NUEVO en background: `quote_requests.classified_at` +
+`public.quote_request_services` (`service_id`, `score` en (0,1]). Sin backfill: los pedidos viejos
+quedan `classified_at = NULL`. Lo lee `readAiClassification` (`quote-requests.repo.ts`) para la
+ficha, con guard propio (`to_regclass` + la columna) — **no** está en `READ_COLUMNS`: sumarla ahí
+apagaría `/leads/pedidos` en una base sin la 0124. Verificado en producción el 2026-10-27: existe,
+0 clasificados.
+
+- Vocabulario cruzado: la "familia" del backend (`service_categories`) es nuestro **rubro**; su
+  "rubro" (`services`) es nuestro **servicio**. Se cruza por `slug`, nunca por nombre.
+- Precedencia de rubros en `PartnerCandidates`: `quoteRubros` de la URL → los guardados en
+  `ops.quote_request_rubro` → los rubros de los servicios sugeridos. La sugerencia nunca pisa lo que
+  eligió una persona, y «Guardar clasificación» aparece para confirmarla.
+- Los servicios sugeridos arrancan tildados en «Servicio» (valor inicial de `useState`, se cambian).
+- `NULL` → «sin clasificación automática»; clasificado sin filas → «no encontró servicio»; nunca se
+  preselecciona nada en esos dos casos.
+- Scores sin calibrar: por debajo de `AI_SERVICE_LOW_SCORE` (0,5) se marcan «dudoso» en ámbar.
+- **Ni una escritura a `quote_request_services`**: es output del clasificador.

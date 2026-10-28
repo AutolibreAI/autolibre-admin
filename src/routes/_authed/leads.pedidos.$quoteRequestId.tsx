@@ -138,8 +138,17 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
-    // param gana; si no está, el default son los rubros guardados.
-    const effectiveCategorySlugs = deps.quoteRubros.length > 0 ? deps.quoteRubros : result.detail.rubroCategorySlugs
+    // param gana; si no está, los rubros guardados por el operador; y si el
+    // operador nunca clasificó, los rubros de los servicios que sugirió la IA
+    // (0124 del backend). La sugerencia nunca pisa lo que eligió una persona.
+    const ai = result.detail.aiClassification
+    const aiCategorySlugs = ai.available ? [...new Set(ai.services.map((s) => s.categorySlug))] : []
+    const effectiveCategorySlugs =
+      deps.quoteRubros.length > 0
+        ? deps.quoteRubros
+        : result.detail.rubroCategorySlugs.length > 0
+          ? result.detail.rubroCategorySlugs
+          : aiCategorySlugs
 
     const candidates =
       effectiveCategorySlugs.length > 0

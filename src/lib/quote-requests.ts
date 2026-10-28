@@ -810,7 +810,41 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * GPS de la persona — por eso no va en `locationLatitude`.
    */
   geocodedLocation: QuoteGeocodedLocation | null
+  /**
+   * Lo que el clasificador de IA del backend (0124) sugirió para este pedido.
+   * Es una SUGERENCIA: el panel nunca escribe `quote_request_services`.
+   */
+  aiClassification: QuoteAiClassification
 }
+
+/**
+ * Salida del clasificador del backend (migración 0124: `quote_requests.classified_at`
+ * + `quote_request_services`). Tres estados que no se confunden:
+ *
+ * - `available: false` — la base no tiene la 0124 (producción hasta el deploy).
+ * - `classifiedAt: null` — el job no terminó o agotó los reintentos, o el pedido
+ *   es anterior a la 0124 (no hay backfill). No se preselecciona nada.
+ * - `classifiedAt` con `services: []` — clasificó y no encontró coincidencia.
+ *
+ * Vocabulario: la "familia" del backend (`service_categories`) es el "rubro" de
+ * la UI, y su "rubro" (`services`) es nuestro "servicio" (`partners-coverage.md`).
+ * Los `services` vienen ordenados por `score` descendente.
+ */
+export type QuoteAiClassification =
+  | { available: false }
+  | { available: true; classifiedAt: string | null; services: Array<QuoteAiService> }
+
+export interface QuoteAiService {
+  serviceSlug: string
+  serviceName: string
+  categorySlug: string
+  categoryName: string
+  /** (0, 1]. Sin calibrar todavía: hay falsos positivos por encima de 0,4. */
+  score: number
+}
+
+/** Por debajo de esto la sugerencia se marca como dudosa (scores sin calibrar, 2026-10-27). */
+export const AI_SERVICE_LOW_SCORE = 0.5
 
 /** Punto geocodificado de una dirección tipeada. `precise` = calle y altura; si no, centroide. */
 export interface QuoteGeocodedLocation {

@@ -23,6 +23,7 @@ import {
   type QuoteRequestSeriesBucket,
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
+  type QuoteAiClassification,
   type QuoteSortKey,
   type SetQuoteRequestRubrosInput,
   type UpdateQuoteRequestInput,
@@ -134,6 +135,64 @@ export async function quoteEditAvailable(opts: { signal?: AbortSignal } = {}): P
     `select to_regclass('ops.quote_request_vehicle_text') is not null as ok`,
   )
   return row?.ok === true
+}
+
+/**
+ * La clasificación por IA del backend (migración 0124): `quote_requests.classified_at`
+ * + `quote_request_services`. Guard propio, como las propuestas: sin la 0124
+ * (producción hasta su deploy) la tabla no existe y un SELECT explotaría al
+ * planificarse. NO va en `READ_COLUMNS`: una columna nueva ahí apagaría la
+ * pantalla entera de pedidos en una base sin la 0124.
+ *
+ * Sólo lectura: `quote_request_services` es output del clasificador y la escribe
+ * únicamente el backend. Un `INSERT`/`UPDATE` ahí desde el panel está mal.
+ */
+async function readAiClassification(id: string): Promise<QuoteAiClassification> {
+  const guard = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.quote_request_services') is not null
+            and exists (select 1 from information_schema.columns
+                         where table_schema = 'public' and table_name = 'quote_requests'
+                           and column_name = 'classified_at') as ok`,
+  )
+  if (guard?.ok !== true) return { available: false }
+
+  const head = await sqlOne<{ classified_at: Date | string | null }>(
+    `select classified_at from quote_requests where id = $1`,
+    [id],
+  )
+  const classifiedAt = toIso(head?.classified_at ?? null)
+  // Sin clasificar no hay nada que leer: no se preselecciona nada.
+  if (!classifiedAt) return { available: true, classifiedAt: null, services: [] }
+
+  const rows = await sql<{
+    service_slug: string
+    service_name: string
+    category_slug: string
+    category_name: string
+    score: string
+  }>(
+    `select s.slug as service_slug, s.name as service_name,
+            c.slug as category_slug, c.name as category_name,
+            qrs.score
+       from quote_request_services qrs
+       join services s           on s.id = qrs.service_id
+       join service_categories c on c.id = s.category_id
+      where qrs.quote_request_id = $1
+        and s.active and c.active
+      order by qrs.score desc, s.name`,
+    [id],
+  )
+  return {
+    available: true,
+    classifiedAt,
+    services: rows.map((r) => ({
+      serviceSlug: r.service_slug,
+      serviceName: r.service_name,
+      categorySlug: r.category_slug,
+      categoryName: r.category_name,
+      score: Number(r.score),
+    })),
+  }
 }
 
 export async function quoteRequestsAvailability(
@@ -931,6 +990,8 @@ export async function findQuoteRequestDetail(
     province: r.location_province,
   })
 
+  const aiClassification = await readAiClassification(id)
+
   return {
     ...mapListRow(r),
     geocodedLocation,
@@ -952,6 +1013,7 @@ export async function findQuoteRequestDetail(
     locationSource: r.location_source,
     locationProvince: r.location_province,
     editAvailable,
+    aiClassification,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.
