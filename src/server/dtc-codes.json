@@ -9416,24 +9416,25 @@
   },
   {
     "codigo": "P0195",
-    "nombre_corto": "Sensor temperatura aceite de motor — circuito",
+    "nombre_corto": "Sensor de temperatura del aceite — falla en el circuito",
     "sistema": "Motor",
     "severidad": "amarillo",
     "sintomas": [
       "Luz de motor encendida",
-      "Posible consumo mayor o pérdida de potencia leve",
-      "Ralentí posiblemente irregular"
+      "En muchos autos, ningún otro síntoma notable",
+      "Posible aumento leve del consumo",
+      "En algunos modelos, cambios más bruscos de la caja automática o el electroventilador funcionando más de lo normal"
     ],
     "causas": [
-      "Sensor del circuito indicado dañado o fuera de rango",
-      "Cableado del sensor roto o con cortocircuito",
-      "Conector del sensor corroído"
+      "Sensor de temperatura del aceite dañado",
+      "Cable cortado o en cortocircuito",
+      "Conector flojo, sucio o con aceite (es común que el sensor pierda por la rosca y ensucie el conector)"
     ],
     "solucion": "Verificar el sensor y su cableado con multímetro. Comparar la lectura con los valores de especificación. Reemplazar el sensor si está fuera de rango.",
     "marcas": [
       "Todas"
     ],
-    "descripcion_simple": "Hay un problema en el sistema de refrigeración o en los sensores de temperatura. Monitorear el indicador de temperatura; si sube a la zona roja, detener el vehículo inmediatamente. Revisarlo en el taller a la brevedad."
+    "descripcion_simple": "La computadora dejó de recibir una lectura válida del sensor que mide la temperatura del aceite. No significa que el aceite esté caliente: significa que el auto no puede medirla. Podés seguir usándolo con normalidad, pero conviene revisarlo en el taller pronto, porque sin ese dato el motor puede funcionar menos eficiente."
   },
   {
     "codigo": "P0196",
