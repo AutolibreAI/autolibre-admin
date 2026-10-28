@@ -28,6 +28,7 @@ import {
   setQuoteRequestRubros,
   updateQuoteRequest,
 } from '~/server/quote-requests.repo'
+import { classifyQuoteRequest } from '~/server/backend'
 import { refreshQuoteRequestGeocode } from '~/server/quote-geocode.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -195,6 +196,7 @@ export const createQuoteRequestFn = createServerFn({ method: 'POST' })
     await assertQuoteEditAvailable(signal)
     const created = await createQuoteRequest(data, context.user.id, { signal })
     await geocodeQuietly(created.id, context.user.id)
+    await classifyQuietly(created.id)
     return created
   })
 
@@ -240,5 +242,25 @@ async function geocodeQuietly(quoteRequestId: string, actorId: string): Promise<
     await refreshQuoteRequestGeocode(quoteRequestId, actorId)
   } catch {
     // sin pin; «Ubicar en el mapa» en la ficha
+  }
+}
+
+/**
+ * Lo mismo para la clasificación por IA: el SP inserta directo en `public`, así
+ * que el backend nunca la encola sola y hay que pedírsela. Si falla, el pedido
+ * queda «sin clasificación automática» y se clasifica a mano, como antes.
+ *
+ * Se ESPERA, igual que el geocode, aunque al operador no le cambie nada: en el
+ * entry serverless de Vercel una promesa suelta puede quedar congelada cuando
+ * sale la respuesta, y el pedido no se clasificaría nunca. Es un 202 que sólo
+ * encola, con timeout corto (`classifyQuoteRequest`).
+ */
+async function classifyQuietly(quoteRequestId: string): Promise<void> {
+  try {
+    await classifyQuoteRequest(quoteRequestId)
+  } catch (error) {
+    console.warn(
+      `quote request ${quoteRequestId}: classification not requested — ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
 }

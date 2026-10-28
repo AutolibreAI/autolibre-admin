@@ -701,7 +701,11 @@ function proposalBody(c: BackendQuoteProposalContent): Record<string, unknown> {
 }
 
 /** Un fetch JSON con token, que distingue "no llegó" de "llegó y falló". */
-async function proposalFetch(path: string, init: { method: 'POST' | 'PUT'; body?: unknown }, what: string) {
+async function proposalFetch(
+  path: string,
+  init: { method: 'POST' | 'PUT'; body?: unknown; timeoutMs?: number },
+  what: string,
+) {
   const token = await bearerToken()
   const base = baseUrl()
   let response: Response
@@ -713,7 +717,7 @@ async function proposalFetch(path: string, init: { method: 'POST' | 'PUT'; body?
         ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+      signal: AbortSignal.timeout(init.timeoutMs ?? JSON_TIMEOUT_MS),
     })
   } catch (cause) {
     // Un timeout NO es "no llegó": pudo haberse guardado. Se deja pasar tal
@@ -788,5 +792,29 @@ export async function closeQuoteProposalsSearch(input: { quoteRequestId: string;
     `/admin/quote-requests/${input.quoteRequestId}/close-search`,
     { method: 'POST', body: { closureId: input.closureId } },
     'El cierre de la búsqueda',
+  )
+}
+
+const CLASSIFY_TIMEOUT_MS = 5_000
+
+/**
+ * Pedirle al backend que clasifique por IA un pedido cargado a mano.
+ *
+ * `ops.create_quote_request` inserta directo en `public.quote_requests`, así
+ * que el alta del panel nunca pasa por el caso de uso que encola la
+ * clasificación y el pedido quedaba con `classified_at = NULL` para siempre.
+ * El grep da POSITIVO: `POST /admin/quote-requests/:id/classify` con
+ * `AdminGuard`, agregado en el backend junto con este cambio (2026-10-28). 202
+ * sin cuerpo tanto si encola como si ya estaba clasificado: es idempotente.
+ *
+ * Timeout corto, del orden del geocoder (6s): corre DESPUÉS de un alta que ya
+ * quedó escrita, y un backend colgado no puede tener al operador 20s mirando
+ * el botón.
+ */
+export async function classifyQuoteRequest(quoteRequestId: string): Promise<void> {
+  await proposalFetch(
+    `/admin/quote-requests/${quoteRequestId}/classify`,
+    { method: 'POST', timeoutMs: CLASSIFY_TIMEOUT_MS },
+    'La clasificación del pedido',
   )
 }
