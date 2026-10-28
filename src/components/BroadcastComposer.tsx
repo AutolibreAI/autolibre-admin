@@ -413,7 +413,8 @@ export function BroadcastComposer({
                 value={title}
                 disabled={busy}
                 autoComplete="off"
-                placeholder="Cargá la VTV de tu vehículo"
+                maxLength={BROADCAST_TITLE_MAX}
+                placeholder="Cargá tu VTV"
                 aria-invalid={titleTrim.length > BROADCAST_TITLE_MAX || undefined}
                 onChange={(e) => setTitle(e.currentTarget.value)}
                 className="shadow-none"

@@ -293,7 +293,12 @@ export interface NotificationFacets {
  * de background), no un número más alto acá.
  */
 export const BROADCAST_MAX_RECIPIENTS = 500
-export const BROADCAST_TITLE_MAX = 100
+/**
+ * Decisión de producto del panel (2026-10-27), más corta que los 100 del DTO
+ * del backend: el título de un push se corta en la pantalla bloqueada. Es un
+ * tope NUESTRO, no un espejo — si el backend lo baja de 25, gana el backend.
+ */
+export const BROADCAST_TITLE_MAX = 25
 export const BROADCAST_BODY_MAX = 500
 
 /** Debajo de esto el buscador de destinatarios ni pregunta: `ilike '%a%'` es el padrón. */
