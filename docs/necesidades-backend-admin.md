@@ -79,16 +79,18 @@ registrar los pedidos por proveedor en la automatización" (ver Solapamientos).
 
 ## Revisar rubros "Otro" declarados por proveedores y crear/asignar servicios faltantes
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock (solo la marca "revisado" es de ejemplo; asignar servicios es
+real).
 
-**Qué hiciste:** Relevamiento. `partner_applications.service_other` (texto libre) está cargado en
-11 solicitudes. La ficha de solicitud ya lo muestra y el listado marca "declaró otros", pero no hay
-una vista de revisión.
+**Qué hiciste:** Pantalla `/solicitudes/otros` (`src/routes/_authed/solicitudes.otros.tsx`, link
+"Revisar rubros «Otro»" desde Solicitudes): una tarjeta por solicitud con el texto declarado, los
+servicios que el partner tiene hoy, un selector para asignar o sacar servicios del catálogo
+(`editPartnerServicesFn`, el mismo de la ficha, auditado) y "Marcar revisado" con nota (mock en
+memoria, `src/mocks/service-other-review.ts`; se pierde al recargar). Filtro "Sin revisar" /
+"Todas". Al 2026-10-29: 11 solicitudes con «Otro», las 11 ya publicadas, cuadra con SQL directo.
 
-**Plan para el front:** pestaña nueva `/solicitudes/otros` (o filtro en `/solicitudes`): proveedor,
-texto declarado, servicios asignados hoy al partner que salió de esa solicitud, y botón "Asignar
-servicios" que reusa el editor de rubros de la ficha del partner. La marca "revisado" va contra
-mock.
+**Cómo probarlo:** `pnpm dev`, Solicitudes › "Revisar rubros «Otro»". Sin login:
+`node tmp/probe-otros.mjs` (solo lectura).
 
 **Necesidades de backend:**
 

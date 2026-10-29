@@ -60,7 +60,17 @@ function ApplicationsQueue() {
       <PageHeader
         title="Solicitudes de partners"
         subtitle={`${applications.length} en la cola`}
-        actions={<SsrTag>ssr: full + streaming</SsrTag>}
+        actions={
+          <>
+            <Link
+              to="/solicitudes/otros"
+              className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
+            >
+              Revisar rubros «Otro»
+            </Link>
+            <SsrTag>ssr: full + streaming</SsrTag>
+          </>
+        }
       />
 
       <Await
