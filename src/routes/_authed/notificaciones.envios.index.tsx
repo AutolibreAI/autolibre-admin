@@ -65,6 +65,12 @@ function CampaignsList() {
         subtitle={`${formatInt(campaigns.length)} ${search.q ? 'con esta búsqueda' : 'en total'}`}
         actions={
           <>
+            <Link
+              to="/notificaciones/envios/efecto"
+              className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
+            >
+              Efecto por envío
+            </Link>
             <BroadcastComposer />
             <SsrTag>ssr: full</SsrTag>
           </>

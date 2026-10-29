@@ -248,17 +248,18 @@ una plantilla que no pase el schema (título de más de 25, horario al revés).
 
 ## Panel admin: medir el efecto de cada notificación en usuarios existentes
 
-**Estado del front:** No empezado (hay base hecha).
+**Estado del front:** Hecho contra mock (envíos reales; conversión de ejemplo).
 
-**Qué hiciste:** Relevamiento. `/notificaciones/envios/:id` ya mide, por envío ad-hoc, seis
-acciones "después" (auto, documento, escaneo, chat, dispositivo, mantenimiento) con denominador
-"no lo había hecho antes". No tiene ventanas de tiempo, no tiene base de comparación, no elige
-acción objetivo, y solo ve envíos ad-hoc.
+**Qué hiciste:** Pantalla `/notificaciones/envios/efecto` (link "Efecto por envío" desde Envíos,
+`src/routes/_authed/notificaciones.envios.efecto.tsx`): una fila por envío con fecha, canal, mensaje
+y alcanzados reales (`listNotificationCampaigns`, 39 envíos salidos al 2026-10-29), acción objetivo
+elegible por fila (cargar vehículo / cargar documento / crear pedido), conversión a 24 h / 72 h / 7
+días con la diferencia en puntos contra la base, y la base de 7 días antes. Las celdas de ejemplo van
+en cursiva; una ventana que no cerró dice "en curso". Cálculos en `src/lib/notification-effect.ts`,
+conversión en `src/mocks/notification-effect.ts`.
 
-**Plan para el front:** tabla nueva en `/notificaciones/envios` con una fila por envío: fecha,
-canal, mensaje, acción objetivo (elegible), alcanzados, conversión 24 h / 72 h / 7 d y base de
-comparación (misma audiencia, mismo largo de período antes del envío). Contra mock. La resta
-"después − antes" y los porcentajes en código.
+**Cómo probarlo:** `pnpm dev`, Notificaciones › Envíos › "Efecto por envío". Sin login:
+`node tmp/probe-efecto.mjs`.
 
 **Necesidades de backend:**
 
