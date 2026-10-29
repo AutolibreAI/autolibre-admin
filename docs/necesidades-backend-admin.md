@@ -345,17 +345,17 @@ motivos) y "Notificaciones: … reglas de seguimiento…" (pregunta de cierre). 
 
 ## Admin: asignar a un usuario activo de la app los pedidos creados manualmente (los que entran por WhatsApp)
 
-**Estado del front:** No empezado.
+**Estado del front:** Parcial (la búsqueda es real; el vínculo es de ejemplo; solo desde la ficha).
 
-**Qué hiciste:** Relevamiento. `quote_requests.user_id` existe (nullable). "Editar datos" y
-"Cargar pedido" no lo tocan a propósito. El buscador de usuarios que existe busca por email y
-nombre; `users.phone` está vacío en todas las cuentas, así que buscar por teléfono no encuentra a
-nadie hoy.
+**Qué hiciste:** En la ficha del pedido, debajo de "Entró por…", dos datos por separado: "Canal de
+entrada" y "Tiene la app: sí / no". Sin cuenta, botón "Vincular a un usuario de la app"
+(`src/components/QuoteUserLinker.tsx`) con buscador real por email y nombre
+(`searchNotificationRecipients`) y "Vincular" de ejemplo (`src/mocks/quote-user-link.ts`, en memoria).
+El listado ya mostraba canal y cuenta en columnas separadas. Falta: vincular en el mismo formulario
+de "Cargar pedido" (hoy se vincula desde la ficha recién creada) y buscar por teléfono o patente.
 
-**Plan para el front:** en "Cargar pedido" y "Editar datos": buscador de usuario y botón
-"Vincular" (contra mock para la escritura). En la ficha y el listado, dos datos separados:
-"Entró por: WhatsApp" y "Tiene la app: sí/no" (el segundo ya se puede mostrar con datos reales:
-`user_id` no nulo).
+**Cómo probarlo:** `pnpm dev`, la ficha de un pedido de WhatsApp sin cuenta › "Vincular a un usuario
+de la app", buscar por email.
 
 **Necesidades de backend:**
 

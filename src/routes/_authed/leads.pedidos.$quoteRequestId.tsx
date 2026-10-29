@@ -30,6 +30,7 @@ import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteRequestPhotos } from '~/components/QuoteRequestPhotos'
 import { listQuoteRequestPhotosFn } from '~/fn/quote-photos'
 import { QuoteClosureCard } from '~/components/QuoteClosureCard'
+import { QuoteUserLinker } from '~/components/QuoteUserLinker'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
@@ -676,6 +677,22 @@ function ChannelBanner({ detail: d }: { detail: QuoteRequestDetail }) {
             </>
           )}
         </p>
+        {/*
+          Canal y "tiene la app" son dos datos distintos y se dicen por separado:
+          un pedido de WhatsApp puede ser de alguien con la app, y uno `app` por
+          el endpoint público puede no tener cuenta.
+        */}
+        <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm">
+          <div className="flex gap-1.5">
+            <dt className="text-muted-foreground">Canal de entrada:</dt>
+            <dd className="font-medium">{quoteChannelLabel(d.channel)}</dd>
+          </div>
+          <div className="flex gap-1.5">
+            <dt className="text-muted-foreground">Tiene la app:</dt>
+            <dd className="font-medium">{hasAccount ? `Sí${d.userEmail ? ` (${d.userEmail})` : ''}` : 'No'}</dd>
+          </div>
+        </dl>
+        {!hasAccount ? <QuoteUserLinker quoteRequestId={d.id} /> : null}
       </div>
     </div>
   )
