@@ -67,7 +67,10 @@ export const Route = createFileRoute('/_authed/solicitudes/otros')({
             applicationId: d.id,
             businessName: d.businessName,
             status: d.status,
-            createdAt: d.createdAt,
+            // El repo tipa `createdAt` como string pero `pg` lo entrega como
+            // `Date` (las solicitudes no lo pasan por `toISOString`). Se
+            // normaliza acá: el tipo mentía y `localeCompare` reventaba.
+            createdAt: new Date(d.createdAt).toISOString(),
             serviceOther: (d.serviceOther ?? '').trim(),
             partner:
               d.partner && view

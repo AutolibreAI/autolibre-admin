@@ -666,6 +666,11 @@ y las funciones de traducción de `~/lib/coverage-map` (`inferPedidoRubro`, `toC
 11. **"Taller de cabecera" no existe** en ningún repo ni en la base.
 12. **`user_notification_preferences` tiene 0 filas**: el filtro de silenciados existe, pero nadie
    silenció nada todavía.
+13. **El repo de solicitudes devuelve `createdAt` como `Date` aunque el tipo diga `string`**
+   (`listApplications` / `findApplication` en `src/server/partners.repo.ts`). Pedidos y propuestas
+   sí lo devuelven como string. Rompió `/solicitudes/otros` (`localeCompare is not a function`); la
+   pantalla lo normaliza, pero el arreglo de fondo es en el repo (`toISOString()` o `::text`), y
+   cualquier pantalla nueva que ordene o compare esa fecha como texto va a fallar igual.
 
 ## 4. Supuestos que tomé
 
