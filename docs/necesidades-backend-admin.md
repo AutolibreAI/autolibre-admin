@@ -412,18 +412,27 @@ un campo más de la fila.
 
 ## Panel admin: estudio de proveedores (presupuestos enviados, tipo, confirmados y reporte para ellos)
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock (lo calculable con propuestas es real; el resto, de ejemplo).
 
-**Qué hiciste:** Relevamiento. Con lo que ya existe se puede calcular por proveedor: propuestas
-enviadas, retiradas, elegidas y tiempo desde que entró el pedido hasta cada propuesta. No existe
-registro de "a qué proveedores se les pasó el pedido" (la derivación es una nota interna), así
-que la tasa de respuesta no se puede calcular. No hay vistas de perfil ni clics.
+**Qué hiciste:** Pestaña Partners › Estudio (`src/routes/_authed/partners.estudio.tsx`):
+- **Real**, con las mismas propuestas que Propuestas (hook compartido
+  `src/components/useProposalFacts.ts`): enviadas y retiradas, elegida / otra / sin decisión,
+  mediana de tiempo de respuesta (desde que entró el pedido), propuestas por canal, dormidos, y el
+  norte "pedidos con 3 propuestas en menos de 60 min". Últimos 90 días al 2026-10-29: 1 de 16
+  pedidos lo cumple; 4 llegaron a 3 propuestas en algún momento.
+- **De ejemplo, en cursiva** (`src/mocks/partner-study.ts`): matcheados y tasa de respuesta, vencidos
+  sin respuesta, confirmados y disputas, vistas y clics. El plan también.
+- Filtros por período (7/30/90), zona, rubro y plan.
+- Botón "Reporte" por proveedor: el resumen de un mes calendario, en texto, listo para WhatsApp.
+  Determinístico (`partnerMonthlyReport` en `src/lib/partner-study.ts`). No nombra clientes ni a
+  otros proveedores; la zona va como mediana anónima, y solo si hay 3 o más proveedores más en esa zona.
 
-**Plan para el front:** pantalla `/partners/estudio` con ranking filtrable (zona, rubro, plan,
-7/30/90 días), proveedores dormidos, ficha por proveedor y botón "Reporte mensual" que arma un
-texto para WhatsApp de forma determinística. Datos reales para lo calculable (reusa la tarjeta de
-conteo mensual); mock para el resto. El reporte nunca nombra personas ni a otros proveedores; el
-promedio de la zona va sin nombres y solo si hay 3 o más proveedores en la zona.
+No se muestran propuestas por rubro ni por urgencia: el listado de pedidos no trae el rubro y la
+urgencia no existe.
+
+**Cómo probarlo:** `pnpm dev`, Partners › Estudio; "Reporte" en cualquier fila. Sin login:
+`node tmp/probe-estudio.mjs` (cuadra elegida + otra + sin decisión = total, y chequea que el texto
+del reporte no contenga el nombre de otro proveedor).
 
 **Necesidades de backend:**
 
@@ -677,6 +686,9 @@ y las funciones de traducción de `~/lib/coverage-map` (`inferPedidoRubro`, `toC
    sí lo devuelven como string. Rompió `/solicitudes/otros` (`localeCompare is not a function`); la
    pantalla lo normaliza, pero el arreglo de fondo es en el repo (`toISOString()` o `::text`), y
    cualquier pantalla nueva que ordene o compare esa fecha como texto va a fallar igual.
+14. **Hay un partner que se llama "AutoLibre"** (pausado, carga manual). Si es de prueba, conviene
+   archivarlo: aparece en listados y filtros como si fuera un proveedor más.
+
 
 ## 4. Supuestos que tomé
 

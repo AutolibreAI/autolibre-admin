@@ -115,6 +115,10 @@ export interface ProposalFact {
   createdAt: string
   withdrawnAt: string | null
   selected: boolean
+  /** Del pedido: para tiempo de respuesta, canal y "elegido / no elegido / sin decisión". */
+  requestCreatedAt: string
+  requestChannel: string
+  requestHasSelection: boolean
 }
 
 export interface PartnerRef {

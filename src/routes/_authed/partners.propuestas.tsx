@@ -2,10 +2,11 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
-import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MockBanner } from '~/components/MockBanner'
+import { useProposalFacts } from '~/components/useProposalFacts'
+import { ProposalLoadStatus as LoadStatus } from '~/components/ProposalLoadStatus'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
 import {
@@ -29,7 +30,7 @@ import {
   partnerProposalsSearchSchema,
 } from '~/lib/partner-plans'
 import { cn } from '~/lib/utils'
-import type { PartnerPlan, PartnerRef, PartnerUsageRow, ProposalFact } from '~/lib/partner-plans'
+import type { PartnerPlan, PartnerRef, PartnerUsageRow } from '~/lib/partner-plans'
 
 /**
  * Propuestas por proveedor y por mes, contra el tope de su plan.
@@ -63,11 +64,11 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
     ])
-    const requestIds =
+    const requests =
       'rows' in quotes
         ? quotes.rows
             .filter((r) => r.status !== 'closed' || (r.closedAt ?? '') >= PROPOSAL_COUNT_START)
-            .map((r) => r.id)
+            .map((r) => ({ id: r.id, createdAt: r.createdAt, channel: r.channel }))
         : null
     const partnerRefs: Array<PartnerRef> = partners.map((p) => ({
       id: p.id,
@@ -75,84 +76,11 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
       tier: p.tier,
       status: p.status,
     }))
-    return { requestIds, partners: partnerRefs }
+    return { requests, partners: partnerRefs }
   },
   head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
   component: PartnerProposals,
 })
-
-// ── Propuestas, pedido por pedido ────────────────────────────────────────────
-
-/** Cache del módulo: volver a la pantalla o cambiar de mes no vuelve a pedir. */
-const factsCache = new Map<string, Array<ProposalFact> | 'error' | 'unavailable'>()
-const CONCURRENCY = 4
-
-function useProposalFacts(requestIds: ReadonlyArray<string>) {
-  const key = requestIds.join(',')
-  const [version, setVersion] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    const pending = requestIds.filter((id) => !factsCache.has(id))
-    let next = 0
-    let sinceRender = 0
-    const worker = async () => {
-      while (!cancelled && next < pending.length) {
-        const id = pending[next++]!
-        try {
-          const res = await listQuoteProposalsFn({ data: { quoteRequestId: id } })
-          if (!res.available) {
-            factsCache.set(id, 'unavailable')
-          } else {
-            factsCache.set(
-              id,
-              [...res.active, ...res.withdrawn].map((p) => ({
-                id: p.id,
-                quoteRequestId: id,
-                partnerId: p.partnerId,
-                providerName: p.providerName,
-                createdAt: p.createdAt,
-                withdrawnAt: p.withdrawnAt,
-                selected: p.id === res.selectedProposalId,
-              })),
-            )
-          }
-        } catch {
-          factsCache.set(id, 'error')
-        }
-        if (!cancelled && ++sinceRender >= 8) {
-          sinceRender = 0
-          setVersion((v) => v + 1)
-        }
-      }
-    }
-    void Promise.all(Array.from({ length: CONCURRENCY }, worker)).then(() => {
-      if (!cancelled) setVersion((v) => v + 1)
-    })
-    return () => {
-      cancelled = true
-    }
-    // `requestIds` cambia sólo si cambia `key`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
-
-  return useMemo(() => {
-    const facts: Array<ProposalFact> = []
-    let done = 0
-    let failed = 0
-    let unavailable = false
-    for (const id of requestIds) {
-      const v = factsCache.get(id)
-      if (v === undefined) continue
-      done += 1
-      if (v === 'error') failed += 1
-      else if (v === 'unavailable') unavailable = true
-      else facts.push(...v)
-    }
-    return { facts, done, failed, unavailable, total: requestIds.length, loading: done < requestIds.length }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, version])
-}
 
 function usePlans(partnerIds: ReadonlyArray<string>) {
   const [plans, setPlans] = useState<Map<string, PartnerPlan>>(new Map())
@@ -173,7 +101,7 @@ function usePlans(partnerIds: ReadonlyArray<string>) {
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 function PartnerProposals() {
-  const { requestIds, partners } = Route.useLoaderData()
+  const { requests, partners } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
@@ -182,7 +110,7 @@ function PartnerProposals() {
   const months = useMemo(() => countableMonths(new Date()), [])
   const month = search.proposalMonth && months.includes(search.proposalMonth) ? search.proposalMonth : months[0]!
 
-  const load = useProposalFacts(requestIds ?? [])
+  const load = useProposalFacts(requests ?? [])
   const plans = usePlans(useMemo(() => partners.map((p) => p.id), [partners]))
 
   const allRows = useMemo(
@@ -202,7 +130,7 @@ function PartnerProposals() {
     { sent: 0, withdrawn: 0, selected: 0, overCap: 0, withProposals: 0 },
   )
 
-  if (requestIds === null) {
+  if (requests === null) {
     return (
       <>
         <PageHeader title="Propuestas por proveedor" actions={<SsrTag>ssr: data-only</SsrTag>} />
@@ -365,20 +293,6 @@ function UsageRow({ row }: { row: PartnerUsageRow }) {
         ) : null}
       </TableCell>
     </TableRow>
-  )
-}
-
-function LoadStatus({ load }: { load: ReturnType<typeof useProposalFacts> }) {
-  if (!load.loading && load.failed === 0) return null
-  return (
-    <p className={cn('mb-3 text-xs', load.failed > 0 ? 'text-status-yellow' : 'text-muted-foreground')}>
-      {load.loading
-        ? `Leyendo propuestas: ${formatInt(load.done)} de ${formatInt(load.total)} pedidos. Los números se completan solos.`
-        : null}
-      {load.failed > 0
-        ? ` ${formatInt(load.failed)} pedidos no se pudieron leer: los totales pueden estar cortos. Recargá la página.`
-        : null}
-    </p>
   )
 }
 
