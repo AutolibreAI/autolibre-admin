@@ -208,17 +208,16 @@ pierde al recargar, a propósito.
 
 ## Notificaciones: pensar y crear reglas de seguimiento a usuarios con pedidos abiertos (recordatorio, propuestas recibidas, horas restantes)
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock.
 
-**Qué hiciste:** Relevamiento. Hoy el backend ya manda push cuando el operador envía propuestas
-(`source_type = quote_proposal_send`) y cuando se cierra la búsqueda
-(`quote_proposals_search_closure`). No hay recordatorios ni avisos por tiempo. **La duración de 72
-h del pedido no está modelada**: `quote_requests` no tiene `expires_at`.
+**Qué hiciste:** Seis plantillas en `src/lib/quote-follow-up-templates.ts`, precargadas PAUSADAS en
+Notificaciones › Automatizaciones: pedido abierto sin propuestas (24 h), 1ª / 2ª / 3ª propuesta,
+"quedan 12 h" (el pedido dura 72 h) y "propuestas sin mirar" con pregunta de cierre. Canal: el que
+eligió la persona en el pedido. Los textos son borradores; un guardrail al cargar el módulo rechaza
+una plantilla que no pase el schema (título de más de 25, horario al revés).
 
-**Plan para el front:** sobre la pantalla de reglas, cuatro plantillas precargadas y desactivadas
-(recordatorio de pedido abierto; primera/segunda/tercera propuesta; "quedan X horas"; "tenés
-propuestas sin mirar" + pregunta de cierre), contra mock. El canal respeta la elección del usuario
-(tarjeta de WhatsApp al crear el pedido).
+**Cómo probarlo:** `pnpm dev`, Notificaciones › Automatizaciones: aparecen las 6 con el badge
+"Plantilla", pausadas. Sin login: `node tmp/probe-plantillas.mjs`.
 
 **Necesidades de backend:**
 

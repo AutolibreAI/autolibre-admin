@@ -108,7 +108,8 @@ function AutomationsPage() {
         <Link to="/notificaciones/reglas" className="underline underline-offset-2">
           Reglas
         </Link>
-        .
+        . Las marcadas «Plantilla» son el seguimiento de pedidos abiertos: vienen pausadas y con un texto
+        borrador para revisar, y avisan por el canal que eligió la persona al crear el pedido.
       </p>
 
       {items === null ? (

@@ -1,3 +1,4 @@
+import { QUOTE_FOLLOW_UP_TEMPLATES } from '~/lib/quote-follow-up-templates'
 import type { Automation, AutomationInput } from '~/lib/notification-automations'
 
 /**
@@ -11,11 +12,19 @@ import type { Automation, AutomationInput } from '~/lib/notification-automations
  *
  * En memoria del navegador: se pierde al recargar, a propósito (ver
  * `service-other-review.ts`). Activar una acá no le manda nada a nadie.
+ *
+ * La primera lectura siembra las plantillas de seguimiento de pedidos
+ * (`~/lib/quote-follow-up-templates`), todas PAUSADAS.
  */
 const store = new Map<string, Automation>()
 let seq = 0
+let seeded = false
 
 export async function listAutomationsMock(): Promise<Array<Automation>> {
+  if (!seeded) {
+    seeded = true
+    for (const t of QUOTE_FOLLOW_UP_TEMPLATES) await saveAutomationMock(t.input, null, t.key)
+  }
   return [...store.values()].sort((a, b) => a.name.localeCompare(b.name, 'es'))
 }
 
