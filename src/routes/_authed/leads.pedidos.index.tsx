@@ -18,6 +18,7 @@ import {
   type QuoteRequestSearch,
   type QuoteRequestStatusSummary,
   type QuoteSortKey,
+  whatsappOptInLabel,
 } from '~/lib/quote-requests'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
@@ -30,6 +31,7 @@ import {
   quoteAgeLabel,
 } from '~/components/QuoteRequestCells'
 import { QuoteRequestComposer } from '~/components/QuoteRequestComposer'
+import { whatsappOptInMock } from '~/mocks/quote-whatsapp-opt-in'
 import { QuoteBoard } from '~/components/QuoteBoard'
 import { SearchInput } from '~/components/SearchInput'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
@@ -459,6 +461,9 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
           ) : (
             <Muted>sin cuenta</Muted>
           )}
+        </div>
+        <div className="text-xs text-muted-foreground" title="Si la persona eligió avisos por WhatsApp al crear el pedido. El dato todavía no existe.">
+          Avisos WhatsApp: {whatsappOptInLabel(whatsappOptInMock(row.id))}
         </div>
       </TableCell>
 

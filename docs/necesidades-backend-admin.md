@@ -384,12 +384,15 @@ WhatsApp" (misma ficha).
 
 ## Pedidos (app): al crear el pedido, preguntar si quiere que le avisen por WhatsApp
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock.
 
-**Qué hiciste:** Relevamiento. No existe ningún campo para esa elección.
+**Qué hiciste:** "Avisos por WhatsApp: Sí / No / sin dato" en la celda de contacto del listado de
+pedidos y al lado de "Tiene la app" en la ficha (`whatsappOptInLabel` en `src/lib/quote-requests.ts`).
+El mock (`src/mocks/quote-whatsapp-opt-in.ts`) devuelve "sin dato" para todos los pedidos, que es
+la verdad hoy: no se inventa un sí o un no sobre pedidos reales. Cuando exista la columna, llega como
+un campo más de la fila.
 
-**Plan para el front:** columna en el listado y renglón en la ficha: "Avisos por WhatsApp: Sí / No
-/ sin dato". Contra mock.
+**Cómo probarlo:** `pnpm dev`, Pedidos (columna de contacto) y cualquier ficha.
 
 **Necesidades de backend:**
 

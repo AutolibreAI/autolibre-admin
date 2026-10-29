@@ -1006,3 +1006,12 @@ export type QuoteRequestSeries =
       unit: GrowthUnit
       buckets: Array<QuoteRequestSeriesBucket>
     }
+
+/**
+ * "Avisos por WhatsApp" que eligió la persona al crear el pedido. `null` = sin
+ * dato: pedidos viejos, canales sin la pregunta, o —hoy— todos, porque el
+ * campo no existe (`~/mocks/quote-whatsapp-opt-in`).
+ */
+export function whatsappOptInLabel(v: boolean | null): string {
+  return v === null ? 'sin dato' : v ? 'Sí' : 'No'
+}

@@ -13,6 +13,7 @@ import {
   quoteRequestIdSchema,
   quoteUserOutcomeLabel,
   type QuoteRequestDetail,
+  whatsappOptInLabel,
 } from '~/lib/quote-requests'
 import { getQuoteRequestFn } from '~/fn/quote-requests'
 import { listQuoteResponsesFn } from '~/fn/quote-responses'
@@ -31,6 +32,7 @@ import { QuoteRequestPhotos } from '~/components/QuoteRequestPhotos'
 import { listQuoteRequestPhotosFn } from '~/fn/quote-photos'
 import { QuoteClosureCard } from '~/components/QuoteClosureCard'
 import { QuoteUserLinker } from '~/components/QuoteUserLinker'
+import { whatsappOptInMock } from '~/mocks/quote-whatsapp-opt-in'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
@@ -690,6 +692,10 @@ function ChannelBanner({ detail: d }: { detail: QuoteRequestDetail }) {
           <div className="flex gap-1.5">
             <dt className="text-muted-foreground">Tiene la app:</dt>
             <dd className="font-medium">{hasAccount ? `Sí${d.userEmail ? ` (${d.userEmail})` : ''}` : 'No'}</dd>
+          </div>
+          <div className="flex gap-1.5" title="Lo elige la persona al crear el pedido en la app. El dato todavía no existe.">
+            <dt className="text-muted-foreground">Avisos por WhatsApp:</dt>
+            <dd className="font-medium">{whatsappOptInLabel(whatsappOptInMock(d.id))}</dd>
           </div>
         </dl>
         {!hasAccount ? <QuoteUserLinker quoteRequestId={d.id} /> : null}
