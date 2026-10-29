@@ -4,6 +4,7 @@ import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerFicha } from '~/components/PartnerFicha'
+import { PartnerSealsCard } from '~/components/PartnerSeals'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
@@ -41,6 +42,7 @@ export const Route = createFileRoute('/_authed/partners/$partnerId')({
  */
 function PartnerServicesEditor() {
   const view = Route.useLoaderData()
+  const { user } = Route.useRouteContext()
   const router = useRouter()
 
   const initial = useMemo(
@@ -131,6 +133,9 @@ function PartnerServicesEditor() {
         haría que arreglar una y no la otra sea el resultado normal.
       */}
       <PartnerFicha partner={view.partner} />
+
+      {/* Sellos: Aliado es real (tier); redes y aseguradoras, de ejemplo. */}
+      <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />
 
       <Suggestions view={view} onApply={(ids) => setSelected((p) => new Set([...p, ...ids]))} />
 

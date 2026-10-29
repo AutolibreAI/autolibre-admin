@@ -465,17 +465,39 @@ plan); "Pedidos: 'Contraté / No contraté'…" (confirmaciones, disputas, motiv
 
 ## Sellos y validaciones de proveedores (Aliado, redes, aseguradoras) + filtro en catálogo
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock (Aliado y el cruce son reales; los sellos de redes y
+aseguradoras, de ejemplo).
 
-**Qué hiciste:** Relevamiento. El único sello hoy es Aliado = `partners.tier = founding` (12
-proveedores), editable desde la ficha. No hay catálogo de sellos ni redes. El backend tiene
-"promociones" de partner con endpoints admin, que no son sellos.
+**Qué hiciste:**
+- **Ficha del proveedor** (`/partners/$partnerId`), tarjeta "Sellos"
+  (`src/components/PartnerSeals.tsx`): Aliado se muestra real (`tier = founding`, se sigue
+  cambiando en Perfil). Para redes y aseguradoras: asignar (sello, estado pendiente / verificado,
+  fuente, vencimiento), marcar verificado, revocar con confirmación, e historial de revocados.
+  "Vencido" no se elige: sale de la fecha contra hoy en Buenos Aires (`sealState`). Re-asignar un
+  sello que ya tiene revoca el anterior (un vigente por sello).
+- **Pestaña Partners › Sellos** (`src/routes/_authed/partners.sellos.tsx`): importar el CSV de una
+  red. Se elige el sello, el estado, la fuente y un vencimiento por defecto; las columnas se
+  detectan por encabezado y se corrigen a mano. El cruce se calcula en el navegador con reglas fijas
+  (`src/lib/partner-seals.ts`): teléfono normalizado igual que Comercial, contra la base con
+  `findPhoneMatchesFn` (una llamada con todos los números); dirección normalizada (`av.` = `avenida`,
+  sin `N°`, exige altura), opcional porque pide la ficha de cada proveedor; nombre exacto con
+  `normalizeForMatch`. CUIT se lee pero no cruza: `partners.cuit` no existe y la pantalla lo dice.
+  Nunca por parecido. Sólo arrancan tildadas las filas que cruzan con un único proveedor; si dos
+  claves llevan a proveedores distintos ("Las claves no coinciden") o una clave a varios ("Varios
+  proveedores"), elige una persona. Un proveedor no puede salir dos veces en la misma tanda.
+- Abajo, la lista de lo asignado en la sesión, con estado. Mock: `src/mocks/partner-seals.ts`, en
+  memoria; nombres de redes y aseguradoras genéricos ("Red de talleres A (ejemplo)").
 
-**Plan para el front:** contra mock: sección "Sellos" en la ficha del proveedor (asignar, revocar,
-estado pendiente / verificado / vencido, fuente) y pantalla de importación CSV de una red con el
-cruce contra proveedores por teléfono, CUIT, dirección o nombre. El cruce se calcula en el
-navegador con reglas fijas (teléfono normalizado igual que Comercial; nombre exacto
-normalizado; nunca "parecido" automático).
+No se hizo el filtro por sello del catálogo de la app: es de la app y del backend (endpoint de
+lectura de abajo).
+
+**Cómo probarlo:** `pnpm dev`, la ficha de cualquier proveedor → tarjeta Sellos: asignar "Red de
+talleres A" verificado con un vencimiento pasado no deja (no se verifica vencido); con uno futuro
+queda verde; con menos de 30 días, la fecha en ámbar. Partners › Sellos: un CSV con encabezado
+`nombre;telefono;direccion;vence` y filas con el teléfono de un proveedor escrito con `0` y guiones,
+el nombre de otro en mayúsculas y una fila con el teléfono de uno y el nombre de otro (sale "Las
+claves no coinciden"). Sin login: `node tmp/probe-sellos.mjs` (reglas puras + 15 teléfonos reales
+reescritos que cruzan con su proveedor, y los 126 nombres en mayúsculas).
 
 **Necesidades de backend:**
 
@@ -492,14 +514,18 @@ normalizado; nunca "parecido" automático).
 - [ ] **endpoint de lectura** — sellos por proveedor para el filtro del catálogo de la app.
   **Bloquea el front: no.**
 
-**Lo que ya existe y reusaste:** `setPartnerProfileFn` (tier = Aliado), `listMarketplacePartners`.
-La normalización de teléfono de Comercial (`normalizeArPhone`) para el cruce.
+**Lo que ya existe y reusaste:** `listMarketplacePartners` (nombres y tier), `findPhoneMatchesFn`
+(teléfono contra `ops.normalize_ar_phone(partners.whatsapp)`), `getPartnerServicesView` (dirección,
+sólo si se pide), `normalizeArPhone` y `parseCsv` de Comercial, `normalizeForMatch`. El tier Aliado
+sigue en `setPartnerProfileFn`.
 
 **Dependencias:** conteo mensual (Aliado como excepción al tope).
 
 **Preguntas abiertas:**
 1. ¿Aliado pasa a ser un sello más (y `tier` se retira) o conviven?
 2. ¿Qué redes y aseguradoras hay en el primer listado, y qué columnas trae el CSV?
+3. ¿El listado de una red es fuente suficiente para "verificado", o siempre entra "pendiente"?
+4. ¿Un sello vencido se muestra en la app (como vencido) o desaparece?
 
 ---
 
