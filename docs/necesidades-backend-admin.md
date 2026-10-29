@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 2 — 2026-10-29. Bloque 1 implementado; el resto, relevado. Una sección por tarjeta de
+Versión 3 — 2026-10-29. Bloques 1 y 2 implementados; el resto, relevado. Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 **Cómo leer esto**
@@ -696,3 +696,10 @@ y las funciones de traducción de `~/lib/coverage-map` (`inferPedidoRubro`, `toC
 9. "Proveedores" en la UI nueva; en el código sigue `Partner` (vocabulario del backend).
 10. La marca "revisado" de los rubros «Otro» vive en memoria del navegador (mock) y se pierde al
    recargar, a propósito: guardarla en `localStorage` la haría parecer persistida.
+11. Las automatizaciones por evento son una pestaña nueva y no se mezclan con los envíos programados
+   por calendario (que ya son reales, en `ops`): cuando exista el modelo único de reglas del
+   backend, las dos pestañas se juntan.
+12. Los textos de las plantillas de seguimiento son borradores míos, para revisar. Usan
+   "proveedores" y "propuestas".
+13. En el efecto por envío, la acción objetivo se elige en pantalla y no se guarda: no hay dónde
+   (lo cubre `targetAction` del registro de envíos).
