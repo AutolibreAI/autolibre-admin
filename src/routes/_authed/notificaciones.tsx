@@ -38,6 +38,7 @@ const TABS = [
   { to: '/notificaciones', label: 'Historial', exact: true },
   { to: '/notificaciones/envios', label: 'Envíos', exact: false },
   { to: '/notificaciones/reglas', label: 'Reglas', exact: false },
+  { to: '/notificaciones/automatizaciones', label: 'Automatizaciones', exact: false },
 ] as const
 
 function NotificationsLayout() {

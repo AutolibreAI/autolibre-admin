@@ -115,6 +115,10 @@ function SchedulesList() {
             <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">
               Reglas del panel: a quiénes y cada cuánto. Nacen pausadas.
             </p>
+            <p className="mt-1 max-w-3xl text-xs text-status-yellow">
+              Activar una regla todavía no manda nada: falta el motor que las ejecute. Todas son push.
+              Los avisos por evento del pedido y por otros canales están en Automatizaciones (de ejemplo).
+            </p>
           </div>
           <ScheduleComposer />
         </div>

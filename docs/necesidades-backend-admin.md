@@ -163,18 +163,19 @@ las aperturas como señal.
 
 ## Configurar notificaciones desde el admin (puntuales y recurrentes)
 
-**Estado del front:** No empezado (hay base hecha, ver abajo).
+**Estado del front:** Hecho contra mock (el envío puntual y los envíos programados ya eran reales;
+lo nuevo es de ejemplo).
 
-**Qué hiciste:** Relevamiento. Ya existe: envío puntual ad-hoc (`BroadcastComposer`, por HTTP a
-`POST /notifications/broadcast`, título con tope de 25 caracteres), audiencias por condición,
-historial y envíos (`/notificaciones/envios`). Reglas recurrentes en `/notificaciones/reglas`
-(tabla `ops.notification_schedule`): se crean, editan, pausan y borran, pero **nacen pausadas y no
-hay motor que las dispare**. Las reglas de vencimiento del backend (`notification_rules`) son de
-solo lectura.
+**Qué hiciste:** Pestaña nueva Notificaciones › Automatizaciones
+(`src/routes/_authed/notificaciones.automatizaciones.tsx`): crear, editar, activar, pausar y borrar
+avisos por evento del pedido, con disparador, canal (push / mail / WhatsApp / el que eligió la
+persona), título con el tope de 25, mensaje con variables y horario permitido. Cada tarjeta dice qué
+le falta del backend para funcionar. Modelo y validaciones en `src/lib/notification-automations.ts`;
+guardado en memoria en `src/mocks/notification-automations.ts`. En Reglas › Envíos programados,
+un aviso: activar todavía no manda nada (no hay motor) y todo es push.
 
-**Plan para el front:** sumar a la pantalla de reglas lo que falta, contra mock: canal (push /
-mail / WhatsApp), disparador (horario vs. evento) y vista unificada de reglas (las del panel y las
-de vencimiento del backend). El envío puntual se queda como está.
+**Cómo probarlo:** `pnpm dev`, Notificaciones › Automatizaciones › "Nueva automatización". Se
+pierde al recargar, a propósito.
 
 **Necesidades de backend:**
 
