@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 1 — 2026-10-29. Relevamiento hecho antes de escribir código. Una sección por tarjeta de
+Versión 2 — 2026-10-29. Bloque 1 implementado; el resto, relevado. Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 **Cómo leer esto**
@@ -681,9 +681,12 @@ y las funciones de traducción de `~/lib/coverage-map` (`inferPedidoRubro`, `toC
    `America/Argentina/Buenos_Aires`; el 27/10/26 se toma como 2026-10-27 00:00 de Buenos Aires.
 5. "Enviadas" = las propuestas que siguen activas; "Retiradas" va aparte; "Usadas / tope" =
    enviadas + retiradas. Las elegidas no suman aparte (son parte de las enviadas).
-8. Las propuestas de un pedido cerrado como `duplicate` no cuentan para el tope: el equipo usa ese
+6. Las propuestas de un pedido cerrado como `duplicate` no cuentan para el tope: el equipo usa ese
    cierre para sus pedidos de prueba. Son 7 al 2026-10-29.
-9. Se cuenta por proveedor del directorio; una propuesta a un taller de afuera aparece aparte, sin
+7. Se cuenta por proveedor del directorio; una propuesta a un taller de afuera aparece aparte, sin
    plan, como "no se cobra".
-6. Aliado = `tier = founding`.
-7. "Proveedores" en la UI nueva; en el código sigue `Partner` (vocabulario del backend).
+8. Aliado = `tier = founding`. Una propuesta Aliado sobre el tope igual se pinta en rojo, con el
+   badge "Aliado · excepción", hasta que se decida cómo cuenta.
+9. "Proveedores" en la UI nueva; en el código sigue `Partner` (vocabulario del backend).
+10. La marca "revisado" de los rubros «Otro» vive en memoria del navegador (mock) y se pierde al
+   recargar, a propósito: guardarla en `localStorage` la haría parecer persistida.
