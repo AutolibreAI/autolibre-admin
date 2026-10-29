@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 4 — 2026-10-29. Bloques 1, 2 y 3 implementados; el Bloque 4, relevado. Una sección por tarjeta de
+Versión 5 — 2026-10-29. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado). Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 **Cómo leer esto**
@@ -678,8 +678,10 @@ qué):
 | Sellos | `seals` + `partner_seals` | tabla o columna | sí | P2 |
 | Sellos | `partners.cuit` | tabla o columna | no | P2 |
 | Sellos | asignar / revocar / importar | endpoint de escritura | sí | P2 |
+| Sellos | sellos por proveedor (filtro del catálogo de la app) | endpoint de lectura | no | P2 |
 | Cambios normativos | `regulatory_changes` | tabla o columna | sí | P3 |
 | Cambios normativos | contenido del .md | endpoint de lectura | sí (diff) | P3 |
+| Cambios normativos | aprobar = versión nueva + `change_summary` | endpoint de escritura | no | P3 |
 | Cambios normativos | detector + prueba de control | job | no | P3 |
 | Cobertura AMBA | `GET /admin/coverage` | endpoint de lectura | no | P2 |
 | Cobertura AMBA | usuarios por zona | endpoint de lectura | sí | P2 |
@@ -716,6 +718,17 @@ qué):
    (externos a Comercial) y Comercial ya la tienen: `ops.normalize_ar_phone` + su espejo en el
    front. Reusar, no reescribir.
 10. **Zonas** — "Cobertura AMBA" y "Estudio de proveedores" (filtro por zona, promedio de zona).
+   El backend ya normaliza el texto de `coverage_zone` para la web (`normalize-zone`, detrás de
+   `GET /partner-profiles/facets/zones`): conviene que el filtro del Estudio y el endpoint de
+   cobertura usen esa misma normalización y no una tercera.
+11. **Cruce de un listado externo contra proveedores** — "Sellos" (CSV de una red) y Comercial
+   (CSV de contactos) cruzan por teléfono con la misma regla. Si `seal-imports` se hace en el
+   backend, que reuse `ops.normalize_ar_phone` (o su equivalente) y agregue CUIT cuando exista
+   `partners.cuit`.
+12. **Subir una versión nueva de un .md** — "Cambios normativos" (aprobar una ficha) y la pestaña
+   Documentos ya usan el mismo camino (`POST /knowledge-documents/markdown` con
+   `supersedesDocumentId`). Aprobar debería ser ese mismo alta más el `change_summary`, no un camino
+   aparte.
 
 ## 3. Hallazgos
 
@@ -748,6 +761,17 @@ qué):
    cualquier pantalla nueva que ordene o compare esa fecha como texto va a fallar igual.
 14. **Hay un partner que se llama "AutoLibre"** (pausado, carga manual). Si es de prueba, conviene
    archivarlo: aparece en listados y filtros como si fuera un proveedor más.
+15. **La dirección de los proveedores no se puede leer en bloque**: ningún listado la trae, sólo la
+   ficha. El cruce por dirección de Sellos pide la ficha de cada proveedor (126 llamadas, de a 4) y
+   por eso es opcional. Un listado admin con dirección y teléfono normalizado lo resolvería.
+16. **Hay nombres de proveedor repetidos** (sucursales): el cruce por nombre exacto da "Varios
+   proveedores" en esos casos. No es un error del cruce; es por qué el nombre es la clave de menor
+   confianza.
+17. **`/conocimiento` pasó a ser un layout**: la pantalla de siempre vive ahora en
+   `conocimiento.index.tsx`. La URL y el ítem del menú no cambiaron.
+18. **El backend no se puede clonar entero en Windows** (rutas de más de 260 caracteres en
+   `src/vehicle-management/...`). Para los `grep`, `git clone --depth 1` + `git grep HEAD` sin
+   checkout funciona.
 
 
 ## 4. Supuestos que tomé
@@ -787,3 +811,15 @@ qué):
 16. En el estudio, el período cuenta propuestas por su fecha de envío; el norte "3 en menos de 1 h"
    cuenta pedidos por su fecha de entrada. La zona del reporte compara por el texto exacto de la
    zona declarada.
+17. Un sello vigente por proveedor y por sello: re-asignar revoca el anterior (queda en el
+   historial). "Vencido" se deduce de la fecha contra hoy en Buenos Aires; un pendiente no vence.
+18. Para "Verificado" alcanza con que lo diga la persona que asigna (o que importe el listado como
+   oficial); no hay un segundo paso de aprobación.
+19. El cruce del CSV de una red usa, en orden de confianza: teléfono, CUIT, dirección y nombre, todos
+   por igualdad después de normalizar. Si dos claves apuntan a proveedores distintos, o una a
+   varios, decide una persona. Un proveedor no puede salir dos veces en la misma importación.
+20. Las fichas de cambios normativos apuntan a .md y secciones de ejemplo, no a los documentos
+   reales: sin el contenido del .md no hay cómo mostrar el diff contra el texto verdadero.
+21. Aprobar una ficha exige pasar los chequeos de coherencia, tildar "leí la fuente" y escribir el
+   resumen; cualquier admin puede aprobar. El resumen propuesto se arma con tema, valores y norma, y
+   la persona lo edita.
