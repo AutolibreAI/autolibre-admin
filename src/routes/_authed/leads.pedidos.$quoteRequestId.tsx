@@ -29,6 +29,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerCandidates } from '~/components/PartnerCandidates'
 import { QuoteRequestPhotos } from '~/components/QuoteRequestPhotos'
 import { listQuoteRequestPhotosFn } from '~/fn/quote-photos'
+import { QuoteClosureCard } from '~/components/QuoteClosureCard'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
@@ -470,6 +471,8 @@ function QuoteRequestScreen() {
         channel={d.channel}
         status={d.status}
       />
+
+      <QuoteClosureCard key={`closure-${d.id}`} detail={d} proposals={proposals} />
 
       {/*
         `key` por pedido: navegar de uno a otro no arrastra un formulario a medio llenar.

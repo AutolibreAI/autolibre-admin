@@ -144,6 +144,12 @@ function Pedidos() {
             {/* El que llega de forma informal (llamada, en persona, referido) y
                 nunca pasó por app/web/whatsapp. → `QuoteRequestComposer`,
                 `ops.create_quote_request` (migración 012). */}
+            <Link
+              to="/leads/pedidos/cierres"
+              className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
+            >
+              Cierres y disputas
+            </Link>
             <QuoteRequestComposer />
             <SsrTag>ssr: full</SsrTag>
           </>

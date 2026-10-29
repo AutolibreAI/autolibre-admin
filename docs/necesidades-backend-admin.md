@@ -292,20 +292,22 @@ usuarios activos reales…" (aperturas desde notificación).
 
 ## Pedidos: "Contraté / No contraté" con elección de proveedor, historial, confirmación y cierre
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock (en la ficha, lo que existe es real y lo que falta dice "sin
+dato"; la cola es toda de ejemplo).
 
-**Qué hiciste:** Relevamiento. Hoy existen `quote_requests.user_outcome` (`hired | not_hired |
-pending`) con su endpoint de la app, `selected_proposal_id` (PUT/DELETE desde la app) y
-`outcome` del operador. `close_reason_code` es `cancelled_by_user | no_workshops_found |
-no_user_response | resolved | duplicate`: **no existen `user_not_hired` ni `too_expensive`**. No
-hay nada de confirmación del proveedor ni de disputa. No encontré un spec "cierre-de-pedidos" en
-ninguno de los dos repos.
+**Qué hiciste:** En la ficha del pedido, tarjeta "Cierre declarado"
+(`src/components/QuoteClosureCard.tsx`): lo que declaró la persona en la app y la propuesta que
+eligió (reales), y con quién contrató, monto final, estado del trabajo, código y motivo como "sin
+dato · falta backend" (nunca un valor de ejemplo sobre un pedido real). Pantalla
+`/leads/pedidos/cierres` (link "Cierres y disputas" desde Pedidos,
+`src/routes/_authed/leads.pedidos.cierres.tsx`): cola "En disputa" (declaración de la persona,
+respuesta del proveedor, validar / corregir / descartar con nota obligatoria), proveedores externos
+declarados con "Mandar a Comercial", y cierres filtrables por código, incluidos `user_not_hired` y
+`too_expensive`. Pedidos de ejemplo AL-90xx en `src/mocks/quote-closures.ts`; modelo en
+`src/lib/quote-closures.ts`.
 
-**Plan para el front:** contra mock: cola "En disputa" en `/leads/pedidos` (pedido, declaración
-del usuario, respuesta del proveedor; validar / corregir / descartar con nota obligatoria);
-tarjeta "Cierre declarado" en la ficha (con quién contrató, monto final, estado del trabajo,
-motivo de no contraté); filtros por los códigos nuevos. Proveedores externos declarados →
-Comercial con origen "declarado por usuario".
+**Cómo probarlo:** `pnpm dev`, Pedidos › "Cierres y disputas"; y cualquier ficha de pedido, tarjeta
+"Cierre declarado" debajo de las propuestas.
 
 **Necesidades de backend:**
 
