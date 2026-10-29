@@ -531,19 +531,32 @@ sigue en `setPartnerProfileFn`.
 
 ## automatizar cambios normativos a .md de la IA
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock (las fichas son de ejemplo; el historial de versiones es real).
 
-**Qué hiciste:** Relevamiento. Los .md del chat IA se cargan en `/conocimiento`: subida por HTTP a
-`POST /knowledge-documents/markdown`, una versión nueva reemplaza a la anterior cuando la ingesta
-termina, y la pantalla ya muestra la cadena de versiones (en uso / en curso / historial). No hay
-fichas de cambios normativos, ni diff, ni changelog, ni forma de bajar el .md (la descarga está
-acotada al dueño del archivo).
+**Qué hiciste:** `/conocimiento` pasó a tener pestañas: **Documentos** (la pantalla de siempre, ahora
+`conocimiento.index.tsx`) y **Cambios normativos** (`src/routes/_authed/conocimiento.cambios.tsx`):
+- **Cola a revisar**, en amarillo: tema, jurisdicción, valor anterior y nuevo, vigencia, norma con
+  link a la fuente, cita textual, quién la propuso (detector IA o persona) y el **diff por renglón**
+  sobre la sección del .md (`diffLines`, LCS determinístico en `src/lib/regulatory-changes.ts`).
+- **Chequeos de coherencia** fijos (`regulatoryChecks`): hay cita, hay URL https, el diff cambia
+  algo, el valor nuevo está en lo agregado, el anterior en lo sacado, y el anterior no queda en otro
+  renglón. Con uno en rojo, "Aprobar" está deshabilitado (la ficha 2 de ejemplo está así a propósito).
+- **Aprobar** pide tildar "Leí la norma en la fuente" y un resumen de qué cambió (el renglón del
+  changelog); queda a nombre de la persona logueada. **No sube nada**: lo dice en pantalla.
+  **Rechazar** pide motivo. La IA nunca aprueba.
+- **Revisadas** (plegado) con el changelog o el motivo.
+- **Historial de versiones REAL** por documento, de `listKnowledgeDocumentsFn` +
+  `groupKnowledgeChains` (en curso, en uso, reemplazadas), con "Qué cambió: sin dato · falta
+  backend" en cada versión.
 
-**Plan para el front:** contra mock: pestaña "Cambios normativos" en `/conocimiento` con la cola en
-amarillo (tema, jurisdicción, valor anterior y nuevo, vigencia, norma, URL, cita textual) y el diff
-propuesto sobre la sección del .md; aprobar / rechazar. Historial de versiones con changelog
-reusando la cadena que ya existe. La IA puede proponer la ficha, pero aprobar es siempre de una
-persona.
+Mock: `src/mocks/regulatory-changes.ts`, en memoria. Normas, jurisdicciones, valores y URLs son
+inventados y lo dicen ("(ejemplo)", `example.org`); el texto de cada sección también, porque el .md
+no se puede bajar.
+
+**Cómo probarlo:** `pnpm dev`, Conocimiento › Cambios normativos: la ficha de VTV pasa los chequeos
+(aprobar exige el tilde y el resumen); la de multas tiene un chequeo en rojo y no se puede aprobar;
+rechazar sin motivo no deja. Documentos sigue igual en `/conocimiento`. Sin login:
+`node tmp/probe-normativos.mjs`.
 
 **Necesidades de backend:**
 
@@ -560,14 +573,17 @@ persona.
 - [ ] **job** — prueba de control después del reindexado: un set de preguntas fijas que el
   asistente tiene que contestar con el valor nuevo. **Bloquea el front: no.**
 
-**Lo que ya existe y reusaste:** `listKnowledgeDocumentsFn`, `uploadKnowledgeDocumentFn` (con
-`supersedesDocumentId`), `groupKnowledgeChains`.
+**Lo que ya existe y reusaste:** `listKnowledgeDocumentsFn` y `groupKnowledgeChains` (historial).
+`uploadKnowledgeDocumentFn` (con `supersedesDocumentId`) es lo que aprobar tendría que llamar cuando
+exista el contenido del .md; hoy no se llama a propósito.
 
 **Dependencias:** ninguna.
 
 **Preguntas abiertas:**
-1. ¿Qué significa cada color del semáforo (amarillo = a revisar; ¿rojo y verde?)?
-2. ¿Quién aprueba: cualquier admin o una persona designada?
+1. ¿Qué significa cada color del semáforo (amarillo = a revisar; ¿rojo y verde?)? Supuse amarillo
+   = a revisar, verde = aprobado, gris = rechazado.
+2. ¿Quién aprueba: cualquier admin o una persona designada? Hoy cualquier admin.
+3. ¿Qué preguntas de control corre la prueba después del reindexado, y quién las escribe?
 
 ---
 

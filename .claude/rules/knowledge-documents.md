@@ -2,7 +2,9 @@
 
 Alcance: `src/lib/knowledge-documents.ts`, `src/server/knowledge-documents.repo.ts`,
 `src/fn/knowledge-documents.ts`, `src/components/KnowledgeDocumentUploader.tsx`,
-`src/routes/_authed/conocimiento.tsx`, y `uploadMarkdownKnowledgeDocument` en
+`src/routes/_authed/conocimiento.index.tsx` (pestaña Documentos; desde el 2026-10-29
+`conocimiento.tsx` es el layout de pestañas y `conocimiento.cambios.tsx` la cola de cambios
+normativos, contra mock), y `uploadMarkdownKnowledgeDocument` en
 `src/server/backend.ts`.
 
 ## Qué reemplaza
