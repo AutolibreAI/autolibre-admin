@@ -38,6 +38,7 @@ import { getVehicleLocationBreakdownFn } from '~/fn/vehicles'
 import { VehicleLocationSection } from '~/components/VehicleLocationBreakdown'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PulseRow } from '~/components/PulseCards'
+import { AppOpensSection } from '~/components/AppOpensSection'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { GrowthChart } from '~/components/GrowthChart'
 import { getActiveUsersSeries } from '~/fn/activity-feed'
@@ -209,10 +210,21 @@ function MetricasPage() {
         </div>
 
         <div className="mb-4">
+          {/*
+            Advertencia a la vista, no en la letra chica: el número se parece al
+            padrón entero (MAU ≈ base total) y se lee como "aperturas". No lo es.
+            La medición real está en «Aperturas de la app», contra mock.
+          */}
+          <p className="mb-2 rounded-md border border-status-yellow/40 bg-status-yellow-bg px-3 py-2 text-sm text-status-yellow">
+            <span className="font-medium">Esto no son aperturas de la app.</span> Cuenta a quien hizo algo
+            que quedó escrito (alta, auto, chat, escaneo, documento, pedido, login) o renovó el token de
+            notificaciones. Para aperturas reales falta que la app las informe: ver «Aperturas de la app» más
+            abajo.
+          </p>
           <GrowthChart
             buckets={activeUsers.points.map((p) => p.bucket)}
             unit={activeUsers.unit}
-            label="Usuarios activos"
+            label="Usuarios activos (acciones, no aperturas)"
             summaryPrefix=""
             bars={[
               {
@@ -300,6 +312,8 @@ function MetricasPage() {
 
         <OnboardingChart data={onboarding} />
       </section>
+
+      <AppOpensSection />
 
       <ChannelPeopleTable data={channels} />
 

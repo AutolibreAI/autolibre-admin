@@ -120,17 +120,17 @@ existentes a un partner, ya auditado), `getServiceCatalog`.
 
 ## Medir usuarios activos reales (aperturas de la app)
 
-**Estado del front:** No empezado.
+**Estado del front:** Hecho contra mock (la nota sobre la métrica actual es real; la sección de
+aperturas es de ejemplo).
 
-**Qué hiciste:** Relevamiento. El gráfico "Usuarios activos" de `/metricas` cuenta acciones (las
-16 ramas del feed de actividad) más la renovación del token push. No existe ningún registro de
-aperturas (ni en la base ni en el backend: sin `app_open`, sin PostHog).
+**Qué hiciste:** En `/metricas`, arriba del gráfico de activos, un aviso ámbar: "Esto no son
+aperturas de la app", con la definición actual; el gráfico pasó a llamarse "Usuarios activos
+(acciones, no aperturas)". Sección nueva "Aperturas de la app" (`src/components/AppOpensSection.tsx`)
+con DAU / WAU / MAU, stickiness, aperturas con valor, retención D1/D7/D30 por semana de alta y
+ventana 7 / 30 / 90 días. Cálculos en `src/lib/app-opens.ts`; números en `src/mocks/app-opens.ts`.
 
-**Plan para el front:** (a) ya, con datos reales: una nota destacada arriba del gráfico con la
-definición actual y la advertencia de que no son aperturas. (b) contra mock: sección nueva
-"Aperturas" en `/metricas` con DAU / WAU / MAU, stickiness, retención por cohorte D1/D7/D30,
-"activo con valor" y filtros 7/30/90 días. Todo el cálculo (stickiness, cohortes, corte de valor)
-en código, sobre filas agregadas.
+**Cómo probarlo:** `pnpm dev`, Métricas: el aviso arriba de "Usuarios activos" y la sección
+"Aperturas de la app" debajo de Crecimiento, con el cartel de datos de ejemplo.
 
 **Necesidades de backend:**
 
