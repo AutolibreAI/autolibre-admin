@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 3 — 2026-10-29. Bloques 1 y 2 implementados; el resto, relevado. Una sección por tarjeta de
+Versión 4 — 2026-10-29. Bloques 1, 2 y 3 implementados; el Bloque 4, relevado. Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 **Cómo leer esto**
@@ -720,3 +720,10 @@ y las funciones de traducción de `~/lib/coverage-map` (`inferPedidoRubro`, `toC
    "proveedores" y "propuestas".
 13. En el efecto por envío, la acción objetivo se elige en pantalla y no se guarda: no hay dónde
    (lo cubre `targetAction` del registro de envíos).
+14. Los cierres declarados y las disputas usan pedidos de ejemplo AL-90xx que no existen. La ficha
+   de un pedido real nunca muestra un valor de ejemplo: dice "sin dato · falta backend".
+15. "Mandar a Comercial" desde un externo declarado NO crea el contacto en Comercial, aunque esa
+   escritura exista: los datos son de ejemplo y terminarían como contactos reales.
+16. En el estudio, el período cuenta propuestas por su fecha de envío; el norte "3 en menos de 1 h"
+   cuenta pedidos por su fecha de entrada. La zona del reporte compara por el texto exacto de la
+   zona declarada.
