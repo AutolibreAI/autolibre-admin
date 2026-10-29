@@ -589,11 +589,19 @@ exista el contenido del .md; hoy no se llama a propósito.
 
 ## Backend: endpoints para el mapa de cobertura AMBA (admin › Partners › Cobertura)
 
-**Estado del front:** Hecho (v1 sin endpoint propio, desde el 2026-10-22).
+**Estado del front:** Hecho (v1 sin endpoint propio, desde el 2026-10-22). El pedido al backend
+**sigue vigente**.
 
-**Qué hiciste:** Nada nuevo (la tarjeta pide no implementar). Verifiqué que el pedido sigue
-vigente: el backend no tiene ningún endpoint de cobertura al 2026-10-28. Detalle completo en
-`docs/pedido-backend-cobertura.md`.
+**Qué hiciste:** Nada de código (la tarjeta pide no implementar). Re-verifiqué el 2026-10-29 sobre
+`main` del backend (commit del 2026-10-28, clon de lectura): no hay ningún endpoint de cobertura,
+ni de pedidos con coordenadas sin datos personales, ni de usuarios por zona. Lo más cercano que
+apareció es `GET /partner-profiles/facets/zones` (público): zonas normalizadas a partir del texto
+de `coverage_zone` de los proveedores publicados, con conteo. No sirve para el mapa (no trae pedidos
+ni GPS ni usuarios), pero es la normalización de zonas que pide "Estudio de proveedores" para su
+filtro (ver Hallazgos). Detalle del pedido en `docs/pedido-backend-cobertura.md`.
+
+**Cómo probarlo:** sin cambios: Partners › Cobertura funciona igual que el 2026-10-22
+(`node tmp/probe-cobertura.mjs` cuadra contra la sección 6 del spec).
 
 **Necesidades de backend:**
 
@@ -608,10 +616,20 @@ vigente: el backend no tiene ningún endpoint de cobertura al 2026-10-28. Detall
 - [ ] **endpoint de lectura** — listado de partners para el mapa (servicios, modalidad,
   coordenadas), sin datos de contacto. **Bloquea el front: no.**
 
-**Limpieza pendiente del front para cuando exista:** borrar `partnerCoverageBoard` (repo),
-`getPartnerCoverageBoard` (fn, hoy solo se usa para `totalActivePartners`), `~/lib/partners-coverage`
-y las funciones de traducción de `~/lib/coverage-map` (`inferPedidoRubro`, `toCoveragePedido`,
-`toCoverageProveedor`).
+**Limpieza pendiente del front para cuando exista** (verificado el 2026-10-29 con `grep`, quién usa
+qué):
+- `getPartnerCoverageBoard` (`src/fn/partners.ts`): hoy lo llama sólo `partners.cobertura.tsx`, y
+  sólo para `totalActivePartners` (el texto "N activos" y los "sin servicios"). Se borra cuando el
+  endpoint de partners del mapa traiga ese total.
+- `partnerCoverageBoard` (`src/server/partners.repo.ts`): lo usa sólo esa fn.
+- `~/lib/partners-coverage`: lo importan sólo esa fn y ese repo (tipos). Se va con ellos; quedan
+  dos comentarios que lo nombran en `src/lib/catalog.ts` para actualizar.
+- `~/lib/coverage-map`: `inferPedidoRubro`, `toCoveragePedido` y `toCoverageProveedor` (las usa sólo
+  `partners.cobertura.tsx`). El resto del archivo (zonas, distancia, prioridad) se queda.
+- En `partners.cobertura.tsx`, la carga de GPS pedido por pedido (`getQuoteRequestFn` con
+  `GPS_CONCURRENCY`) y su cache de módulo.
+- `.claude/rules/partners-coverage.md` (secciones del tablero viejo) y `coverage-map.md` ("v1 sin
+  endpoint").
 
 **Lo que ya existe y reusaste:** `listPartnerCandidatesFn`, `listQuoteRequestsFn`,
 `getQuoteRequestFn`, `getPartnerCoverageBoard`.
