@@ -12,6 +12,7 @@ import {
   Bell,
   BookOpen,
   Car,
+  ClipboardList,
   Coins,
   FileText,
   Handshake,
@@ -122,6 +123,13 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * ficha propia. → `.claude/rules/activity-feed.md`
    */
   { to: "/actividad", label: "Actividad", icon: History },
+  /**
+   * `Comercial` va antes de `Solicitudes`: es el paso anterior del mismo
+   * recorrido. El equipo sale a buscar al proveedor (Comercial), el proveedor
+   * se postula (Solicitudes) y queda en el directorio (Partners).
+   * → `.claude/rules/partner-prospects.md`
+   */
+  { to: "/comercial", label: "Comercial", icon: ClipboardList },
   { to: "/solicitudes", label: "Solicitudes", icon: Inbox },
   { to: "/partners", label: "Partners", icon: Store },
   /**
