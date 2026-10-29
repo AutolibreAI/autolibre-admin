@@ -7,6 +7,8 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  * partner). Ahora esa tabla es la pestaña **Listado**, y al lado va
  * **Cobertura**: el tablero que cruza los 16 rubros contra la zona de cada
  * partner para ver qué oferta está cubierta y cuál hay que salir a capturar.
+ * Desde el 2026-10-29, **Propuestas**: el conteo mensual por proveedor contra el
+ * tope de su plan.
  * Mismo patrón de layout que `/leads` y `/vehiculos`.
  *
  * La ficha de un partner (`/partners/$partnerId`, consultas 7 y 8: el editor de
@@ -29,6 +31,7 @@ interface Tab {
 const TABS: ReadonlyArray<Tab> = [
   { to: '/partners/listado', label: 'Listado' },
   { to: '/partners/cobertura', label: 'Cobertura' },
+  { to: '/partners/propuestas', label: 'Propuestas' },
 ]
 
 function PartnersLayout() {
