@@ -37,6 +37,26 @@ proveedores (52 activas, 2 retiradas, 1 elegida), noviembre 7 de 6 + 1 a un tall
 (Norauto Quilmes), iguales. Las 7 propuestas colgadas de pedidos cerrados como duplicado (pruebas
 del equipo) no cuentan.
 
+**Vista histórica** (opción "Histórico (desde 27/10/26)" del selector de mes, `proposalMonth=historico`):
+una fila por proveedor con enviadas, retiradas, elegidas, total usadas, % elegidas (elegidas /
+enviadas), primera y última propuesta, meses con actividad, pico mensual (el máximo de usadas en un
+mes calendario), plan y badge Aliado. Sin columna de tope: el color va sobre el pico mensual, con las
+mismas reglas del mes, así se ve quién pasaría el tope de su plan en algún mes. Orden por total
+descendente, buscador por nombre (también en la vista mensual) y botón "Descargar CSV" (separador
+`;`, coma decimal, UTF-8 con BOM; trae lo que se ve en pantalla, talleres de afuera al final
+marcados) para que Tobías cruce con quién pagó. Sale del mismo conteo que la vista mensual
+(`bucketProposals` en `src/lib/partner-plans.ts`): no hay una segunda lógica.
+
+**Cuadre del histórico al 02/11/26** (producción, `doadmin`, puerto 25060): pantalla = SQL directo =
+**61 propuestas de 38 proveedores del directorio (59 activas, 2 retiradas, 1 elegida)**, más 1 a un
+taller de afuera. El número de referencia "68 de 41 (64 activas, 4 retiradas, 2 elegidas)" **incluye
+las 7 propuestas de los dos pedidos cerrados como duplicado** (AL-1169: 3; AL-1172: 4, con 1
+retirada y 1 elegida): con esas el SQL da 68 de 41, pero 65 activas, 3 retiradas y 2 elegidas. La
+diferencia de 64/4 contra 65/3 no se reproduce con `withdrawn_at`: en toda la tabla hay 3 retiradas.
+La explicación más probable es que esa consulta contó como retirada una propuesta corregida (AL-1192:
+`updated_at` posterior a `created_at`, sin `withdrawn_at`). Corregir no retira (`PUT`, sin push), así
+que la pantalla no la cuenta como retirada.
+
 **Cómo probarlo:** `pnpm dev`, entrar con una cuenta admin, Partners › Propuestas. Sin login:
 `node tmp/probe-propuestas-historico.mjs` (solo lectura; `tmp/` no se versiona, está en esta
 máquina) arma los mismos datos con los repos reales, corre los meses y el histórico, y cuadra contra
@@ -73,6 +93,9 @@ un `count` directo.
   `usedTowardCap` (= sent + withdrawn). Aparte, `externals`: los talleres de afuera (nombre y los
   mismos conteos, sin plan ni tope). Mes calendario en `America/Argentina/Buenos_Aires`, nada antes
   del 2026-10-27, sin los pedidos cerrados como `duplicate`. Filtros: `month`, `plan`, `overCap`.
+  **Rango:** que acepte también `from` / `to` (mes o día) o `range=all` para la vista histórica; con
+  rango, por proveedor suma además `firstAt`, `lastAt`, `activeMonths` y `peakMonth` +
+  `peakUsed` (el máximo de usadas en un mes calendario).
   **No debe devolver** descripción, montos, ni nada del pedido o de la persona. **Bloquea el front:
   no** (hoy se arma en el navegador, ver abajo; con volumen se vuelve lento).
 

@@ -1,15 +1,18 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { Download } from 'lucide-react'
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MockBanner } from '~/components/MockBanner'
+import { SearchInput } from '~/components/SearchInput'
 import { useProposalFacts } from '~/components/useProposalFacts'
 import { usePartnerPlans } from '~/components/usePartnerPlans'
 import { ProposalLoadStatus as LoadStatus } from '~/components/ProposalLoadStatus'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
+import { Button } from '~/components/ui/button'
 import {
   Table,
   TableBody,
@@ -18,20 +21,34 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
+import { normalizeForMatch } from '~/lib/catalog'
 import { formatInt } from '~/lib/format'
 import {
   PARTNER_PLANS,
   PARTNER_PLAN_CAPS,
   PARTNER_PLAN_LABELS,
   PROPOSAL_COUNT_START,
+  PROPOSAL_HISTORY,
+  aggregatePartnerHistory,
   aggregatePartnerUsage,
+  baDay,
   countableMonths,
   isFounding,
   monthLabel,
+  partnerHistoryCsv,
   partnerProposalsSearchSchema,
+  shortDay,
 } from '~/lib/partner-plans'
 import { cn } from '~/lib/utils'
-import type { CapTone, ExternalUsageRow, PartnerPlan, PartnerRef, PartnerUsageRow } from '~/lib/partner-plans'
+import type {
+  CapTone,
+  ExternalUsageRow,
+  PartnerHistoryRow,
+  PartnerPlan,
+  PartnerRef,
+  PartnerUsageRow,
+  UsageCounts,
+} from '~/lib/partner-plans'
 
 /**
  * Propuestas por proveedor y por mes, contra el tope de su plan.
@@ -51,6 +68,11 @@ import type { CapTone, ExternalUsageRow, PartnerPlan, PartnerRef, PartnerUsageRo
  * El PLAN es de ejemplo (`~/mocks/partner-plans`): `partners.plan` no existe.
  * El día que exista `GET /admin/partner-proposal-usage`, esta pantalla deja de
  * pedir propuestas una por una y consume esas filas.
+ *
+ * La vista histórica (`proposalMonth=historico`) suma todo desde el 27/10 por
+ * proveedor, con el pico mensual: el color va sobre ese pico, así se ve quién
+ * pasaría el tope de su plan en algún mes. Sale del MISMO conteo que la vista
+ * mensual (`bucketProposals`), y su CSV es para cruzar con quién pagó.
  *
  * Los colores los decide `capTone` (`~/lib/partner-plans`), no esta pantalla:
  * rojo pasó el tope, amarillo llegó, Aliado siempre gris (sin límite por
@@ -97,18 +119,44 @@ function PartnerProposals() {
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
   const months = useMemo(() => countableMonths(new Date()), [])
+  const isHistory = search.proposalMonth === PROPOSAL_HISTORY
   const month = search.proposalMonth && months.includes(search.proposalMonth) ? search.proposalMonth : months[0]!
 
   const load = useProposalFacts(requests ?? [])
   const { plans } = usePartnerPlans(useMemo(() => partners.map((p) => p.id), [partners]))
 
-  const view = useMemo(
+  const monthView = useMemo(
     () => aggregatePartnerUsage(load.facts, month, partners, plans, { includeIdle: search.proposalShowIdle }),
     [load.facts, month, partners, plans, search.proposalShowIdle],
   )
-  const rows = search.proposalOverCap ? view.rows.filter((r) => r.tone === 'over') : view.rows
+  const historyView = useMemo(
+    () => aggregatePartnerHistory(load.facts, partners, plans, { includeIdle: search.proposalShowIdle }),
+    [load.facts, partners, plans, search.proposalShowIdle],
+  )
+  const view = isHistory ? historyView : monthView
 
-  const totals = view.rows.reduce(
+  const needle = search.q ? normalizeForMatch(search.q) : ''
+  const matches = (name: string) => needle === '' || normalizeForMatch(name).includes(needle)
+  const keep = (r: { name: string; tone: CapTone }) => matches(r.name) && (!search.proposalOverCap || r.tone === 'over')
+  const monthRows = monthView.rows.filter(keep)
+  const historyRows = historyView.rows.filter(keep)
+  const rows = isHistory ? historyRows : monthRows
+  const externals = view.externals.filter((e) => matches(e.name))
+
+  const downloadCsv = () => {
+    // Se baja lo que se ve: el buscador y "solo sobre el tope" también filtran el CSV.
+    const csv = partnerHistoryCsv({ rows: historyRows, externals })
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `propuestas-por-proveedor-historico-${baDay(new Date())}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Los totales no siguen al buscador: son el panorama del período.
+  const counted: ReadonlyArray<UsageCounts & { tone: CapTone }> = view.rows
+  const totals = counted.reduce(
     (acc, r) => ({
       sent: acc.sent + r.sent,
       withdrawn: acc.withdrawn + r.withdrawn,
@@ -133,7 +181,7 @@ function PartnerProposals() {
     <>
       <PageHeader
         title="Propuestas por proveedor"
-        subtitle={`${monthLabel(month)} · hora de Buenos Aires · se cuenta desde el 27/10/2026`}
+        subtitle={`${isHistory ? 'Histórico' : monthLabel(month)} · hora de Buenos Aires · se cuenta desde el 27/10/2026`}
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
@@ -147,10 +195,13 @@ function PartnerProposals() {
       <div className="mb-4 flex flex-wrap items-end gap-5">
         <FilterGroup label="Mes">
           {months.map((m) => (
-            <Chip key={m} active={m === month} onClick={() => setSearch({ proposalMonth: m })}>
+            <Chip key={m} active={!isHistory && m === month} onClick={() => setSearch({ proposalMonth: m })}>
               {monthLabel(m)}
             </Chip>
           ))}
+          <Chip active={isHistory} onClick={() => setSearch({ proposalMonth: PROPOSAL_HISTORY })}>
+            Histórico (desde 27/10/26)
+          </Chip>
         </FilterGroup>
         <FilterGroup label="Tope">
           <Chip
@@ -158,7 +209,8 @@ function PartnerProposals() {
             active={search.proposalOverCap}
             onClick={() => setSearch({ proposalOverCap: !search.proposalOverCap })}
           >
-            Solo sobre el tope{totals.over > 0 && !search.proposalOverCap ? ` (${totals.over})` : ''}
+            {isHistory ? 'Solo con un mes sobre el tope' : 'Solo sobre el tope'}
+            {totals.over > 0 && !search.proposalOverCap ? ` (${totals.over})` : ''}
           </Chip>
         </FilterGroup>
         <FilterGroup label="Proveedores">
@@ -169,6 +221,19 @@ function PartnerProposals() {
             Incluir activos sin propuestas
           </Chip>
         </FilterGroup>
+        <SearchInput
+          label="Buscar"
+          placeholder="Nombre del proveedor"
+          value={search.q}
+          onSearch={(q) => setSearch({ q })}
+          className="w-full sm:w-56"
+        />
+        {isHistory ? (
+          <Button variant="outline" size="sm" onClick={downloadCsv} disabled={load.loading}>
+            <Download className="size-3.5" aria-hidden />
+            Descargar CSV
+          </Button>
+        ) : null}
       </div>
 
       <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-6">
@@ -176,8 +241,16 @@ function PartnerProposals() {
         <Stat label="Retiradas" value={totals.withdrawn} />
         <Stat label="Elegidas" value={totals.selected} />
         <Stat label="Proveedores con propuestas" value={totals.withProposals} />
-        <Stat label="Llegaron al tope" value={totals.at} tone={totals.at > 0 ? 'yellow' : undefined} />
-        <Stat label="Pasaron el tope" value={totals.over} tone={totals.over > 0 ? 'red' : undefined} />
+        <Stat
+          label={isHistory ? 'Llegaron al tope en un mes' : 'Llegaron al tope'}
+          value={totals.at}
+          tone={totals.at > 0 ? 'yellow' : undefined}
+        />
+        <Stat
+          label={isHistory ? 'Pasaron el tope en un mes' : 'Pasaron el tope'}
+          value={totals.over}
+          tone={totals.over > 0 ? 'red' : undefined}
+        />
       </dl>
 
       <LoadStatus load={load} />
@@ -189,10 +262,18 @@ function PartnerProposals() {
         </Empty>
       ) : rows.length === 0 && !load.loading ? (
         <Empty>
-          {search.proposalOverCap
-            ? 'Nadie pasó el tope este mes.'
-            : 'No hay propuestas a proveedores del directorio en este mes.'}
+          {search.q
+            ? 'Ningún proveedor coincide con la búsqueda.'
+            : search.proposalOverCap
+              ? isHistory
+                ? 'Nadie pasó el tope en ningún mes.'
+                : 'Nadie pasó el tope este mes.'
+              : isHistory
+                ? 'No hay propuestas a proveedores del directorio desde el 27/10.'
+                : 'No hay propuestas a proveedores del directorio en este mes.'}
         </Empty>
+      ) : isHistory ? (
+        <HistoryTable rows={historyRows} />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
           <Table className="min-w-[860px]">
@@ -207,7 +288,7 @@ function PartnerProposals() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => (
+              {monthRows.map((r) => (
                 <UsageRow key={r.partnerId} row={r} />
               ))}
             </TableBody>
@@ -215,7 +296,7 @@ function PartnerProposals() {
         </div>
       )}
 
-      <ExternalSection rows={view.externals} />
+      <ExternalSection rows={externals} history={isHistory} />
 
       <Legend />
     </>
@@ -243,6 +324,74 @@ function UsageRow({ row }: { row: PartnerUsageRow }) {
     </TableRow>
   )
 }
+
+// ── Vista histórica ──────────────────────────────────────────────────────────
+
+/**
+ * Sin columna de tope: el tope es mensual. El color va sobre el PICO mensual,
+ * con las mismas reglas que el mes (`capTone`).
+ */
+function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-border bg-card">
+      <Table className="min-w-[1100px]">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Proveedor</TableHead>
+            <TableHead>Plan</TableHead>
+            <TableHead className="text-right">Enviadas</TableHead>
+            <TableHead className="text-right">Retiradas</TableHead>
+            <TableHead className="text-right">Elegidas</TableHead>
+            <TableHead className="text-right">Total usadas</TableHead>
+            <TableHead className="text-right">% elegidas</TableHead>
+            <TableHead>Primera</TableHead>
+            <TableHead>Última</TableHead>
+            <TableHead className="text-right">Meses</TableHead>
+            <TableHead className="text-right">Pico mensual</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.partnerId} className={toneRowClass(r.tone)}>
+              <TableCell>
+                <ProviderName row={r} />
+              </TableCell>
+              <TableCell className="text-sm">
+                <PlanLabel plan={r.plan} />
+              </TableCell>
+              <TableCell className="text-right tabular-nums">{formatInt(r.sent)}</TableCell>
+              <TableCell className="text-right tabular-nums">
+                {r.withdrawn > 0 ? formatInt(r.withdrawn) : <span className="text-muted-foreground">0</span>}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">{formatInt(r.selected)}</TableCell>
+              <TableCell className="text-right font-medium tabular-nums">{formatInt(r.used)}</TableCell>
+              <TableCell className="text-right tabular-nums">
+                {r.pctSelected === null ? <span className="text-muted-foreground">—</span> : formatPct(r.pctSelected)}
+              </TableCell>
+              <TableCell className="text-sm tabular-nums">{r.firstAt ? shortDay(baDay(r.firstAt)) : '—'}</TableCell>
+              <TableCell className="text-sm tabular-nums">{r.lastAt ? shortDay(baDay(r.lastAt)) : '—'}</TableCell>
+              <TableCell className="text-right tabular-nums">{formatInt(r.activeMonths)}</TableCell>
+              <TableCell className={cn('text-right tabular-nums', toneTextClass(r.tone))}>
+                {r.peak ? (
+                  <>
+                    {formatInt(r.peak.used)}
+                    <span className="ml-1 text-xs font-normal">en {monthLabel(r.peak.month)}</span>
+                    <ToneNote tone={r.tone} used={r.peak.used} cap={r.plan ? PARTNER_PLAN_CAPS[r.plan] : null} />
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+const pct = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1 })
+const formatPct = (n: number) => `${pct.format(n)} %`
 
 // ── Piezas compartidas por las filas ─────────────────────────────────────────
 
@@ -306,7 +455,7 @@ function ToneNote({ tone, used, cap }: { tone: CapTone; used: number; cap: numbe
  * para que no se confunda con un proveedor, y para ver quién conviene dar de
  * alta.
  */
-function ExternalSection({ rows }: { rows: ReadonlyArray<ExternalUsageRow> }) {
+function ExternalSection({ rows, history }: { rows: ReadonlyArray<ExternalUsageRow>; history: boolean }) {
   return (
     <section className="mt-6">
       <h2 className="mb-1 font-heading text-sm font-semibold">Propuestas a talleres de afuera (excepción)</h2>
@@ -328,6 +477,8 @@ function ExternalSection({ rows }: { rows: ReadonlyArray<ExternalUsageRow> }) {
                 <TableHead className="text-right">Retiradas</TableHead>
                 <TableHead className="text-right">Elegidas</TableHead>
                 <TableHead className="text-right">Total</TableHead>
+                {history ? <TableHead>Primera</TableHead> : null}
+                {history ? <TableHead>Última</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -338,6 +489,12 @@ function ExternalSection({ rows }: { rows: ReadonlyArray<ExternalUsageRow> }) {
                   <TableCell className="text-right tabular-nums">{formatInt(r.withdrawn)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatInt(r.selected)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatInt(r.used)}</TableCell>
+                  {history ? (
+                    <TableCell className="text-sm tabular-nums">{r.firstAt ? shortDay(baDay(r.firstAt)) : '—'}</TableCell>
+                  ) : null}
+                  {history ? (
+                    <TableCell className="text-sm tabular-nums">{r.lastAt ? shortDay(baDay(r.lastAt)) : '—'}</TableCell>
+                  ) : null}
                 </TableRow>
               ))}
             </TableBody>
@@ -362,7 +519,8 @@ function Legend() {
       <p>
         Usadas = enviadas + retiradas: una propuesta retirada no devuelve el lugar. Elegidas = la propuesta que
         la persona tiene elegida hoy en la app; si la eligió y después la des-eligió, no cuenta. El mes es el de
-        envío, en hora de Buenos Aires.
+        envío, en hora de Buenos Aires. En el histórico, el pico mensual es el máximo de usadas en un mes
+        calendario, y el color va sobre ese pico.
       </p>
       <p>
         Rojo: pasó el tope. Amarillo: llegó al tope. Aliado: sin límite por ahora, su tope es sólo referencia y
