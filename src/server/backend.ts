@@ -818,3 +818,66 @@ export async function classifyQuoteRequest(quoteRequestId: string): Promise<void
     'La clasificación del pedido',
   )
 }
+
+// ── Logo de un partner ───────────────────────────────────────────────────────
+
+/**
+ * Quinta escritura por HTTP del panel. El grep dio positivo recién el
+ * 2026-11-02, porque el endpoint se agregó para esto: `PUT|DELETE
+ * /admin/partners/:id/logo` (`AdminPartnerLogoController`, `AdminGuard`).
+ *
+ * Un SP de `ops` no alcanzaba: el logo es una imagen PÚBLICA en Spaces, y el
+ * flujo de `POST /files` la deja privada (URL firmada que vence a los minutos).
+ * El backend normaliza (WebP, 512px, sin EXIF), sube con `public-read` y
+ * escribe `partners.logo_url`, todo con la misma regla que el alta de
+ * solicitudes.
+ *
+ * El archivo SÍ pasa por el server function, como un data URL en el JSON: el
+ * backend corta en 512 KiB (~700KB en base64), lejos del techo de 4.5MB de
+ * Vercel. Si ese límite sube por encima de ~3MB, hay que pasar a subida directa.
+ */
+async function partnerLogoFetch(
+  partnerId: string,
+  init: { method: 'PUT' | 'DELETE'; body?: unknown },
+): Promise<Response> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/partners/${partnerId}/logo`, {
+      method: init.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'El logo del partner', { detailed: true })
+  return response
+}
+
+/** Sube o reemplaza. Devuelve la URL pública nueva (cambia en cada subida). */
+export async function setPartnerLogo(input: {
+  partnerId: string
+  logoDataUrl: string
+}): Promise<{ logoUrl: string }> {
+  const response = await partnerLogoFetch(input.partnerId, {
+    method: 'PUT',
+    body: { logoDataUrl: input.logoDataUrl },
+  })
+  const body = (await response.json()) as { logoUrl?: unknown }
+  if (typeof body.logoUrl !== 'string') {
+    throw new Error('BACKEND_ERROR:200:El backend no devolvió la URL del logo')
+  }
+  return { logoUrl: body.logoUrl }
+}
+
+/** Deja `logo_url` en NULL. 204 sin cuerpo, idempotente: no se lee JSON. */
+export async function removePartnerLogo(partnerId: string): Promise<void> {
+  await partnerLogoFetch(partnerId, { method: 'DELETE' })
+}

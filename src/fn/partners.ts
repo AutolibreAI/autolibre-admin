@@ -38,6 +38,8 @@ import {
   unstickApplication,
   updateApplicationStatus,
 } from '~/server/partners.repo'
+import { removePartnerLogoSchema, setPartnerLogoSchema } from '~/lib/partner-logo'
+import { removePartnerLogo, setPartnerLogo } from '~/server/backend'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type {
@@ -265,6 +267,23 @@ export const setPartnerLinksFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }): Promise<Array<{ kind: string; url: string }>> =>
     setPartnerLinks(data, context.user.id, { signal: requestSignal() }),
   )
+
+// ── Logo — por HTTP, no por SQL ─────────────────────────────────────────────
+//
+// A diferencia de las de arriba, no hay SP de `ops`: el logo es una imagen
+// pública en Spaces, y la sube el backend (`PUT|DELETE /admin/partners/:id/logo`)
+// con el token de Clerk del admin. El actor queda en el log del backend; acá
+// no viaja ningún id por payload. → `~/server/backend`
+
+export const setPartnerLogoFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerLogoSchema)
+  .handler(async ({ data }): Promise<{ logoUrl: string }> => setPartnerLogo(data))
+
+export const removePartnerLogoFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(removePartnerLogoSchema)
+  .handler(async ({ data }): Promise<void> => removePartnerLogo(data.partnerId))
 
 // ── Derivación: zonas y candidatos (`.claude/plans/partners-derivacion.md`) ──
 

@@ -65,6 +65,14 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 >
 > **El 2026-10-26, cuarta**: «Propuestas en la app» en `/leads/pedidos/:id` (`AdminQuoteRequestController`,
 > 0120–0122 del backend). → `.claude/rules/quote-proposals.md`
+>
+> **El 2026-11-02, quinta — y esta vez el endpoint lo escribimos nosotros**: el logo de un partner
+> (tarjeta «Logo» de `/partners/$partnerId`). El `grep` dio negativo y un SP no alcanzaba: el logo
+> es una imagen PÚBLICA en Spaces, y `POST /files` deja privado. Se agregó en el backend (rama
+> `feat/admin-partner-logo`) `PUT|DELETE /admin/partners/:id/logo` (`AdminGuard`), que normaliza con
+> el MISMO `normalizeLogoDataUrl` que el alta de solicitudes, sube `public-read` y escribe
+> `partners.logo_url`. Viaja como data URL en el JSON (≤ 512 KiB, lejos de los 4.5MB de Vercel). Sin
+> `logo_url`, el perfil público cae al logo de la solicitud: «Quitar» puede volver a mostrar ése.
 
 > **Si `../autolibre-backend-hex` no está clonado** (pasa en esta máquina), el `grep` se puede correr
 > igual: `git clone --depth 1 https://github.com/AutolibreAI/autolibre-backend-hex.git` en el scratchpad

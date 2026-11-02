@@ -102,6 +102,18 @@ export interface PartnerServicesView {
      * se borraría en el próximo guardado sin que nadie lo note.
      */
     links: Array<PartnerLink>
+    /**
+     * `partners.logo_url`: el que cargó el admin (`PUT /admin/partners/:id/logo`).
+     * Sólo URLs http(s) navegables (`applicationLogoUrl` de `~/lib/application-logo`).
+     */
+    logoUrl: string | null
+    /**
+     * El logo que mandó el taller con su solicitud (`raw_submission->>'logoUrl'`).
+     * Sin `logoUrl`, el perfil público del backend muestra ÉSTE
+     * (`DrizzlePartnerProfileReader`): por eso la ficha lo enseña como lo que se
+     * ve hoy, y quitar el logo cargado lo vuelve a mostrar.
+     */
+    applicationLogoUrl: string | null
   }
   /** El catálogo completo, para poder agregar cualquier rubro. */
   families: Array<ServiceFamily>
