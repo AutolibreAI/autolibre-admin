@@ -70,6 +70,11 @@ existe, se agrega en el backend con su TDD, no se resuelve con un SQL desde el p
 > igual: `git clone --depth 1 https://github.com/AutolibreAI/autolibre-backend-hex.git` en el scratchpad
 > funciona con las credenciales de git de la máquina. Así se verificó la 020 y `GET /admin/files/:id/url`
 > el 2026-10-03. Leer, no commitear ahí.
+>
+> **En Windows el clon entero falla** (relevado el 2026-10-29): hay rutas de más de 260 caracteres en
+> `src/vehicle-management/...` y el checkout aborta a la mitad. Lo que funciona es no hacer checkout:
+> `git clone --depth 1 --no-checkout …` y buscar con `git grep <patrón> HEAD` (o
+> `git show HEAD:<ruta>` para leer un archivo).
 
 > `autolibre-backend` (sin `-hex`, en `ram_projects/`) es OTRO repo — monorepo npm `vehicle-care`.
 > El que manda es el `-hex`. Si una ruta te lleva al otro, estás mirando el lugar equivocado.
@@ -234,7 +239,7 @@ pantalla no va todavía.
 | `/escaneres/comparar` | `'data-only'` | **La consulta que nadie arma**: abrir el `metrics` de N escaneos del mismo modelo y compararlos a ojo — "¿cuál es el LTFT normal de un Vento 2.5?". Elegís un modelo y cuán parecidos (exacto / misma versión cualquier año / mismo modelo), después autos, escaneos y PIDs (multiselect); un gráfico de RANGO por PID con el valor típico por escaneo y por auto, agrupable por auto, DTCs, mantenimiento previo, año, km, caja o combustible. Las curvas en el tiempo no: están en DigitalOcean y no se tocan (decidido el 2026-09-25). Excluye lecturas dudosas (valores físicamente imposibles) con el conteo a la vista → `.claude/rules/scan-compare.md` |
 | `/chats` | `true` | El `select * from conversations c join conversation_messages m on m.conversation_id = c.id where c.user_id = '…'` que hoy sería la única forma de ver de qué habló un usuario con el asistente — con lo que ese select no contesta solo: si es de diagnóstico o general (deriva de `vehicle_id`), con qué modelo, y cuántos mensajes mandó cada lado. Desde el 2026-09-25 las conversaciones SIN mensajes no se listan nunca (125 de 228 eran ruido) |
 | `/chats/:id` | `true` | El chat completo, en orden — hoy inexistente como pantalla, sólo reconstruible mensaje por mensaje en DBeaver |
-| `/conocimiento` | `true` | El `curl -F file=@guia.md … POST /knowledge-documents/markdown` con un token de Clerk copiado a mano, más el `select id, title, status, failure_reason from knowledge_documents` para saber si la ingesta terminó, y —desde la 0102 del backend— seguir `supersedes_document_id` a mano para saber qué versión usa HOY el asistente. Lista los documentos PÚBLICOS del RAG agrupados en cadenas de versiones (en uso · en curso/fallida · historial), con refresco automático mientras haya alguno `pending`. **Escribe por HTTP** (tercera pantalla que lo hace): "Subir documento" y "Subir nueva versión" (`supersedesDocumentId`), markdown ≤ 1 MB, sólo `relevance = global`. Retirar un documento sin reemplazo no tiene endpoint en el backend → `.claude/rules/knowledge-documents.md` |
+| `/conocimiento` | `true` | **Desde el 2026-10-29 es un layout de pestañas**: la pantalla de siempre vive en `conocimiento.index.tsx` (la URL y el ítem del menú no cambiaron) y `conocimiento.cambios.tsx` es la cola de cambios normativos (contra mock). Reemplaza el `curl -F file=@guia.md … POST /knowledge-documents/markdown` con un token de Clerk copiado a mano, más el `select id, title, status, failure_reason from knowledge_documents` para saber si la ingesta terminó, y —desde la 0102 del backend— seguir `supersedes_document_id` a mano para saber qué versión usa HOY el asistente. Lista los documentos PÚBLICOS del RAG agrupados en cadenas de versiones (en uso · en curso/fallida · historial), con refresco automático mientras haya alguno `pending`. **Escribe por HTTP** (tercera pantalla que lo hace): "Subir documento" y "Subir nueva versión" (`supersedesDocumentId`), markdown ≤ 1 MB, sólo `relevance = global`. Retirar un documento sin reemplazo no tiene endpoint en el backend → `.claude/rules/knowledge-documents.md` |
 | `/documentos` | `true` | Los `select * from insurances / registration_cards / driver_licenses / vehicle_inspections where user_id = '…'` sueltos que hoy hacen falta para auditar lo que el OCR extrajo de un documento, más el cruce contra `vehicles` (patente OCR vs patente real, VIN, marca) que nadie corre. **Read-only**: editar necesita un SP de `ops` con auditoría, y mostrar el archivo necesita un endpoint admin en el backend — las dos cosas son un paso aparte |
 | `/documentos/:tipo/:id` | `true` | Todos los campos que el OCR extrajo de un documento, contrastados campo por campo contra el vehículo. Los `:tipo` son `seguro`/`cedula`/`registro`/`vtv` |
 | `/notificaciones` | `true` | Layout de 3 pestañas (Historial · Envíos · Reglas). **NO redirige**: el índice ES el historial, porque `/usuarios/:id` y `/operacion` ya linkeaban a la raíz con search params. → `.claude/rules/notifications.md` |
@@ -372,7 +377,8 @@ el backend sube su límite por encima de ~4MB, hay que pasar a subida directa.
 
 **Decidido el 2026-10-26.** Cuarta excepción a la decisión 1, mismo cliente y misma identidad.
 Enviar, corregir, retirar y cerrar la búsqueda van a `/admin/quote-requests…` (`AdminGuard`); la
-lectura es SQL con su propio guard (producción tiene la tabla vieja sin 0120–0122). Ninguna
+lectura es SQL con su propio guard (el 2026-10-26 producción tenía la tabla vieja sin 0120–0122; al
+2026-11-02 ya las tiene, y el guard queda por las bases que no migraron). Ninguna
 escritura SQL a `quote_request_proposals`: el backend manda el push, asigna los lugares y reescribe
 `proposals_count`. → `.claude/rules/quote-proposals.md`
 
@@ -541,6 +547,12 @@ Reglas que salen de esto y no son negociables:
    **Al 2026-10-29 la 024 (seguimiento comercial, `ops.partner_prospect`) dio 79/79 en una réplica
    PGlite — NO corrida en DEV ni aplicada en ninguna base.** La aplica el `vercel-build` del próximo
    deploy de `main`; sin ella `/comercial` muestra "falta aplicar la migración 024".
+   **Corregido el 2026-11-02: en producción están aplicadas de la 001 a la 024**, todas
+   (`ops.schema_migrations`, `doadmin`, puerto 25060). Todos los "NO aplicada" de arriba (010 a 024)
+   quedaron viejos para producción; para DEV no se relevó. Lo mismo con
+   **0120–0122 del backend**: `quote_request_proposal_sends` existe en producción y «Propuestas en la
+   app» funciona ahí — lo que dice `.claude/rules/quote-proposals.md` del 2026-10-26 ("producción no
+   las tiene") es de esa fecha.
 3. **La tabla del censo nunca debió vivir en un `.md`.** El número ahora se calcula solo:
    `adoptionPulse()` en `src/server/ops.repo.ts` devuelve `legacyNativeAdmins` y la pantalla de
    Inicio lo muestra — contra la base a la que el panel esté conectado, sea cual sea. Regla general:

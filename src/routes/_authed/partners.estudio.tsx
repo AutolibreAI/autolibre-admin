@@ -1,6 +1,6 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { Copy, FileText } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getServiceCatalog, listMarketplacePartners, listPartnerZonesFn } from '~/fn/partners'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '~/components/ui/sheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { Textarea } from '~/components/ui/textarea'
-import { fetchPartnerPlansMock } from '~/mocks/partner-plans'
+import { usePartnerPlans } from '~/components/usePartnerPlans'
 import { partnerStudyExtrasMock } from '~/mocks/partner-study'
 import { formatDate, formatInt } from '~/lib/format'
 import {
@@ -40,7 +40,6 @@ import {
 } from '~/lib/partner-study'
 import { quoteChannelLabel } from '~/lib/quote-requests'
 import { cn } from '~/lib/utils'
-import type { PartnerPlan } from '~/lib/partner-plans'
 import type { PartnerStudyRow, StudyPartnerRef } from '~/lib/partner-study'
 
 /**
@@ -101,10 +100,7 @@ function PartnerStudy() {
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
   const load = useProposalFacts(requests ?? [])
-  const [plans, setPlans] = useState<Map<string, PartnerPlan>>(new Map())
-  useEffect(() => {
-    void fetchPartnerPlansMock(partners.map((p) => p.id)).then(setPlans)
-  }, [partners])
+  const { plans } = usePartnerPlans(useMemo(() => partners.map((p) => p.id), [partners]))
 
   const now = useMemo(() => new Date(), [])
   const range = lastDaysRange(search.studyPeriod, now)

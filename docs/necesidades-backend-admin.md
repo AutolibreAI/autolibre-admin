@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 5 — 2026-10-29. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado). Una sección por tarjeta de
+Versión 6 — 2026-11-02. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado) y las decisiones del 02/11/26 sobre propuestas y planes aplicadas (lista de cambios al final). Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 **Cómo leer esto**
@@ -14,8 +14,8 @@ Trello, con el título exacto de la tarjeta.
 - "Mock" = una capa de API de ejemplo, aislada en un solo lugar del front (propuesta:
   `src/mocks/`, un archivo por tarjeta), con un cartel visible de "Datos de ejemplo" en cada
   pantalla que la use. Reemplazarla es cambiar un import.
-- Los números citados salen de producción, solo lectura, el 2026-10-29. Son conteos agregados,
-  nunca filas de personas.
+- Los números citados salen de producción, solo lectura, el 2026-10-29 (los relevados el 02/11/26
+  lo dicen al lado). Son conteos agregados, nunca filas de personas.
 
 ---
 
@@ -24,37 +24,118 @@ Trello, con el título exacto de la tarjeta.
 **Estado del front:** Hecho contra mock (solo el plan es de ejemplo; propuestas, retiradas y
 elegidas son reales).
 
-**Qué hiciste:** Pestaña nueva Partners › Propuestas (`src/routes/_authed/partners.propuestas.tsx`)
-con selector de mes, enviadas / retiradas / elegidas / plan / usadas sobre tope, rojo al pasar el
-tope, badge "Aliado · excepción". El cálculo vive en `src/lib/partner-plans.ts`; el plan, en
-`src/mocks/partner-plans.ts`. Cuadre contra SQL directo, octubre 2026: 34 enviadas, 2 retiradas, 1
-elegida, iguales. Las 7 propuestas colgadas de pedidos cerrados como duplicado (pruebas del
-equipo) no cuentan.
+**Qué hiciste:** Pestaña Partners › Propuestas (`src/routes/_authed/partners.propuestas.tsx`)
+con selector de mes, enviadas / retiradas / elegidas / plan / usadas sobre tope. Los colores los
+calcula `capTone` en `src/lib/partner-plans.ts` (nunca la pantalla): **rojo** si usadas > tope,
+**amarillo** si usadas = tope, **Aliado** en gris con el badge "Aliado · sin límite por ahora" (su
+tope se ve como referencia), **sin plan** en gris. Los talleres de afuera del directorio van en una
+sección aparte al pie, "Propuestas a talleres de afuera (excepción)", con nombre y cantidad, y no
+suman a ningún tope. En el formulario de propuestas, al elegir un taller de afuera aparece el aviso
+"Caso excepcional: no suma al tope de ningún proveedor…" (no frena el envío). El plan, en
+`src/mocks/partner-plans.ts`. Cuadre contra SQL directo al 02/11/26: octubre 54 propuestas de 36
+proveedores (52 activas, 2 retiradas, 1 elegida), noviembre 7 de 6 + 1 a un taller de afuera
+(Norauto Quilmes), iguales. Las 7 propuestas colgadas de pedidos cerrados como duplicado (pruebas
+del equipo) no cuentan.
+
+**Vista histórica** (opción "Histórico (desde 27/10/26)" del selector de mes, `proposalMonth=historico`):
+una fila por proveedor con enviadas, retiradas, elegidas, total usadas, % elegidas (elegidas /
+enviadas), primera y última propuesta, meses con actividad, pico mensual (el máximo de usadas en un
+mes calendario), plan y badge Aliado. Sin columna de tope: el color va sobre el pico mensual, con las
+mismas reglas del mes, así se ve quién pasaría el tope de su plan en algún mes. Orden por total
+descendente, buscador por nombre (también en la vista mensual) y botón "Descargar CSV" (separador
+`;`, coma decimal, UTF-8 con BOM; trae lo que se ve en pantalla, talleres de afuera al final
+marcados) para que Tobías cruce con quién pagó. Sale del mismo conteo que la vista mensual
+(`bucketProposals` en `src/lib/partner-plans.ts`): no hay una segunda lógica.
+
+**Cuadre del histórico al 02/11/26** (producción, `doadmin`, puerto 25060): pantalla = SQL directo =
+**61 propuestas de 38 proveedores del directorio (59 activas, 2 retiradas, 1 elegida)**, más 1 a un
+taller de afuera. El número de referencia "68 de 41 (64 activas, 4 retiradas, 2 elegidas)" **incluye
+las 7 propuestas de los dos pedidos cerrados como duplicado** (AL-1169: 3; AL-1172: 4, con 1
+retirada y 1 elegida): con esas el SQL da 68 de 41, pero 65 activas, 3 retiradas y 2 elegidas. La
+diferencia de 64/4 contra 65/3 no se reproduce con `withdrawn_at`: en toda la tabla hay 3 retiradas.
+La explicación más probable es que esa consulta contó como retirada una propuesta corregida (AL-1192:
+`updated_at` posterior a `created_at`, sin `withdrawn_at`). Corregir no retira (`PUT`, sin push), así
+que la pantalla no la cuenta como retirada.
+
+**Plan cargado a mano** (decisión 5): en la ficha del proveedor, al lado de Perfil, la tarjeta
+"Plan" con selector Gratis / Estándar / Plus / Plus Max / sin plan y fecha de inicio; en las dos
+tablas de Propuestas, el plan se edita desde la misma fila (lápiz). Siempre con confirmación ("¿Cambiar
+el plan de X de Gratis a Plus desde el 01/11/26?"). La ficha muestra quién lo cambió y cuándo (el
+email sale de la sesión, nunca del formulario). Componente `src/components/PartnerPlanEditor.tsx`,
+hook `src/components/usePartnerPlans.ts`; guarda contra `src/mocks/partner-plans.ts`, **en memoria**:
+la ficha, Propuestas y Estudio ven el cambio en la misma sesión y se pierde al recargar (nada en
+`localStorage`). Con el cartel "Datos de ejemplo".
+
+**Relevamiento del campo de plan (02/11/26), contra producción:** no existe. `public.partners` no
+tiene ninguna columna de plan (sus columnas: `id, application_id, source, user_id, name,
+description, logo_url, whatsapp, email, address, hours, modality, redirect_link, coverage_zone,
+latitude, longitude, tier, status, created_at, updated_at, legacy_sheet_row_id,
+whatsapp_message`), no hay ningún enum de plan, y lo que edita la ficha
+(`setPartnerProfileFn` → `ops.set_partner_profile`, migración 009) sólo escribe nombre, zona,
+descripción y `tier`. Lo único parecido es `ops.partner_prospect.plan` (`free | plus | undecided`):
+es lo que un **contacto** de Comercial dijo que le interesa, no el plan contratado de un proveedor
+(otra entidad, otro catálogo, sin Estándar ni Plus Max, y no todo proveedor tiene contacto). No
+sirve, y no se usó. `tier` tampoco: es el sello Aliado.
 
 **Cómo probarlo:** `pnpm dev`, entrar con una cuenta admin, Partners › Propuestas. Sin login:
-`node tmp/probe-propuestas.mjs` (solo lectura; `tmp/` no se versiona, está en esta máquina) arma los mismos datos con los repos reales y cuadra
-contra un `count` directo.
+`node tmp/probe-propuestas-historico.mjs` (solo lectura; `tmp/` no se versiona, está en esta
+máquina) arma los mismos datos con los repos reales, corre los meses y el histórico, y cuadra contra
+un `count` directo.
+
+**Decisiones (02/11/26):**
+
+1. **Aliado** (`tier = founding`): se ve su conteo y el tope de su plan como referencia, pero por
+   ahora no tiene límite. Nunca se pinta en rojo ni en amarillo. Badge "Aliado · sin límite por
+   ahora".
+2. **El tope no frena el envío**, solo se marca. No hay bloqueo ni confirmación al cargar una
+   propuesta.
+3. **Los talleres de afuera del directorio siguen permitidos** como caso excepcional.
+   `quote_request_proposals.partner_id` sigue siendo nullable: se sacó el pedido de volverlo NOT
+   NULL.
+4. **Elegidas = la propuesta que es hoy `quote_requests.selected_proposal_id`**, en la vista
+   mensual y en la histórica. Una propuesta elegida y después des-elegida no cuenta como elegida.
+   Está escrito también en `src/lib/partner-plans.ts`.
+5. **El plan de cada proveedor se carga a mano desde el admin.**
 
 **Necesidades de backend:**
 
-- [ ] **tabla o columna** — `partners.plan` (enum `partner_plan`: `gratis | estandar | plus |
-  plus_max`), NOT NULL con default a decidir. El tope (1 / sin límite / 10 / 15) puede vivir en
-  código o en una tabla de planes con vigencia; si los topes van a cambiar, conviene tabla con
-  `valid_from` para no reescribir meses pasados. `tier` (`founding | standard`) no sirve: es el
-  sello Aliado, no un plan comercial. **Bloquea el front: no** (mock).
+**P0 — el pedido mínimo, para hacer en el día (el cobro arranca en noviembre):**
+
+- [ ] **tabla o columna** — `partners.plan`: enum `partner_plan` (`gratis | estandar | plus |
+  plus_max`), **nullable** (`NULL` = sin plan). Es `public`, así que va por Drizzle en
+  `autolibre-backend-hex`. Sin backfill: todos arrancan sin plan y se cargan a mano. `tier`
+  (`founding | standard`) no se toca: es el sello Aliado, no un plan. **Bloquea el front: no**
+  (mock).
+- [ ] **endpoint de escritura** — aceptar `plan` en la edición de partner que ya existe: hoy es
+  `ops.set_partner_profile` (migración 009 de este repo, la que usa la ficha). Agregar `p_plan`
+  (o un `ops.set_partner_plan` aparte, si se prefiere una entrada de auditoría propia porque el plan
+  tiene otra consecuencia: el cobro). Las dos opciones escriben `ops.action_log` con `before` /
+  `after` y el actor de la sesión, así que **quién y cuándo lo cambió sale gratis** sin el
+  historial. Opcional en el mismo cambio: `partners.plan_valid_from date` nullable, para guardar la
+  fecha de inicio que ya pide el formulario. **Bloquea el front: sí** para guardar de verdad.
+
+**P1 — aparte, no frena el P0:**
+
 - [ ] **tabla o columna** — historial de plan (`partner_plan_history`: `partner_id`, `plan`,
   `valid_from`, `valid_to`, `changed_by`). Sin esto, si un proveedor cambia de plan a mitad de mes
-  no se sabe contra qué tope medir el mes. **Bloquea el front: no.**
+  no se sabe contra qué tope medir ese mes: hoy todo mes se mide contra el plan vigente. El tope
+  (1 / sin límite / 10 / 15) puede vivir en código o en una tabla de planes con vigencia; si los
+  topes van a cambiar, conviene tabla con `valid_from` para no reescribir meses pasados.
+  **Bloquea el front: no.**
 - [ ] **endpoint de lectura** — `GET /admin/partner-proposal-usage?month=YYYY-MM`. Una fila por
-  proveedor: `partnerId`, `partnerName`, `tier`, `plan`, `cap` (null = sin límite), `sent`
-  (no retiradas), `withdrawn`, `selected`, `usedTowardCap` (= sent + withdrawn). Mes calendario en
-  `America/Argentina/Buenos_Aires`, nada antes del 2026-10-27. Filtros: `month`, `plan`,
-  `overCap`. **No debe devolver** descripción, montos, ni nada del pedido o de la persona.
-  **Bloquea el front: no** (hoy se arma en el navegador, ver abajo; con volumen se vuelve lento).
-- [ ] **tabla o columna** — `quote_request_proposals.partner_id` NOT NULL. **Ojo:** hoy el
-  formulario de propuestas admite un taller de afuera del directorio (`provider_name` +
-  `provider_phone`, sin `partner_id`). Volverlo NOT NULL obliga a dar de alta al proveedor antes
-  de mandarle una propuesta. Ver pregunta abierta. **Bloquea el front: no.**
+  proveedor del directorio: `partnerId`, `partnerName`, `tier`, `plan`, `cap` (null = sin límite),
+  `sent` (no retiradas), `withdrawn`, `selected` (= es hoy `selected_proposal_id`),
+  `usedTowardCap` (= sent + withdrawn). Aparte, `externals`: los talleres de afuera (nombre y los
+  mismos conteos, sin plan ni tope). Mes calendario en `America/Argentina/Buenos_Aires`, nada antes
+  del 2026-10-27, sin los pedidos cerrados como `duplicate`. Filtros: `month`, `plan`, `overCap`.
+  **Rango:** que acepte también `from` / `to` (mes o día) o `range=all` para la vista histórica; con
+  rango, por proveedor suma además `firstAt`, `lastAt`, `activeMonths` y `peakMonth` +
+  `peakUsed` (el máximo de usadas en un mes calendario).
+  **No debe devolver** descripción, montos, ni nada del pedido o de la persona. **Bloquea el front:
+  no** (hoy se arma en el navegador, ver abajo; con volumen se vuelve lento).
+
+> Se sacó el pedido de volver `quote_request_proposals.partner_id` NOT NULL (decisión 3 del
+> 02/11/26): las propuestas a talleres de afuera siguen permitidas como excepción.
 
 **Lo que ya existe y reusaste:** `listQuoteRequestsFn` (pedidos) + `listQuoteProposalsFn` (las
 propuestas de un pedido, con `partnerId`, `createdAt`, `withdrawnAt` y `selectedProposalId`),
@@ -65,15 +146,8 @@ llamado pedido por pedido desde el navegador, igual que hace hoy el mapa de cobe
 registrar los pedidos por proveedor en la automatización" (ver Solapamientos).
 
 **Preguntas abiertas:**
-1. Aliado (`tier = founding`, 12 proveedores) y "taller de cabecera": ¿cuentan contra el tope, no
-   cuentan, o tienen un tope propio? "Taller de cabecera" no existe hoy en ningún lado del sistema:
-   ¿es un sello nuevo, un plan, o una marca manual?
-2. ¿Qué pasa con las propuestas a un taller de afuera del directorio si `partner_id` pasa a ser
-   NOT NULL? ¿Se elimina esa opción del formulario?
-3. ¿El tope frena el envío (el backend rechaza la propuesta 2 de un Gratis) o solo se marca en
-   rojo para cobrar? Hoy el front solo puede marcar.
-4. "Elegidas": ¿una propuesta elegida y después des-elegida por la persona cuenta? La app tiene
-   `DELETE /quote-requests/:id/selected-proposal`.
+1. "Taller de cabecera" no existe hoy en ningún lado del sistema: ¿es un sello nuevo, un plan, o
+   una marca manual? ¿Tiene tope?
 
 ---
 
@@ -345,17 +419,21 @@ motivos) y "Notificaciones: … reglas de seguimiento…" (pregunta de cierre). 
 
 ## Admin: asignar a un usuario activo de la app los pedidos creados manualmente (los que entran por WhatsApp)
 
-**Estado del front:** Parcial (la búsqueda es real; el vínculo es de ejemplo; solo desde la ficha).
+**Estado del front:** Hecho contra mock (la búsqueda es real; el vínculo es de ejemplo).
 
 **Qué hiciste:** En la ficha del pedido, debajo de "Entró por…", dos datos por separado: "Canal de
 entrada" y "Tiene la app: sí / no". Sin cuenta, botón "Vincular a un usuario de la app"
 (`src/components/QuoteUserLinker.tsx`) con buscador real por email y nombre
 (`searchNotificationRecipients`) y "Vincular" de ejemplo (`src/mocks/quote-user-link.ts`, en memoria).
-El listado ya mostraba canal y cuenta en columnas separadas. Falta: vincular en el mismo formulario
-de "Cargar pedido" (hoy se vincula desde la ficha recién creada) y buscar por teléfono o patente.
+El listado ya mostraba canal y cuenta en columnas separadas. Desde el 02/11/26 también se vincula
+desde el formulario "Cargar pedido" (`src/components/QuoteRequestComposer.tsx`), con el mismo
+buscador (`AppUserSearch`, extraído de `QuoteUserLinker`) y el mismo mock: el vínculo se aplica
+recién después de crear el pedido, con el id que devuelve el alta. Si se elige una cuenta y no hay
+patente, avisa que con cuenta la base la exige. Lo que sigue faltando es buscar por teléfono o
+patente (necesita backend).
 
 **Cómo probarlo:** `pnpm dev`, la ficha de un pedido de WhatsApp sin cuenta › "Vincular a un usuario
-de la app", buscar por email.
+de la app", buscar por email. O Pedidos › "Cargar pedido" › "Vincular a un usuario de la app".
 
 **Necesidades de backend:**
 
@@ -644,10 +722,10 @@ qué):
 
 | Tarjeta | Necesidad | Tipo | Bloquea front | Prioridad sugerida |
 |---|---|---|---|---|
-| Conteo mensual + tope | `partners.plan` | tabla o columna | no | **P0** (cobro en noviembre) |
+| Conteo mensual + tope | `partners.plan` (nullable) | tabla o columna | no | **P0** (cobro en noviembre) |
+| Conteo mensual + tope | aceptar `plan` en la edición de partner | endpoint de escritura | sí (guardar) | **P0** |
 | Conteo mensual + tope | historial de plan | tabla o columna | no | P1 |
 | Conteo mensual + tope | `GET /admin/partner-proposal-usage` | endpoint de lectura | no | P1 |
-| Conteo mensual + tope | `partner_id` NOT NULL | tabla o columna | no | P2 (decidir externos antes) |
 | Rubros "Otro" | marca de revisado | tabla o columna | no | P1 |
 | Rubros "Otro" | alta de servicios / service_tasks | endpoint de escritura | no | P1 |
 | Rubros "Otro" | marcar revisado | endpoint de escritura | no | P1 |
@@ -685,6 +763,7 @@ qué):
 | Cambios normativos | detector + prueba de control | job | no | P3 |
 | Cobertura AMBA | `GET /admin/coverage` | endpoint de lectura | no | P2 |
 | Cobertura AMBA | usuarios por zona | endpoint de lectura | sí | P2 |
+| Métricas › Pedidos | propuestas por pedido y red vs. afuera desde `quote_request_proposals` | endpoint de lectura | no (cartel) | P2 |
 
 ## 2. Solapamientos
 
@@ -732,11 +811,18 @@ qué):
 
 ## 3. Hallazgos
 
-1. **`CLAUDE.md` está desactualizado**: dice que la migración 024 (Comercial) no está aplicada en
-   ninguna base; producción tiene hasta la 024 aplicada. Lo mismo con 0120–0122 del backend: la
-   rule de propuestas dice que el 26/10 no estaban; hoy están y la tarjeta funciona.
+1. **`CLAUDE.md` estaba desactualizado** sobre qué migraciones hay en producción. **Corregido el
+   02/11/26**: producción tiene de la 001 a la 024 de `ops` (relevado en `ops.schema_migrations`) y
+   las 0120–0122 del backend (`quote_request_proposal_sends` existe).
 2. **Métricas › Pedidos (propuestas por pedido, red vs. afuera) dejó de crecer el 27/10**: sigue
-   leyendo `ops.quote_request_response`, que ya no se carga desde ninguna pantalla.
+   leyendo `ops.quote_request_response`, que ya no se carga desde ninguna pantalla. Desde el
+   02/11/26 los dos gráficos llevan el cartel "Datos hasta el 27/10/26" y mandan a Partners ›
+   Propuestas. **No se recalcula en el navegador** con las propuestas: un mismo pedido puede tener
+   filas en las dos tablas (la precarga copia de `ops` a la app), y sumarlas lo contaría dos veces;
+   además Métricas tendría que pedir las propuestas pedido por pedido. Lo resuelve el endpoint de uso
+   por proveedor con rango (`GET /admin/partner-proposal-usage`, ver la primera tarjeta), si suma
+   un corte por fecha de creación del pedido; o una consulta de `quote_request_proposals` por
+   período en la sección Pedidos de Métricas (`quoteRequestSeries`, server-only). **P2.**
 3. **Las reglas recurrentes no mandan nada**: `/notificaciones/reglas` deja crearlas y activarlas,
    pero no hay motor. Una persona puede creer que un envío está programado.
 4. **`notification_channel` no tiene WhatsApp** (`push | email | sms`), y el 100% de las
@@ -745,8 +831,9 @@ qué):
    usuarios falla en silencio. Pedido abierto desde el 2026-10-03.
 6. **La duración de 72 h del pedido no está modelada** (no hay `expires_at`).
 7. **`notifications` no tiene `read_at`**: se sabe si se leyó, nunca cuándo.
-8. **Volver `partner_id` NOT NULL rompe el flujo de propuestas a talleres de afuera**, que el
-   formulario hoy permite (aunque al 2026-10-29 ninguna de las 43 lo usa).
+8. **Volver `partner_id` NOT NULL rompía el flujo de propuestas a talleres de afuera.** Resuelto el
+   02/11/26: se mantiene nullable y el taller de afuera queda como excepción, en su sección aparte.
+   Al 02/11/26 hay 1 (Norauto Quilmes).
 9. **El mapa de cobertura recibe teléfono, email y nombre de hasta 500 pedidos** para dibujar
    puntos (ya documentado en `docs/pedido-backend-cobertura.md`).
 10. **El backend tiene promociones de partner con endpoints admin** (`/promotions`, asignaciones)
@@ -768,10 +855,14 @@ qué):
    proveedores" en esos casos. No es un error del cruce; es por qué el nombre es la clave de menor
    confianza.
 17. **`/conocimiento` pasó a ser un layout**: la pantalla de siempre vive ahora en
-   `conocimiento.index.tsx`. La URL y el ítem del menú no cambiaron.
+   `conocimiento.index.tsx`. La URL y el ítem del menú no cambiaron. Volcado a `CLAUDE.md` el
+   02/11/26.
 18. **El backend no se puede clonar entero en Windows** (rutas de más de 260 caracteres en
    `src/vehicle-management/...`). Para los `grep`, `git clone --depth 1` + `git grep HEAD` sin
-   checkout funciona.
+   checkout funciona. Volcado a `CLAUDE.md` el 02/11/26.
+19. **Un cuadre de propuestas que cuente por `updated_at` mezcla corregidas con retiradas.** Corregir
+   una propuesta (`PUT`, sin push) mueve `updated_at` sin retirarla. "Retirada" es sólo
+   `withdrawn_at` cargado; al 02/11/26 hay 3 en toda la tabla, y 1 corregida sin retirar (AL-1192).
 
 
 ## 4. Supuestos que tomé
@@ -791,9 +882,9 @@ qué):
 6. Las propuestas de un pedido cerrado como `duplicate` no cuentan para el tope: el equipo usa ese
    cierre para sus pedidos de prueba. Son 7 al 2026-10-29.
 7. Se cuenta por proveedor del directorio; una propuesta a un taller de afuera aparece aparte, sin
-   plan, como "no se cobra".
-8. Aliado = `tier = founding`. Una propuesta Aliado sobre el tope igual se pinta en rojo, con el
-   badge "Aliado · excepción", hasta que se decida cómo cuenta.
+   plan, como "no se cobra" (confirmado el 02/11/26).
+8. Aliado = `tier = founding`. Desde el 02/11/26 es decisión, no supuesto: nunca se pinta, aunque
+   pase el tope de su plan (ver "Decisiones (02/11/26)").
 9. "Proveedores" en la UI nueva; en el código sigue `Partner` (vocabulario del backend).
 10. La marca "revisado" de los rubros «Otro» vive en memoria del navegador (mock) y se pierde al
    recargar, a propósito: guardarla en `localStorage` la haría parecer persistida.
@@ -823,3 +914,31 @@ qué):
 21. Aprobar una ficha exige pasar los chequeos de coherencia, tildar "leí la fuente" y escribir el
    resumen; cualquier admin puede aprobar. El resumen propuesto se arma con tema, valores y norma, y
    la persona lo edita.
+
+## 5. Cambios respecto de la versión 5 (02/11/26)
+
+Para actualizar Trello:
+
+1. **Conteo mensual + tope** — se aplicaron las 5 decisiones del 02/11/26 (nueva subsección
+   "Decisiones (02/11/26)"). Las 4 preguntas abiertas se cerraron; queda sólo "taller de cabecera".
+   Colores: rojo pasó, amarillo llegó, Aliado gris con "Aliado · sin límite por ahora", sin plan
+   gris. El tope no frena nada.
+2. **Talleres de afuera** — sección aparte al pie de Propuestas, "Propuestas a talleres de afuera
+   (excepción)", y aviso en el formulario de propuestas. Se **sacó** el pedido de
+   `quote_request_proposals.partner_id` NOT NULL (y su fila de la tabla resumen).
+3. **Elegidas** — definido: la propuesta que es hoy `selected_proposal_id`; una des-elegida no
+   cuenta. Escrito en `src/lib/partner-plans.ts`.
+4. **Vista histórica** de Propuestas (desde 27/10/26) con pico mensual coloreado, buscador y CSV.
+   Cuadre: 61 propuestas de 38 proveedores sin duplicados; el "68 de 41" de referencia incluye las 7
+   de pedidos duplicados (explicado en la tarjeta).
+5. **Endpoint de uso por proveedor** — ahora pide `from` / `to` o `range=all`, y `externals` aparte.
+6. **Plan cargado a mano** — tarjeta "Plan" en la ficha y edición desde las filas de Propuestas, con
+   confirmación, contra mock en memoria. Relevamiento: no hay campo de plan en la base
+   (`ops.partner_prospect.plan` no sirve). El pedido se partió en **P0** (`partners.plan` nullable +
+   aceptarlo en la edición de partner que ya existe) y **P1** (historial de plan).
+7. **Asignar pedidos manuales** — pasó de Parcial a Hecho contra mock: también se vincula desde
+   "Cargar pedido".
+8. **Métricas › Pedidos** — cartel "Datos hasta el 27/10/26" en propuestas por pedido y red vs.
+   afuera; necesidad nueva P2 en la tabla resumen (hallazgo 2).
+9. **`CLAUDE.md`** — al día con los hallazgos 1, 17 y 18. Hallazgo nuevo 19 (corregidas ≠
+   retiradas).

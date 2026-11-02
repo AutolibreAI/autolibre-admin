@@ -1012,20 +1012,23 @@ function QuoteRequestsSection({ data, unit }: { data: QuoteRequestSeries; unit: 
         />
 
         {data.responsesAvailable ? (
-          <GrowthChart
-            buckets={buckets}
-            unit={unit}
-            label="Propuestas por pedido"
-            bars={[{ values: data.buckets.map((b) => b.proposalsTotal), color: 'var(--color-brand)', label: `propuestas por ${unit}` }]}
-            lines={[
-              {
-                values: data.buckets.map((b) => b.avgProposalsPerRequest),
-                color: 'var(--color-action)',
-                label: 'promedio por pedido',
-                format: (v) => v.toFixed(2),
-              },
-            ]}
-          />
+          <div>
+            <GrowthChart
+              buckets={buckets}
+              unit={unit}
+              label="Propuestas por pedido"
+              bars={[{ values: data.buckets.map((b) => b.proposalsTotal), color: 'var(--color-brand)', label: `propuestas por ${unit}` }]}
+              lines={[
+                {
+                  values: data.buckets.map((b) => b.avgProposalsPerRequest),
+                  color: 'var(--color-action)',
+                  label: 'promedio por pedido',
+                  format: (v) => v.toFixed(2),
+                },
+              ]}
+            />
+            <StaleSinceNote />
+          </div>
         ) : (
           <MissingResponsesNote label="Propuestas por pedido" />
         )}
@@ -1072,29 +1075,49 @@ function QuoteRequestsSection({ data, unit }: { data: QuoteRequestSeries; unit: 
         </div>
 
         {data.responsesAvailable ? (
-          <GrowthChart
-            buckets={buckets}
-            unit={unit}
-            label="Propuestas: red vs. afuera"
-            bars={[
-              { values: data.buckets.map((b) => b.proposalsNetwork), color: 'var(--color-brand)', label: 'del directorio' },
-              { values: data.buckets.map((b) => b.proposalsOutside), color: 'var(--color-status-violet)', label: 'de afuera' },
-            ]}
-            lines={[
-              {
-                values: data.buckets.map((b) => b.pctNetwork),
-                color: 'var(--color-action)',
-                label: '% del directorio',
-                format: (v) => `${v.toFixed(1)}%`,
-              },
-            ]}
-            lineMax={100}
-          />
+          <div>
+            <GrowthChart
+              buckets={buckets}
+              unit={unit}
+              label="Propuestas: red vs. afuera"
+              bars={[
+                { values: data.buckets.map((b) => b.proposalsNetwork), color: 'var(--color-brand)', label: 'del directorio' },
+                { values: data.buckets.map((b) => b.proposalsOutside), color: 'var(--color-status-violet)', label: 'de afuera' },
+              ]}
+              lines={[
+                {
+                  values: data.buckets.map((b) => b.pctNetwork),
+                  color: 'var(--color-action)',
+                  label: '% del directorio',
+                  format: (v) => `${v.toFixed(1)}%`,
+                },
+              ]}
+              lineMax={100}
+            />
+            <StaleSinceNote />
+          </div>
         ) : (
           <MissingResponsesNote label="Propuestas: red vs. afuera" />
         )}
       </div>
     </section>
+  )
+}
+
+/**
+ * Hallazgo 2 de `docs/necesidades-backend-admin.md`: estas dos series leen
+ * `ops.quote_request_response`, que desde el 27/10/26 no se carga desde ninguna
+ * pantalla (todo es propuesta en la app). No se recalculan en el navegador con
+ * las propuestas: un mismo pedido puede tener filas en las dos tablas (la
+ * precarga copia de una a la otra), y sumarlas lo contaría dos veces. Hasta que
+ * el endpoint de uso por proveedor cubra esto, se dice en voz alta.
+ */
+function StaleSinceNote() {
+  return (
+    <p className="mt-1 rounded-md border border-status-yellow/40 bg-status-yellow-bg px-2 py-1 text-xs leading-relaxed text-status-yellow">
+      Datos hasta el 27/10/26: desde esa fecha las propuestas se cargan en la app y esta serie ya no las ve. Las
+      de después están en Partners › Propuestas.
+    </p>
   )
 }
 
