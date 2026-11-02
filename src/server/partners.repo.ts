@@ -1027,6 +1027,8 @@ export async function getPartnerServices(
     longitude: number | null
     links: Array<PartnerLink> | null
     name_collisions: number | string
+    logo_url: string | null
+    application_logo_url: string | null
   }>(
     /**
      * Los links vienen por SUBCONSULTA, no por `LEFT JOIN` + `group by`.
@@ -1048,6 +1050,7 @@ export async function getPartnerServices(
             a.declared_fuel_types AS application_declared_fuel_types,
             p.whatsapp, p.email, p.redirect_link, p.hours, p.address,
             p.latitude, p.longitude,
+            p.logo_url, a.raw_submission->>'logoUrl' AS application_logo_url,
             (SELECT coalesce(
                       jsonb_agg(jsonb_build_object('kind', l.kind::text, 'url', l.url)
                                 ORDER BY l.kind::text, l.url),
@@ -1158,6 +1161,8 @@ export async function getPartnerServices(
       // `count(*)::int` ya viene como number desde `pg`; el cast es la red doble
       // que este repo usa en todos lados, por si el `::int` se cae del SQL.
       nameCollisions: Number(partner.name_collisions ?? 0),
+      logoUrl: applicationLogoUrl(partner.logo_url),
+      applicationLogoUrl: applicationLogoUrl(partner.application_logo_url),
     },
     families,
     assignedServiceIds: assigned.map((a) => a.service_id),

@@ -1,13 +1,30 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
-import { Link as LinkIcon, MapPin, MapPinOff, Phone, Plus, Save, Trash2 } from 'lucide-react'
 import {
+  ImageOff,
+  Link as LinkIcon,
+  MapPin,
+  MapPinOff,
+  Phone,
+  Plus,
+  Save,
+  Trash2,
+  Upload,
+} from 'lucide-react'
+import {
+  removePartnerLogoFn,
   setPartnerContactFn,
   setPartnerLinksFn,
   setPartnerLocationFn,
+  setPartnerLogoFn,
   setPartnerProfileFn,
   setPartnerStatusFn,
 } from '~/fn/partners'
+import {
+  MAX_PARTNER_LOGO_BYTES,
+  PARTNER_LOGO_MIME_TYPES,
+  readablePartnerLogoError,
+} from '~/lib/partner-logo'
 import {
   DESCRIPTION_IDEAL_LENGTH,
   DESCRIPTION_MAX_LENGTH,
@@ -68,6 +85,7 @@ export function PartnerFicha({ partner }: { partner: Partner }) {
     <div className="mb-4 grid gap-4 lg:grid-cols-3">
       <StatusCard partner={partner} />
       <ProfileCard partner={partner} />
+      <LogoCard partner={partner} />
       <LocationCard partner={partner} />
       <ContactCard partner={partner} />
       <LinksCard partner={partner} />
@@ -118,8 +136,11 @@ function readableError(cause: unknown): string {
   return raw
 }
 
-/** Estado compartido por los tres bloques: ocupado + error legible. */
-function useAction() {
+/**
+ * Estado compartido por los bloques: ocupado + error legible. El logo pasa su
+ * propio traductor: sus errores vienen del backend por HTTP, no de un SP.
+ */
+function useAction(translate: (cause: unknown) => string = readableError) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -138,7 +159,7 @@ function useAction() {
       await router.invalidate()
       setSaved(true)
     } catch (cause) {
-      setError(readableError(cause))
+      setError(translate(cause))
     } finally {
       setBusy(false)
     }
@@ -196,6 +217,131 @@ function StatusCard({ partner }: { partner: Partner }) {
           ese estado. Pausar lo saca del marketplace sin borrar nada.
         </p>
         <Feedback error={error} saved={saved} />
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Logo ─────────────────────────────────────────────────────────────────────
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * El logo que ve la gente en la app y en la web.
+ *
+ * A diferencia del resto de la ficha, NO escribe por un SP de `ops`: el logo es
+ * una imagen pública en Spaces, y la sube el backend (`PUT|DELETE
+ * /admin/partners/:id/logo`). → `~/server/backend`
+ *
+ * Muestra lo que se ve HOY, que no siempre es `logo_url`: sin él, el perfil
+ * público cae al logo de la solicitud. Por eso «Quitar» dice qué vuelve a
+ * mostrarse, y sólo se ofrece cuando hay un logo cargado desde acá.
+ */
+function LogoCard({ partner }: { partner: Partner }) {
+  const { busy, error, saved, run } = useAction(readablePartnerLogoError)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const shown = partner.logoUrl ?? partner.applicationLogoUrl
+  const fromApplication = !partner.logoUrl && !!partner.applicationLogoUrl
+
+  async function onFile(file: File | undefined) {
+    setFileError(null)
+    if (!file) return
+    if (!(PARTNER_LOGO_MIME_TYPES as ReadonlyArray<string>).includes(file.type)) {
+      setFileError('Sólo PNG, JPG o WebP.')
+      return
+    }
+    if (file.size > MAX_PARTNER_LOGO_BYTES) {
+      setFileError('El logo supera los 512 KB.')
+      return
+    }
+    const logoDataUrl = await readFileAsDataUrl(file)
+    await run(() => setPartnerLogoFn({ data: { partnerId: partner.id, logoDataUrl } }))
+    // Vaciar el input: sin esto, elegir el MISMO archivo otra vez no dispara
+    // `onChange`, y reintentar después de un error no haría nada.
+    if (inputRef.current) inputRef.current.value = ''
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Logo</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3">
+          {shown && failed !== shown ? (
+            <img
+              src={shown}
+              alt={'Logo de ' + partner.name}
+              width={64}
+              height={64}
+              referrerPolicy="no-referrer"
+              className="size-16 shrink-0 rounded-lg border bg-background object-contain p-1"
+              onError={() => setFailed(shown)}
+            />
+          ) : (
+            <div className="flex size-16 shrink-0 items-center justify-center rounded-lg border bg-muted">
+              <ImageOff className="size-5 text-muted-foreground" aria-hidden />
+            </div>
+          )}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {!shown
+              ? 'Sin logo: la app muestra las iniciales.'
+              : failed === shown
+                ? 'No pudimos cargar la vista previa.'
+                : fromApplication
+                  ? 'El que mandó con su solicitud. Subir uno lo reemplaza en la app y la web.'
+                  : 'Cargado desde el panel.'}
+          </p>
+        </div>
+
+        <input
+          ref={inputRef}
+          type="file"
+          accept={PARTNER_LOGO_MIME_TYPES.join(',')}
+          className="sr-only"
+          tabIndex={-1}
+          onChange={(e) => void onFile(e.target.files?.[0])}
+        />
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => inputRef.current?.click()}>
+            <Upload className="size-3.5" aria-hidden />
+            {busy ? 'Guardando…' : shown ? 'Cambiar logo' : 'Subir logo'}
+          </Button>
+          {partner.logoUrl ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => run(() => removePartnerLogoFn({ data: { partnerId: partner.id } }))}
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+              Quitar
+            </Button>
+          ) : null}
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          PNG, JPG o WebP, hasta 512 KB. El backend lo achica a 512 px y lo guarda en WebP.
+          {partner.logoUrl && partner.applicationLogoUrl
+            ? ' Quitarlo vuelve a mostrar el de la solicitud.'
+            : ''}
+        </p>
+        {fileError ? (
+          <p role="alert" className="mt-2 text-xs leading-relaxed text-destructive">
+            {fileError}
+          </p>
+        ) : (
+          <Feedback error={error} saved={saved} />
+        )}
       </CardContent>
     </Card>
   )
