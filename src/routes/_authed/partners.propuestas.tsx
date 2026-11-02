@@ -2,11 +2,9 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
-import { listQuoteRequestsFn } from '~/fn/quote-requests'
+import { listPartnerProposalUsageFn } from '~/fn/partner-quote-volume'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MockBanner } from '~/components/MockBanner'
-import { useProposalFacts } from '~/components/useProposalFacts'
-import { ProposalLoadStatus as LoadStatus } from '~/components/ProposalLoadStatus'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
 import {
@@ -23,7 +21,6 @@ import {
   PARTNER_PLANS,
   PARTNER_PLAN_CAPS,
   PARTNER_PLAN_LABELS,
-  PROPOSAL_COUNT_START,
   aggregatePartnerUsage,
   countableMonths,
   monthLabel,
@@ -41,18 +38,18 @@ import type { PartnerPlan, PartnerRef, PartnerUsageRow } from '~/lib/partner-pla
  *
  * ── De dónde salen los datos ───────────────────────────────────────────────
  *
- * Las propuestas son REALES: no hay un endpoint que las cuente por proveedor,
- * así que se leen pedido por pedido con `listQuoteProposalsFn` (el mismo que
- * usa la ficha), desde el navegador, como hace el mapa de cobertura con el GPS.
- * Sólo se piden los pedidos que pueden tener propuestas contables: abiertos, o
- * cerrados desde el 27/10. Sin duplicados (el equipo marca así sus pruebas).
+ * Las propuestas son REALES y se cuentan en la base, en UNA consulta:
+ * `ops.partner_proposal_usage_monthly()` (migración 025), la misma que leen los
+ * ejecutivos por el conector MCP. Sólo `quote_request_proposals`, desde el
+ * 27/10, sin pedidos de prueba (`duplicate`). Hasta la 025 se leían pedido por
+ * pedido desde el navegador; `Partners › Estudio` todavía lo hace.
  *
  * El PLAN es de ejemplo (`~/mocks/partner-plans`): `partners.plan` no existe.
- * El día que exista `GET /admin/partner-proposal-usage`, esta pantalla deja de
- * pedir propuestas una por una y consume esas filas.
+ * El tope y el rojo de "pasó el tope" se calculan contra ese plan inventado a
+ * propósito — decidido el 2026-11-02, para tener la visual de la pantalla
+ * mientras no exista el dato. El cartel de arriba lo dice.
  *
- * `ssr: 'data-only'`: el loader corre en el servidor (lista de pedidos y de
- * proveedores), pero la carga de propuestas y el mes en curso son del
+ * `ssr: 'data-only'`: el loader corre en el servidor; el mes en curso es del
  * navegador. Está detrás de auth.
  */
 export const Route = createFileRoute('/_authed/partners/propuestas')({
@@ -60,23 +57,17 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners] = await Promise.all([
-      listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
+    const [usage, partners] = await Promise.all([
+      listPartnerProposalUsageFn({ signal }),
       listMarketplacePartners({ data: {}, signal }),
     ])
-    const requests =
-      'rows' in quotes
-        ? quotes.rows
-            .filter((r) => r.status !== 'closed' || (r.closedAt ?? '') >= PROPOSAL_COUNT_START)
-            .map((r) => ({ id: r.id, createdAt: r.createdAt, channel: r.channel }))
-        : null
     const partnerRefs: Array<PartnerRef> = partners.map((p) => ({
       id: p.id,
       name: p.name,
       tier: p.tier,
       status: p.status,
     }))
-    return { requests, partners: partnerRefs }
+    return { usage, partners: partnerRefs }
   },
   head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
   component: PartnerProposals,
@@ -101,7 +92,7 @@ function usePlans(partnerIds: ReadonlyArray<string>) {
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 function PartnerProposals() {
-  const { requests, partners } = Route.useLoaderData()
+  const { usage, partners } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
@@ -110,12 +101,14 @@ function PartnerProposals() {
   const months = useMemo(() => countableMonths(new Date()), [])
   const month = search.proposalMonth && months.includes(search.proposalMonth) ? search.proposalMonth : months[0]!
 
-  const load = useProposalFacts(requests ?? [])
   const plans = usePlans(useMemo(() => partners.map((p) => p.id), [partners]))
 
   const allRows = useMemo(
-    () => aggregatePartnerUsage(load.facts, month, partners, plans, { includeIdle: search.proposalShowIdle }),
-    [load.facts, month, partners, plans, search.proposalShowIdle],
+    () =>
+      aggregatePartnerUsage(usage.available ? usage.rows : [], month, partners, plans, {
+        includeIdle: search.proposalShowIdle,
+      }),
+    [usage, month, partners, plans, search.proposalShowIdle],
   )
   const rows = search.proposalOverCap ? allRows.filter((r) => r.overCap) : allRows
 
@@ -130,11 +123,15 @@ function PartnerProposals() {
     { sent: 0, withdrawn: 0, selected: 0, overCap: 0, withProposals: 0 },
   )
 
-  if (requests === null) {
+  if (!usage.available) {
     return (
       <>
         <PageHeader title="Propuestas por proveedor" actions={<SsrTag>ssr: data-only</SsrTag>} />
-        <Empty>Esta base no tiene la tabla de pedidos (`quote_requests`).</Empty>
+        <Empty>
+          {usage.reason === 'no_function'
+            ? 'Falta aplicar la migración 025 de ops (`ops.partner_proposal_usage_monthly`) en esta base.'
+            : `Esta base no tiene las propuestas en la app (migraciones 0120–0122 del backend). Falta: ${usage.detail ?? '—'}.`}
+        </Empty>
       </>
     )
   }
@@ -189,14 +186,7 @@ function PartnerProposals() {
         <Stat label="Pasaron el tope" value={totals.overCap} tone={totals.overCap > 0 ? 'red' : undefined} />
       </dl>
 
-      <LoadStatus load={load} />
-
-      {load.unavailable ? (
-        <Empty>
-          Esta base no tiene las propuestas en la app (migraciones 0120–0122 del backend). No hay nada que
-          contar.
-        </Empty>
-      ) : rows.length === 0 && !load.loading ? (
+      {rows.length === 0 ? (
         <Empty>
           {search.proposalOverCap
             ? 'Nadie pasó el tope este mes.'

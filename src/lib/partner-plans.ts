@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { PartnerProposalUsageMonthRow } from './partner-quote-volume'
 
 /**
  * Planes de proveedor y conteo mensual de propuestas
@@ -44,7 +45,11 @@ export const PARTNER_PLAN_CAPS: Record<PartnerPlan, number | null> = {
   plus_max: 15,
 }
 
-/** 2026-10-27 00:00 en Buenos Aires (UTC−3, sin horario de verano). */
+/**
+ * 2026-10-27 00:00 en Buenos Aires (UTC−3, sin horario de verano).
+ * Se toca JUNTO con el default de `p_from` de `ops.partner_proposal_usage_monthly`
+ * (migración 025): el panel lo pasa explícito, el MCP usa el default.
+ */
 export const PROPOSAL_COUNT_START = '2026-10-27T03:00:00.000Z'
 
 export const PROPOSAL_COUNT_TZ = 'America/Argentina/Buenos_Aires'
@@ -144,8 +149,14 @@ export interface PartnerUsageRow {
   overCap: boolean
 }
 
+/**
+ * Las filas del mes, contra el plan. Los conteos ya vienen agregados por
+ * `ops.partner_proposal_usage_monthly()` (025): mes de envío en hora de Buenos
+ * Aires, desde `PROPOSAL_COUNT_START`, sin pedidos de prueba. Acá sólo se le
+ * pone el plan, el tope y los activos sin propuestas.
+ */
 export function aggregatePartnerUsage(
-  facts: ReadonlyArray<ProposalFact>,
+  usage: ReadonlyArray<PartnerProposalUsageMonthRow>,
   month: string,
   partners: ReadonlyArray<PartnerRef>,
   plans: ReadonlyMap<string, PartnerPlan>,
@@ -182,13 +193,18 @@ export function aggregatePartnerUsage(
     for (const p of partners) if (p.status === 'active') rowFor(p.id, p.name)
   }
 
-  for (const f of facts) {
-    if (f.createdAt < PROPOSAL_COUNT_START) continue
-    if (baMonthKey(f.createdAt) !== month) continue
-    const row = rowFor(f.partnerId, f.providerName)
-    if (f.withdrawnAt) row.withdrawn += 1
-    else row.sent += 1
-    if (f.selected) row.selected += 1
+  for (const u of usage) {
+    if (u.month !== month) continue
+    const row = rowFor(u.partnerId, u.partnerName)
+    row.sent += u.sent
+    row.withdrawn += u.withdrawn
+    row.selected += u.selected
+    // Un partner que no está en el directorio cargado (borrado entre las dos
+    // lecturas) igual trae nombre, tier y status de la función.
+    if (u.partnerId && !byId.has(u.partnerId)) {
+      row.tier = u.tier
+      row.status = u.status
+    }
   }
 
   for (const row of rows.values()) {
