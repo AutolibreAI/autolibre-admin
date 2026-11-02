@@ -6,6 +6,7 @@ import { fetchQuoteUserLinkMock, linkQuoteUserMock, unlinkQuoteUserMock } from '
 import { RECIPIENT_SEARCH_MIN_CHARS } from '~/lib/notifications'
 import type { NotificationRecipient } from '~/lib/notifications'
 import type { QuoteUserLink } from '~/mocks/quote-user-link'
+import { cn } from '~/lib/utils'
 
 /**
  * Vincular un pedido sin cuenta (los que entran por WhatsApp o se cargan a
@@ -20,33 +21,10 @@ import type { QuoteUserLink } from '~/mocks/quote-user-link'
 export function QuoteUserLinker({ quoteRequestId }: { quoteRequestId: string }) {
   const [link, setLink] = useState<QuoteUserLink | null>(null)
   const [open, setOpen] = useState(false)
-  const [q, setQ] = useState('')
-  const [results, setResults] = useState<Array<NotificationRecipient> | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const seq = useRef(0)
 
   useEffect(() => {
     void fetchQuoteUserLinkMock(quoteRequestId).then(setLink)
   }, [quoteRequestId])
-
-  useEffect(() => {
-    const term = q.trim()
-    if (term.length < RECIPIENT_SEARCH_MIN_CHARS) {
-      setResults(null)
-      return
-    }
-    const mine = ++seq.current
-    const t = setTimeout(() => {
-      searchNotificationRecipients({ data: { q: term } })
-        .then((rows) => {
-          if (mine === seq.current) setResults(rows)
-        })
-        .catch(() => {
-          if (mine === seq.current) setError('No pudimos buscar. Probá de nuevo.')
-        })
-    }, 300)
-    return () => clearTimeout(t)
-  }, [q])
 
   if (link) {
     return (
@@ -72,13 +50,66 @@ export function QuoteUserLinker({ quoteRequestId }: { quoteRequestId: string }) 
   }
 
   return (
-    <div className="mt-2 space-y-2 rounded-md border border-border p-3">
+    <AppUserSearch
+      className="mt-2"
+      onCancel={() => setOpen(false)}
+      onPick={(u) =>
+        void linkQuoteUserMock(quoteRequestId, { userId: u.id, email: u.email, name: u.name }).then(setLink)
+      }
+    />
+  )
+}
+
+/**
+ * El buscador de cuentas, sin saber de pedidos: lo usan la ficha
+ * (`QuoteUserLinker`) y «Cargar pedido» (`QuoteRequestComposer`), que vincula
+ * recién después de crear el pedido.
+ */
+export function AppUserSearch({
+  onPick,
+  onCancel,
+  className,
+}: {
+  onPick: (user: NotificationRecipient) => void
+  onCancel: () => void
+  className?: string
+}) {
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<Array<NotificationRecipient> | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const seq = useRef(0)
+
+  useEffect(() => {
+    const term = q.trim()
+    if (term.length < RECIPIENT_SEARCH_MIN_CHARS) {
+      setResults(null)
+      return
+    }
+    const mine = ++seq.current
+    const t = setTimeout(() => {
+      searchNotificationRecipients({ data: { q: term } })
+        .then((rows) => {
+          if (mine === seq.current) setResults(rows)
+        })
+        .catch(() => {
+          if (mine === seq.current) setError('No pudimos buscar. Probá de nuevo.')
+        })
+    }, 300)
+    return () => clearTimeout(t)
+  }, [q])
+
+  return (
+    <div className={cn('space-y-2 rounded-md border border-border p-3', className)}>
       <Input
         autoFocus
         value={q}
         onChange={(e) => {
           setQ(e.target.value)
           setError(null)
+        }}
+        // Adentro de «Cargar pedido» esto vive en un <form>: Enter no puede crear el pedido.
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.preventDefault()
         }}
         placeholder="Email o nombre de la cuenta"
         aria-label="Buscar usuario"
@@ -98,20 +129,14 @@ export function QuoteUserLinker({ quoteRequestId }: { quoteRequestId: string }) 
                 {u.email}
                 {u.name ? <span className="text-muted-foreground"> · {u.name}</span> : null}
               </span>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() =>
-                  void linkQuoteUserMock(quoteRequestId, { userId: u.id, email: u.email, name: u.name }).then(setLink)
-                }
-              >
+              <Button type="button" size="xs" variant="outline" onClick={() => onPick(u)}>
                 Vincular
               </Button>
             </li>
           ))}
         </ul>
       )}
-      <Button size="xs" variant="ghost" onClick={() => setOpen(false)}>
+      <Button type="button" size="xs" variant="ghost" onClick={onCancel}>
         Cancelar
       </Button>
     </div>

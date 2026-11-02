@@ -7,6 +7,7 @@ import {
   readableCreateQuoteRequestError,
 } from '~/lib/quote-requests'
 import { createQuoteRequestFn } from '~/fn/quote-requests'
+import { AppUserSearch } from '~/components/QuoteUserLinker'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -18,6 +19,8 @@ import {
   SheetTrigger,
 } from '~/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
+import { linkQuoteUserMock } from '~/mocks/quote-user-link'
+import type { NotificationRecipient } from '~/lib/notifications'
 
 /**
  * Cargar un pedido de presupuesto a mano — para el que llega de forma
@@ -70,6 +73,10 @@ export function QuoteRequestComposer() {
   const [locationLocality, setLocationLocality] = useState('')
   const [locationProvince, setLocationProvince] = useState('')
 
+  // Vincular a una cuenta (de ejemplo, ~/mocks/quote-user-link): se aplica
+  // recién después de crear el pedido, con el id que devuelve el alta.
+  const [linkUser, setLinkUser] = useState<NotificationRecipient | null>(null)
+  const [pickingUser, setPickingUser] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -93,6 +100,8 @@ export function QuoteRequestComposer() {
     setLocationAddress('')
     setLocationLocality('')
     setLocationProvince('')
+    setLinkUser(null)
+    setPickingUser(false)
     setError(null)
   }
 
@@ -115,7 +124,7 @@ export function QuoteRequestComposer() {
         return
       }
 
-      await createQuoteRequestFn({
+      const created = await createQuoteRequestFn({
         data: {
           channel,
           contactPhone: contactPhone.trim(),
@@ -130,6 +139,10 @@ export function QuoteRequestComposer() {
           locationProvince: locationProvince.trim() === '' ? undefined : locationProvince.trim(),
         },
       })
+
+      if (linkUser) {
+        await linkQuoteUserMock(created.id, { userId: linkUser.id, email: linkUser.email, name: linkUser.name })
+      }
 
       // El pedido ya existe: se cierra el panel y se limpia el formulario. Con
       // el panel abierto y el botón activo, un segundo click creaba OTRO pedido
@@ -197,6 +210,39 @@ export function QuoteRequestComposer() {
               <p className="text-xs leading-relaxed text-muted-foreground">
                 No hay un canal "informal" del lado del backend — elegí el que más se parezca.
               </p>
+            </section>
+
+            <section className="space-y-1.5">
+              <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Cuenta de la app{' '}
+                <span className="normal-case tracking-normal text-muted-foreground/70">(opcional)</span>
+              </span>
+              {linkUser ? (
+                <div className="rounded-md border border-status-yellow/40 bg-status-yellow-bg px-3 py-2 text-sm text-status-yellow">
+                  Se va a vincular a <span className="font-medium">{linkUser.email}</span> — de ejemplo: no se guarda
+                  en la base.{' '}
+                  <button type="button" className="underline underline-offset-2" onClick={() => setLinkUser(null)}>
+                    Quitar
+                  </button>
+                  {plate.trim() === '' ? (
+                    <span className="mt-1 block text-xs">
+                      Con cuenta, la base exige patente: cuando el vínculo sea real, va a hacer falta cargarla.
+                    </span>
+                  ) : null}
+                </div>
+              ) : pickingUser ? (
+                <AppUserSearch
+                  onCancel={() => setPickingUser(false)}
+                  onPick={(u) => {
+                    setLinkUser(u)
+                    setPickingUser(false)
+                  }}
+                />
+              ) : (
+                <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setPickingUser(true)}>
+                  Vincular a un usuario de la app
+                </Button>
+              )}
             </section>
 
             <section className="grid grid-cols-2 gap-3">

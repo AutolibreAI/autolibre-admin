@@ -14,8 +14,8 @@ Trello, con el título exacto de la tarjeta.
 - "Mock" = una capa de API de ejemplo, aislada en un solo lugar del front (propuesta:
   `src/mocks/`, un archivo por tarjeta), con un cartel visible de "Datos de ejemplo" en cada
   pantalla que la use. Reemplazarla es cambiar un import.
-- Los números citados salen de producción, solo lectura, el 2026-10-29. Son conteos agregados,
-  nunca filas de personas.
+- Los números citados salen de producción, solo lectura, el 2026-10-29 (los relevados el 02/11/26
+  lo dicen al lado). Son conteos agregados, nunca filas de personas.
 
 ---
 
@@ -419,17 +419,21 @@ motivos) y "Notificaciones: … reglas de seguimiento…" (pregunta de cierre). 
 
 ## Admin: asignar a un usuario activo de la app los pedidos creados manualmente (los que entran por WhatsApp)
 
-**Estado del front:** Parcial (la búsqueda es real; el vínculo es de ejemplo; solo desde la ficha).
+**Estado del front:** Hecho contra mock (la búsqueda es real; el vínculo es de ejemplo).
 
 **Qué hiciste:** En la ficha del pedido, debajo de "Entró por…", dos datos por separado: "Canal de
 entrada" y "Tiene la app: sí / no". Sin cuenta, botón "Vincular a un usuario de la app"
 (`src/components/QuoteUserLinker.tsx`) con buscador real por email y nombre
 (`searchNotificationRecipients`) y "Vincular" de ejemplo (`src/mocks/quote-user-link.ts`, en memoria).
-El listado ya mostraba canal y cuenta en columnas separadas. Falta: vincular en el mismo formulario
-de "Cargar pedido" (hoy se vincula desde la ficha recién creada) y buscar por teléfono o patente.
+El listado ya mostraba canal y cuenta en columnas separadas. Desde el 02/11/26 también se vincula
+desde el formulario "Cargar pedido" (`src/components/QuoteRequestComposer.tsx`), con el mismo
+buscador (`AppUserSearch`, extraído de `QuoteUserLinker`) y el mismo mock: el vínculo se aplica
+recién después de crear el pedido, con el id que devuelve el alta. Si se elige una cuenta y no hay
+patente, avisa que con cuenta la base la exige. Lo que sigue faltando es buscar por teléfono o
+patente (necesita backend).
 
 **Cómo probarlo:** `pnpm dev`, la ficha de un pedido de WhatsApp sin cuenta › "Vincular a un usuario
-de la app", buscar por email.
+de la app", buscar por email. O Pedidos › "Cargar pedido" › "Vincular a un usuario de la app".
 
 **Necesidades de backend:**
 
@@ -759,6 +763,7 @@ qué):
 | Cambios normativos | detector + prueba de control | job | no | P3 |
 | Cobertura AMBA | `GET /admin/coverage` | endpoint de lectura | no | P2 |
 | Cobertura AMBA | usuarios por zona | endpoint de lectura | sí | P2 |
+| Métricas › Pedidos | propuestas por pedido y red vs. afuera desde `quote_request_proposals` | endpoint de lectura | no (cartel) | P2 |
 
 ## 2. Solapamientos
 
@@ -806,11 +811,18 @@ qué):
 
 ## 3. Hallazgos
 
-1. **`CLAUDE.md` está desactualizado**: dice que la migración 024 (Comercial) no está aplicada en
-   ninguna base; producción tiene hasta la 024 aplicada. Lo mismo con 0120–0122 del backend: la
-   rule de propuestas dice que el 26/10 no estaban; hoy están y la tarjeta funciona.
+1. **`CLAUDE.md` estaba desactualizado** sobre qué migraciones hay en producción. **Corregido el
+   02/11/26**: producción tiene de la 001 a la 024 de `ops` (relevado en `ops.schema_migrations`) y
+   las 0120–0122 del backend (`quote_request_proposal_sends` existe).
 2. **Métricas › Pedidos (propuestas por pedido, red vs. afuera) dejó de crecer el 27/10**: sigue
-   leyendo `ops.quote_request_response`, que ya no se carga desde ninguna pantalla.
+   leyendo `ops.quote_request_response`, que ya no se carga desde ninguna pantalla. Desde el
+   02/11/26 los dos gráficos llevan el cartel "Datos hasta el 27/10/26" y mandan a Partners ›
+   Propuestas. **No se recalcula en el navegador** con las propuestas: un mismo pedido puede tener
+   filas en las dos tablas (la precarga copia de `ops` a la app), y sumarlas lo contaría dos veces;
+   además Métricas tendría que pedir las propuestas pedido por pedido. Lo resuelve el endpoint de uso
+   por proveedor con rango (`GET /admin/partner-proposal-usage`, ver la primera tarjeta), si suma
+   un corte por fecha de creación del pedido; o una consulta de `quote_request_proposals` por
+   período en la sección Pedidos de Métricas (`quoteRequestSeries`, server-only). **P2.**
 3. **Las reglas recurrentes no mandan nada**: `/notificaciones/reglas` deja crearlas y activarlas,
    pero no hay motor. Una persona puede creer que un envío está programado.
 4. **`notification_channel` no tiene WhatsApp** (`push | email | sms`), y el 100% de las
@@ -843,10 +855,14 @@ qué):
    proveedores" en esos casos. No es un error del cruce; es por qué el nombre es la clave de menor
    confianza.
 17. **`/conocimiento` pasó a ser un layout**: la pantalla de siempre vive ahora en
-   `conocimiento.index.tsx`. La URL y el ítem del menú no cambiaron.
+   `conocimiento.index.tsx`. La URL y el ítem del menú no cambiaron. Volcado a `CLAUDE.md` el
+   02/11/26.
 18. **El backend no se puede clonar entero en Windows** (rutas de más de 260 caracteres en
    `src/vehicle-management/...`). Para los `grep`, `git clone --depth 1` + `git grep HEAD` sin
-   checkout funciona.
+   checkout funciona. Volcado a `CLAUDE.md` el 02/11/26.
+19. **Un cuadre de propuestas que cuente por `updated_at` mezcla corregidas con retiradas.** Corregir
+   una propuesta (`PUT`, sin push) mueve `updated_at` sin retirarla. "Retirada" es sólo
+   `withdrawn_at` cargado; al 02/11/26 hay 3 en toda la tabla, y 1 corregida sin retirar (AL-1192).
 
 
 ## 4. Supuestos que tomé
@@ -898,3 +914,31 @@ qué):
 21. Aprobar una ficha exige pasar los chequeos de coherencia, tildar "leí la fuente" y escribir el
    resumen; cualquier admin puede aprobar. El resumen propuesto se arma con tema, valores y norma, y
    la persona lo edita.
+
+## 5. Cambios respecto de la versión 5 (02/11/26)
+
+Para actualizar Trello:
+
+1. **Conteo mensual + tope** — se aplicaron las 5 decisiones del 02/11/26 (nueva subsección
+   "Decisiones (02/11/26)"). Las 4 preguntas abiertas se cerraron; queda sólo "taller de cabecera".
+   Colores: rojo pasó, amarillo llegó, Aliado gris con "Aliado · sin límite por ahora", sin plan
+   gris. El tope no frena nada.
+2. **Talleres de afuera** — sección aparte al pie de Propuestas, "Propuestas a talleres de afuera
+   (excepción)", y aviso en el formulario de propuestas. Se **sacó** el pedido de
+   `quote_request_proposals.partner_id` NOT NULL (y su fila de la tabla resumen).
+3. **Elegidas** — definido: la propuesta que es hoy `selected_proposal_id`; una des-elegida no
+   cuenta. Escrito en `src/lib/partner-plans.ts`.
+4. **Vista histórica** de Propuestas (desde 27/10/26) con pico mensual coloreado, buscador y CSV.
+   Cuadre: 61 propuestas de 38 proveedores sin duplicados; el "68 de 41" de referencia incluye las 7
+   de pedidos duplicados (explicado en la tarjeta).
+5. **Endpoint de uso por proveedor** — ahora pide `from` / `to` o `range=all`, y `externals` aparte.
+6. **Plan cargado a mano** — tarjeta "Plan" en la ficha y edición desde las filas de Propuestas, con
+   confirmación, contra mock en memoria. Relevamiento: no hay campo de plan en la base
+   (`ops.partner_prospect.plan` no sirve). El pedido se partió en **P0** (`partners.plan` nullable +
+   aceptarlo en la edición de partner que ya existe) y **P1** (historial de plan).
+7. **Asignar pedidos manuales** — pasó de Parcial a Hecho contra mock: también se vincula desde
+   "Cargar pedido".
+8. **Métricas › Pedidos** — cartel "Datos hasta el 27/10/26" en propuestas por pedido y red vs.
+   afuera; necesidad nueva P2 en la tabla resumen (hallazgo 2).
+9. **`CLAUDE.md`** — al día con los hallazgos 1, 17 y 18. Hallazgo nuevo 19 (corregidas ≠
+   retiradas).
