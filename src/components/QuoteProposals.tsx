@@ -1113,6 +1113,16 @@ function ProposalFields({
         {!isPartner && f.providerName.trim().length > MAX_PROPOSAL_PROVIDER_NAME ? (
           <Hint>El nombre pasa los {MAX_PROPOSAL_PROVIDER_NAME} caracteres que admite la app.</Hint>
         ) : null}
+        {/*
+          Decidido el 02/11/26: el taller de afuera sigue permitido como
+          excepción. Se avisa, no se frena (tampoco el tope frena nada).
+        */}
+        {!isPartner && f.providerName.trim() !== '' ? (
+          <p className="text-xs text-status-yellow">
+            Caso excepcional: no suma al tope de ningún proveedor. Si va a seguir mandando propuestas, registralo
+            como proveedor.
+          </p>
+        ) : null}
         {/* Aviso blando: el backend exige un celular que normalice; acá sólo se ve si falta. */}
         {partner !== null && !partner.hasWhatsapp ? (
           <p className="text-xs text-status-yellow">

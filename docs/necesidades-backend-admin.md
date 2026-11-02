@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 5 — 2026-10-29. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado). Una sección por tarjeta de
+Versión 6 — 2026-11-02. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado) y las decisiones del 02/11/26 sobre propuestas y planes aplicadas (lista de cambios al final). Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 **Cómo leer esto**
@@ -24,16 +24,38 @@ Trello, con el título exacto de la tarjeta.
 **Estado del front:** Hecho contra mock (solo el plan es de ejemplo; propuestas, retiradas y
 elegidas son reales).
 
-**Qué hiciste:** Pestaña nueva Partners › Propuestas (`src/routes/_authed/partners.propuestas.tsx`)
-con selector de mes, enviadas / retiradas / elegidas / plan / usadas sobre tope, rojo al pasar el
-tope, badge "Aliado · excepción". El cálculo vive en `src/lib/partner-plans.ts`; el plan, en
-`src/mocks/partner-plans.ts`. Cuadre contra SQL directo, octubre 2026: 34 enviadas, 2 retiradas, 1
-elegida, iguales. Las 7 propuestas colgadas de pedidos cerrados como duplicado (pruebas del
-equipo) no cuentan.
+**Qué hiciste:** Pestaña Partners › Propuestas (`src/routes/_authed/partners.propuestas.tsx`)
+con selector de mes, enviadas / retiradas / elegidas / plan / usadas sobre tope. Los colores los
+calcula `capTone` en `src/lib/partner-plans.ts` (nunca la pantalla): **rojo** si usadas > tope,
+**amarillo** si usadas = tope, **Aliado** en gris con el badge "Aliado · sin límite por ahora" (su
+tope se ve como referencia), **sin plan** en gris. Los talleres de afuera del directorio van en una
+sección aparte al pie, "Propuestas a talleres de afuera (excepción)", con nombre y cantidad, y no
+suman a ningún tope. En el formulario de propuestas, al elegir un taller de afuera aparece el aviso
+"Caso excepcional: no suma al tope de ningún proveedor…" (no frena el envío). El plan, en
+`src/mocks/partner-plans.ts`. Cuadre contra SQL directo al 02/11/26: octubre 54 propuestas de 36
+proveedores (52 activas, 2 retiradas, 1 elegida), noviembre 7 de 6 + 1 a un taller de afuera
+(Norauto Quilmes), iguales. Las 7 propuestas colgadas de pedidos cerrados como duplicado (pruebas
+del equipo) no cuentan.
 
 **Cómo probarlo:** `pnpm dev`, entrar con una cuenta admin, Partners › Propuestas. Sin login:
-`node tmp/probe-propuestas.mjs` (solo lectura; `tmp/` no se versiona, está en esta máquina) arma los mismos datos con los repos reales y cuadra
-contra un `count` directo.
+`node tmp/probe-propuestas-historico.mjs` (solo lectura; `tmp/` no se versiona, está en esta
+máquina) arma los mismos datos con los repos reales, corre los meses y el histórico, y cuadra contra
+un `count` directo.
+
+**Decisiones (02/11/26):**
+
+1. **Aliado** (`tier = founding`): se ve su conteo y el tope de su plan como referencia, pero por
+   ahora no tiene límite. Nunca se pinta en rojo ni en amarillo. Badge "Aliado · sin límite por
+   ahora".
+2. **El tope no frena el envío**, solo se marca. No hay bloqueo ni confirmación al cargar una
+   propuesta.
+3. **Los talleres de afuera del directorio siguen permitidos** como caso excepcional.
+   `quote_request_proposals.partner_id` sigue siendo nullable: se sacó el pedido de volverlo NOT
+   NULL.
+4. **Elegidas = la propuesta que es hoy `quote_requests.selected_proposal_id`**, en la vista
+   mensual y en la histórica. Una propuesta elegida y después des-elegida no cuenta como elegida.
+   Está escrito también en `src/lib/partner-plans.ts`.
+5. **El plan de cada proveedor se carga a mano desde el admin.**
 
 **Necesidades de backend:**
 
@@ -46,15 +68,16 @@ contra un `count` directo.
   `valid_from`, `valid_to`, `changed_by`). Sin esto, si un proveedor cambia de plan a mitad de mes
   no se sabe contra qué tope medir el mes. **Bloquea el front: no.**
 - [ ] **endpoint de lectura** — `GET /admin/partner-proposal-usage?month=YYYY-MM`. Una fila por
-  proveedor: `partnerId`, `partnerName`, `tier`, `plan`, `cap` (null = sin límite), `sent`
-  (no retiradas), `withdrawn`, `selected`, `usedTowardCap` (= sent + withdrawn). Mes calendario en
-  `America/Argentina/Buenos_Aires`, nada antes del 2026-10-27. Filtros: `month`, `plan`,
-  `overCap`. **No debe devolver** descripción, montos, ni nada del pedido o de la persona.
-  **Bloquea el front: no** (hoy se arma en el navegador, ver abajo; con volumen se vuelve lento).
-- [ ] **tabla o columna** — `quote_request_proposals.partner_id` NOT NULL. **Ojo:** hoy el
-  formulario de propuestas admite un taller de afuera del directorio (`provider_name` +
-  `provider_phone`, sin `partner_id`). Volverlo NOT NULL obliga a dar de alta al proveedor antes
-  de mandarle una propuesta. Ver pregunta abierta. **Bloquea el front: no.**
+  proveedor del directorio: `partnerId`, `partnerName`, `tier`, `plan`, `cap` (null = sin límite),
+  `sent` (no retiradas), `withdrawn`, `selected` (= es hoy `selected_proposal_id`),
+  `usedTowardCap` (= sent + withdrawn). Aparte, `externals`: los talleres de afuera (nombre y los
+  mismos conteos, sin plan ni tope). Mes calendario en `America/Argentina/Buenos_Aires`, nada antes
+  del 2026-10-27, sin los pedidos cerrados como `duplicate`. Filtros: `month`, `plan`, `overCap`.
+  **No debe devolver** descripción, montos, ni nada del pedido o de la persona. **Bloquea el front:
+  no** (hoy se arma en el navegador, ver abajo; con volumen se vuelve lento).
+
+> Se sacó el pedido de volver `quote_request_proposals.partner_id` NOT NULL (decisión 3 del
+> 02/11/26): las propuestas a talleres de afuera siguen permitidas como excepción.
 
 **Lo que ya existe y reusaste:** `listQuoteRequestsFn` (pedidos) + `listQuoteProposalsFn` (las
 propuestas de un pedido, con `partnerId`, `createdAt`, `withdrawnAt` y `selectedProposalId`),
@@ -65,15 +88,8 @@ llamado pedido por pedido desde el navegador, igual que hace hoy el mapa de cobe
 registrar los pedidos por proveedor en la automatización" (ver Solapamientos).
 
 **Preguntas abiertas:**
-1. Aliado (`tier = founding`, 12 proveedores) y "taller de cabecera": ¿cuentan contra el tope, no
-   cuentan, o tienen un tope propio? "Taller de cabecera" no existe hoy en ningún lado del sistema:
-   ¿es un sello nuevo, un plan, o una marca manual?
-2. ¿Qué pasa con las propuestas a un taller de afuera del directorio si `partner_id` pasa a ser
-   NOT NULL? ¿Se elimina esa opción del formulario?
-3. ¿El tope frena el envío (el backend rechaza la propuesta 2 de un Gratis) o solo se marca en
-   rojo para cobrar? Hoy el front solo puede marcar.
-4. "Elegidas": ¿una propuesta elegida y después des-elegida por la persona cuenta? La app tiene
-   `DELETE /quote-requests/:id/selected-proposal`.
+1. "Taller de cabecera" no existe hoy en ningún lado del sistema: ¿es un sello nuevo, un plan, o
+   una marca manual? ¿Tiene tope?
 
 ---
 
@@ -647,7 +663,6 @@ qué):
 | Conteo mensual + tope | `partners.plan` | tabla o columna | no | **P0** (cobro en noviembre) |
 | Conteo mensual + tope | historial de plan | tabla o columna | no | P1 |
 | Conteo mensual + tope | `GET /admin/partner-proposal-usage` | endpoint de lectura | no | P1 |
-| Conteo mensual + tope | `partner_id` NOT NULL | tabla o columna | no | P2 (decidir externos antes) |
 | Rubros "Otro" | marca de revisado | tabla o columna | no | P1 |
 | Rubros "Otro" | alta de servicios / service_tasks | endpoint de escritura | no | P1 |
 | Rubros "Otro" | marcar revisado | endpoint de escritura | no | P1 |
@@ -745,8 +760,9 @@ qué):
    usuarios falla en silencio. Pedido abierto desde el 2026-10-03.
 6. **La duración de 72 h del pedido no está modelada** (no hay `expires_at`).
 7. **`notifications` no tiene `read_at`**: se sabe si se leyó, nunca cuándo.
-8. **Volver `partner_id` NOT NULL rompe el flujo de propuestas a talleres de afuera**, que el
-   formulario hoy permite (aunque al 2026-10-29 ninguna de las 43 lo usa).
+8. **Volver `partner_id` NOT NULL rompía el flujo de propuestas a talleres de afuera.** Resuelto el
+   02/11/26: se mantiene nullable y el taller de afuera queda como excepción, en su sección aparte.
+   Al 02/11/26 hay 1 (Norauto Quilmes).
 9. **El mapa de cobertura recibe teléfono, email y nombre de hasta 500 pedidos** para dibujar
    puntos (ya documentado en `docs/pedido-backend-cobertura.md`).
 10. **El backend tiene promociones de partner con endpoints admin** (`/promotions`, asignaciones)
@@ -791,9 +807,9 @@ qué):
 6. Las propuestas de un pedido cerrado como `duplicate` no cuentan para el tope: el equipo usa ese
    cierre para sus pedidos de prueba. Son 7 al 2026-10-29.
 7. Se cuenta por proveedor del directorio; una propuesta a un taller de afuera aparece aparte, sin
-   plan, como "no se cobra".
-8. Aliado = `tier = founding`. Una propuesta Aliado sobre el tope igual se pinta en rojo, con el
-   badge "Aliado · excepción", hasta que se decida cómo cuenta.
+   plan, como "no se cobra" (confirmado el 02/11/26).
+8. Aliado = `tier = founding`. Desde el 02/11/26 es decisión, no supuesto: nunca se pinta, aunque
+   pase el tope de su plan (ver "Decisiones (02/11/26)").
 9. "Proveedores" en la UI nueva; en el código sigue `Partner` (vocabulario del backend).
 10. La marca "revisado" de los rubros «Otro» vive en memoria del navegador (mock) y se pierde al
    recargar, a propósito: guardarla en `localStorage` la haría parecer persistida.
