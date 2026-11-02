@@ -366,19 +366,44 @@ export interface PartnerHistoryRow extends UsageCounts {
   peak: { month: string; used: number } | null
   /** El color va sobre el pico: quién pasaría el tope de su plan en algún mes. */
   tone: CapTone
+  /**
+   * Desde siempre, de las DOS tablas (`ops.partner_quote_volume()`, migración
+   * 025): también lo que se cargó en `ops.quote_request_response` antes del
+   * 27/10. `null` = la función no está en esta base. Va APARTE de los conteos
+   * de arriba y no entra al pico ni al color: lo viejo no se publicó en la app
+   * y en septiembre no había tope.
+   */
+  allTime: AllTimeVolume | null
+}
+
+/** Lo que cotizó un proveedor desde siempre (`ops.partner_quote_volume()`). */
+export interface AllTimeVolume {
+  /** Pedidos distintos en los que cotizó, de las dos tablas. */
+  requests: number
+  /** `YYYY-MM-DD` en hora de Buenos Aires. */
+  firstOn: string
 }
 
 export function aggregatePartnerHistory(
   facts: ReadonlyArray<ProposalFact>,
   partners: ReadonlyArray<PartnerRef>,
   plans: ReadonlyMap<string, PartnerPlan>,
-  opts: { includeIdle: boolean },
+  opts: {
+    includeIdle: boolean
+    /** Por `partner_id`. `null` = la 025 no está; sin la clave = sin historial. */
+    allTime?: ReadonlyMap<string, AllTimeVolume> | null
+  },
 ): PartnerUsageView<PartnerHistoryRow> {
   const buckets = bucketProposals(facts)
   const byId = new Map(partners.map((p) => [p.id, p]))
   const ids = new Set<string>()
   for (const b of buckets.values()) if (b.partnerId) ids.add(b.partnerId)
   if (opts.includeIdle) for (const p of partners) if (p.status === 'active') ids.add(p.id)
+  // Un proveedor que sólo cotizó antes del 27/10 también va: es justo el que
+  // Comercial quiere encontrar, y sin esto la columna lo escondería.
+  if (opts.allTime) for (const id of opts.allTime.keys()) ids.add(id)
+  const allTimeFor = (id: string): AllTimeVolume | null =>
+    opts.allTime ? (opts.allTime.get(id) ?? { requests: 0, firstOn: '' }) : null
 
   const rows = [...ids].map((id): PartnerHistoryRow => {
     const p = byId.get(id)
@@ -400,10 +425,16 @@ export function aggregatePartnerHistory(
       activeMonths: b ? [...b.months.values()].filter((c) => c.used > 0).length : 0,
       peak,
       tone: capTone(peak?.used ?? 0, plan, tier),
+      allTime: allTimeFor(id),
     }
   })
 
-  rows.sort((a, b) => b.used - a.used || a.name.localeCompare(b.name, 'es'))
+  rows.sort(
+    (a, b) =>
+      b.used - a.used ||
+      (b.allTime?.requests ?? 0) - (a.allTime?.requests ?? 0) ||
+      a.name.localeCompare(b.name, 'es'),
+  )
   return { rows, externals: externalRows(buckets, null) }
 }
 
@@ -418,7 +449,7 @@ export function partnerHistoryCsv(view: PartnerUsageView<PartnerHistoryRow>): st
   const head = [
     'tipo', 'proveedor', 'partner_id', 'aliado', 'plan', 'enviadas', 'retiradas', 'elegidas',
     'usadas', 'pct_elegidas', 'primera', 'ultima', 'meses_con_actividad', 'pico_mes', 'pico_usadas',
-    'pico_sobre_tope',
+    'pico_sobre_tope', 'pedidos_desde_siempre', 'cotiza_desde',
   ]
   const cell = (v: string | number | null) => {
     if (v === null) return ''
@@ -435,6 +466,7 @@ export function partnerHistoryCsv(view: PartnerUsageView<PartnerHistoryRow>): st
         r.pctSelected === null ? null : Math.round(r.pctSelected * 10) / 10, day(r.firstAt), day(r.lastAt),
         r.activeMonths, r.peak?.month ?? null, r.peak?.used ?? null,
         r.tone === 'over' ? 'si' : r.tone === 'at' ? 'llego' : 'no',
+        r.allTime ? r.allTime.requests : null, r.allTime?.firstOn || null,
       ]
         .map(cell)
         .join(';'),
@@ -445,7 +477,7 @@ export function partnerHistoryCsv(view: PartnerUsageView<PartnerHistoryRow>): st
       [
         'taller de afuera', e.name, null, null, null, e.sent, e.withdrawn, e.selected, e.used,
         e.sent > 0 ? Math.round((e.selected / e.sent) * 1000) / 10 : null, day(e.firstAt), day(e.lastAt),
-        null, null, null, null,
+        null, null, null, null, null, null,
       ]
         .map(cell)
         .join(';'),

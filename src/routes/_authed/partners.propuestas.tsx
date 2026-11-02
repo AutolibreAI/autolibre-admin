@@ -3,6 +3,7 @@ import { Download } from 'lucide-react'
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
+import { listPartnerQuoteVolumeFn } from '~/fn/partner-quote-volume'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MockBanner } from '~/components/MockBanner'
@@ -43,6 +44,7 @@ import {
 import { cn } from '~/lib/utils'
 import type { PartnerPlanAssignment } from '~/mocks/partner-plans'
 import type {
+  AllTimeVolume,
   CapTone,
   ExternalUsageRow,
   PartnerHistoryRow,
@@ -75,6 +77,12 @@ import type {
  * pasaría el tope de su plan en algún mes. Sale del MISMO conteo que la vista
  * mensual (`bucketProposals`), y su CSV es para cruzar con quién pagó.
  *
+ * El histórico suma además "desde siempre" (pedidos y desde cuándo cotiza),
+ * de `ops.partner_quote_volume()` (migración 025): incluye lo cargado en
+ * `ops.quote_request_response` antes del 27/10, que esta pantalla no cuenta.
+ * Va en columnas aparte y no entra al pico ni al color: lo viejo no se publicó
+ * en la app y no había tope. Es lo que usa Comercial para llamar a los talleres.
+ *
  * Los colores los decide `capTone` (`~/lib/partner-plans`), no esta pantalla:
  * rojo pasó el tope, amarillo llegó, Aliado siempre gris (sin límite por
  * ahora), sin plan gris. El tope no frena ningún envío: sólo se marca.
@@ -88,10 +96,17 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners] = await Promise.all([
+    const [quotes, partners, volume] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
+      listPartnerQuoteVolumeFn({ signal }),
     ])
+    // Sólo proveedores del directorio: un taller de afuera no tiene plan ni ficha.
+    const allTime: Array<[string, AllTimeVolume]> | null = volume.available
+      ? volume.rows.flatMap((r) =>
+          r.partnerId ? [[r.partnerId, { requests: r.requests, firstOn: r.firstQuotedOn }] as [string, AllTimeVolume]] : [],
+        )
+      : null
     const requests =
       'rows' in quotes
         ? quotes.rows
@@ -104,7 +119,7 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
       tier: p.tier,
       status: p.status,
     }))
-    return { requests, partners: partnerRefs }
+    return { requests, partners: partnerRefs, allTime }
   },
   head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
   component: PartnerProposals,
@@ -113,7 +128,8 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 function PartnerProposals() {
-  const { requests, partners } = Route.useLoaderData()
+  const { requests, partners, allTime } = Route.useLoaderData()
+  const allTimeMap = useMemo(() => (allTime ? new Map(allTime) : null), [allTime])
   const { user } = Route.useRouteContext()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -133,8 +149,12 @@ function PartnerProposals() {
     [load.facts, month, partners, plans, search.proposalShowIdle],
   )
   const historyView = useMemo(
-    () => aggregatePartnerHistory(load.facts, partners, plans, { includeIdle: search.proposalShowIdle }),
-    [load.facts, partners, plans, search.proposalShowIdle],
+    () =>
+      aggregatePartnerHistory(load.facts, partners, plans, {
+        includeIdle: search.proposalShowIdle,
+        allTime: allTimeMap,
+      }),
+    [load.facts, partners, plans, search.proposalShowIdle, allTimeMap],
   )
   const view = isHistory ? historyView : monthView
 
@@ -277,7 +297,14 @@ function PartnerProposals() {
                 : 'No hay propuestas a proveedores del directorio en este mes.'}
         </Empty>
       ) : isHistory ? (
-        <HistoryTable rows={historyRows} plan={plan} />
+        <>
+          {allTimeMap === null ? (
+            <p className="mb-2 rounded-lg border border-status-yellow/30 bg-status-yellow-bg px-4 py-2 text-xs text-status-yellow">
+              «Desde siempre» no está disponible: falta aplicar la migración 025 de ops en esta base.
+            </p>
+          ) : null}
+          <HistoryTable rows={historyRows} plan={plan} />
+        </>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
           <Table className="min-w-[860px]">
@@ -338,11 +365,18 @@ function UsageRow({ row, plan }: { row: PartnerUsageRow; plan: PlanEditing }) {
 function HistoryTable({ rows, plan }: { rows: ReadonlyArray<PartnerHistoryRow>; plan: PlanEditing }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <Table className="min-w-[1100px]">
+      <Table className="min-w-[1280px]">
         <TableHeader>
           <TableRow>
             <TableHead>Proveedor</TableHead>
             <TableHead>Plan</TableHead>
+            <TableHead
+              className="text-right"
+              title="Pedidos distintos en los que cotizó, también antes del 27/10 (tabla vieja de ops). No entra al pico ni al color."
+            >
+              Pedidos desde siempre
+            </TableHead>
+            <TableHead title="La primera vez que cotizó, en cualquiera de las dos tablas.">Cotiza desde</TableHead>
             <TableHead className="text-right">Enviadas</TableHead>
             <TableHead className="text-right">Retiradas</TableHead>
             <TableHead className="text-right">Elegidas</TableHead>
@@ -362,6 +396,16 @@ function HistoryTable({ rows, plan }: { rows: ReadonlyArray<PartnerHistoryRow>; 
               </TableCell>
               <TableCell className="text-sm">
                 <PlanCell row={r} plan={plan} />
+              </TableCell>
+              <TableCell className="text-right font-medium tabular-nums">
+                {r.allTime === null ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  formatInt(r.allTime.requests)
+                )}
+              </TableCell>
+              <TableCell className="text-sm tabular-nums">
+                {r.allTime?.firstOn ? shortDay(r.allTime.firstOn) : <span className="text-muted-foreground">—</span>}
               </TableCell>
               <TableCell className="text-right tabular-nums">{formatInt(r.sent)}</TableCell>
               <TableCell className="text-right tabular-nums">
@@ -546,6 +590,11 @@ function Legend() {
         la persona tiene elegida hoy en la app; si la eligió y después la des-eligió, no cuenta. El mes es el de
         envío, en hora de Buenos Aires. En el histórico, el pico mensual es el máximo de usadas en un mes
         calendario, y el color va sobre ese pico.
+      </p>
+      <p>
+        «Pedidos desde siempre» (sólo en el histórico) cuenta pedidos distintos en los que el proveedor cotizó,
+        también antes del 27/10, cuando lo que contestaba cada taller se cargaba en otra tabla. No entra al pico
+        ni al color: eso no se publicó en la app y no había tope. Sin pedidos de prueba.
       </p>
       <p>
         Rojo: pasó el tope. Amarillo: llegó al tope. Aliado: sin límite por ahora, su tope es sólo referencia y
