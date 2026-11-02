@@ -40,6 +40,7 @@ export interface PartnerPlanAssignment {
 }
 
 const overrides = new Map<string, PartnerPlanAssignment>()
+const listeners = new Set<() => void>()
 
 function seed(partnerId: string): PartnerPlanAssignment {
   let h = 0
@@ -64,4 +65,36 @@ export async function fetchPartnerPlansMock(
   const out = new Map<string, PartnerPlanAssignment>()
   for (const id of partnerIds) out.set(id, overrides.get(id) ?? seed(id))
   return out
+}
+
+/**
+ * Lo que haría `PATCH` del partner con `plan` + `planValidFrom`. El actor sale
+ * de la sesión del panel, nunca de un campo del formulario.
+ */
+export async function savePartnerPlanMock(
+  input: { partnerId: string; plan: PartnerPlan | null; validFrom: string | null },
+  actorEmail: string,
+): Promise<PartnerPlanAssignment> {
+  if (input.plan !== null && !PARTNER_PLANS.includes(input.plan)) throw new Error('INVALID_PLAN')
+  if (input.validFrom !== null && !/^\d{4}-\d{2}-\d{2}$/.test(input.validFrom)) {
+    throw new Error('INVALID_VALID_FROM')
+  }
+  const next: PartnerPlanAssignment = {
+    partnerId: input.partnerId,
+    plan: input.plan,
+    validFrom: input.plan === null ? null : input.validFrom,
+    changedBy: actorEmail,
+    changedAt: new Date().toISOString(),
+  }
+  overrides.set(input.partnerId, next)
+  for (const fn of listeners) fn()
+  return next
+}
+
+/** Sólo existe porque el mock vive en memoria: con el endpoint real, se recarga. */
+export function subscribePartnerPlansMock(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
 }

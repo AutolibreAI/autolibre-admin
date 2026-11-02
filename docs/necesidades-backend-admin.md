@@ -57,6 +57,26 @@ La explicación más probable es que esa consulta contó como retirada una propu
 `updated_at` posterior a `created_at`, sin `withdrawn_at`). Corregir no retira (`PUT`, sin push), así
 que la pantalla no la cuenta como retirada.
 
+**Plan cargado a mano** (decisión 5): en la ficha del proveedor, al lado de Perfil, la tarjeta
+"Plan" con selector Gratis / Estándar / Plus / Plus Max / sin plan y fecha de inicio; en las dos
+tablas de Propuestas, el plan se edita desde la misma fila (lápiz). Siempre con confirmación ("¿Cambiar
+el plan de X de Gratis a Plus desde el 01/11/26?"). La ficha muestra quién lo cambió y cuándo (el
+email sale de la sesión, nunca del formulario). Componente `src/components/PartnerPlanEditor.tsx`,
+hook `src/components/usePartnerPlans.ts`; guarda contra `src/mocks/partner-plans.ts`, **en memoria**:
+la ficha, Propuestas y Estudio ven el cambio en la misma sesión y se pierde al recargar (nada en
+`localStorage`). Con el cartel "Datos de ejemplo".
+
+**Relevamiento del campo de plan (02/11/26), contra producción:** no existe. `public.partners` no
+tiene ninguna columna de plan (sus columnas: `id, application_id, source, user_id, name,
+description, logo_url, whatsapp, email, address, hours, modality, redirect_link, coverage_zone,
+latitude, longitude, tier, status, created_at, updated_at, legacy_sheet_row_id,
+whatsapp_message`), no hay ningún enum de plan, y lo que edita la ficha
+(`setPartnerProfileFn` → `ops.set_partner_profile`, migración 009) sólo escribe nombre, zona,
+descripción y `tier`. Lo único parecido es `ops.partner_prospect.plan` (`free | plus | undecided`):
+es lo que un **contacto** de Comercial dijo que le interesa, no el plan contratado de un proveedor
+(otra entidad, otro catálogo, sin Estándar ni Plus Max, y no todo proveedor tiene contacto). No
+sirve, y no se usó. `tier` tampoco: es el sello Aliado.
+
 **Cómo probarlo:** `pnpm dev`, entrar con una cuenta admin, Partners › Propuestas. Sin login:
 `node tmp/probe-propuestas-historico.mjs` (solo lectura; `tmp/` no se versiona, está en esta
 máquina) arma los mismos datos con los repos reales, corre los meses y el histórico, y cuadra contra
@@ -79,14 +99,29 @@ un `count` directo.
 
 **Necesidades de backend:**
 
-- [ ] **tabla o columna** — `partners.plan` (enum `partner_plan`: `gratis | estandar | plus |
-  plus_max`), NOT NULL con default a decidir. El tope (1 / sin límite / 10 / 15) puede vivir en
-  código o en una tabla de planes con vigencia; si los topes van a cambiar, conviene tabla con
-  `valid_from` para no reescribir meses pasados. `tier` (`founding | standard`) no sirve: es el
-  sello Aliado, no un plan comercial. **Bloquea el front: no** (mock).
+**P0 — el pedido mínimo, para hacer en el día (el cobro arranca en noviembre):**
+
+- [ ] **tabla o columna** — `partners.plan`: enum `partner_plan` (`gratis | estandar | plus |
+  plus_max`), **nullable** (`NULL` = sin plan). Es `public`, así que va por Drizzle en
+  `autolibre-backend-hex`. Sin backfill: todos arrancan sin plan y se cargan a mano. `tier`
+  (`founding | standard`) no se toca: es el sello Aliado, no un plan. **Bloquea el front: no**
+  (mock).
+- [ ] **endpoint de escritura** — aceptar `plan` en la edición de partner que ya existe: hoy es
+  `ops.set_partner_profile` (migración 009 de este repo, la que usa la ficha). Agregar `p_plan`
+  (o un `ops.set_partner_plan` aparte, si se prefiere una entrada de auditoría propia porque el plan
+  tiene otra consecuencia: el cobro). Las dos opciones escriben `ops.action_log` con `before` /
+  `after` y el actor de la sesión, así que **quién y cuándo lo cambió sale gratis** sin el
+  historial. Opcional en el mismo cambio: `partners.plan_valid_from date` nullable, para guardar la
+  fecha de inicio que ya pide el formulario. **Bloquea el front: sí** para guardar de verdad.
+
+**P1 — aparte, no frena el P0:**
+
 - [ ] **tabla o columna** — historial de plan (`partner_plan_history`: `partner_id`, `plan`,
   `valid_from`, `valid_to`, `changed_by`). Sin esto, si un proveedor cambia de plan a mitad de mes
-  no se sabe contra qué tope medir el mes. **Bloquea el front: no.**
+  no se sabe contra qué tope medir ese mes: hoy todo mes se mide contra el plan vigente. El tope
+  (1 / sin límite / 10 / 15) puede vivir en código o en una tabla de planes con vigencia; si los
+  topes van a cambiar, conviene tabla con `valid_from` para no reescribir meses pasados.
+  **Bloquea el front: no.**
 - [ ] **endpoint de lectura** — `GET /admin/partner-proposal-usage?month=YYYY-MM`. Una fila por
   proveedor del directorio: `partnerId`, `partnerName`, `tier`, `plan`, `cap` (null = sin límite),
   `sent` (no retiradas), `withdrawn`, `selected` (= es hoy `selected_proposal_id`),
@@ -683,7 +718,8 @@ qué):
 
 | Tarjeta | Necesidad | Tipo | Bloquea front | Prioridad sugerida |
 |---|---|---|---|---|
-| Conteo mensual + tope | `partners.plan` | tabla o columna | no | **P0** (cobro en noviembre) |
+| Conteo mensual + tope | `partners.plan` (nullable) | tabla o columna | no | **P0** (cobro en noviembre) |
+| Conteo mensual + tope | aceptar `plan` en la edición de partner | endpoint de escritura | sí (guardar) | **P0** |
 | Conteo mensual + tope | historial de plan | tabla o columna | no | P1 |
 | Conteo mensual + tope | `GET /admin/partner-proposal-usage` | endpoint de lectura | no | P1 |
 | Rubros "Otro" | marca de revisado | tabla o columna | no | P1 |

@@ -6,6 +6,7 @@ import { listMarketplacePartners } from '~/fn/partners'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MockBanner } from '~/components/MockBanner'
+import { PartnerPlanEditor } from '~/components/PartnerPlanEditor'
 import { SearchInput } from '~/components/SearchInput'
 import { useProposalFacts } from '~/components/useProposalFacts'
 import { usePartnerPlans } from '~/components/usePartnerPlans'
@@ -40,11 +41,11 @@ import {
   shortDay,
 } from '~/lib/partner-plans'
 import { cn } from '~/lib/utils'
+import type { PartnerPlanAssignment } from '~/mocks/partner-plans'
 import type {
   CapTone,
   ExternalUsageRow,
   PartnerHistoryRow,
-  PartnerPlan,
   PartnerRef,
   PartnerUsageRow,
   UsageCounts,
@@ -113,6 +114,7 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
 
 function PartnerProposals() {
   const { requests, partners } = Route.useLoaderData()
+  const { user } = Route.useRouteContext()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
@@ -123,7 +125,8 @@ function PartnerProposals() {
   const month = search.proposalMonth && months.includes(search.proposalMonth) ? search.proposalMonth : months[0]!
 
   const load = useProposalFacts(requests ?? [])
-  const { plans } = usePartnerPlans(useMemo(() => partners.map((p) => p.id), [partners]))
+  const { plans, assignments } = usePartnerPlans(useMemo(() => partners.map((p) => p.id), [partners]))
+  const plan = { assignments, actorEmail: user.email }
 
   const monthView = useMemo(
     () => aggregatePartnerUsage(load.facts, month, partners, plans, { includeIdle: search.proposalShowIdle }),
@@ -188,6 +191,7 @@ function PartnerProposals() {
       <MockBanner
         items={[
           'El plan de cada proveedor es de ejemplo: todavía no existe la columna de plan en la base. Las propuestas, retiradas y elegidas son reales.',
+          'Cambiar el plan desde la fila o desde la ficha guarda sólo en esta sesión: se pierde al recargar.',
           'Aliado sale del sello real (tier). «Taller de cabecera» no existe todavía en ningún lado.',
         ]}
       />
@@ -273,7 +277,7 @@ function PartnerProposals() {
                 : 'No hay propuestas a proveedores del directorio en este mes.'}
         </Empty>
       ) : isHistory ? (
-        <HistoryTable rows={historyRows} />
+        <HistoryTable rows={historyRows} plan={plan} />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
           <Table className="min-w-[860px]">
@@ -289,7 +293,7 @@ function PartnerProposals() {
             </TableHeader>
             <TableBody>
               {monthRows.map((r) => (
-                <UsageRow key={r.partnerId} row={r} />
+                <UsageRow key={r.partnerId} row={r} plan={plan} />
               ))}
             </TableBody>
           </Table>
@@ -303,14 +307,14 @@ function PartnerProposals() {
   )
 }
 
-function UsageRow({ row }: { row: PartnerUsageRow }) {
+function UsageRow({ row, plan }: { row: PartnerUsageRow; plan: PlanEditing }) {
   return (
     <TableRow className={toneRowClass(row.tone)}>
       <TableCell>
         <ProviderName row={row} />
       </TableCell>
       <TableCell className="text-sm">
-        <PlanLabel plan={row.plan} />
+        <PlanCell row={row} plan={plan} />
       </TableCell>
       <TableCell className="text-right tabular-nums">{formatInt(row.sent)}</TableCell>
       <TableCell className="text-right tabular-nums">
@@ -331,7 +335,7 @@ function UsageRow({ row }: { row: PartnerUsageRow }) {
  * Sin columna de tope: el tope es mensual. El color va sobre el PICO mensual,
  * con las mismas reglas que el mes (`capTone`).
  */
-function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
+function HistoryTable({ rows, plan }: { rows: ReadonlyArray<PartnerHistoryRow>; plan: PlanEditing }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
       <Table className="min-w-[1100px]">
@@ -357,7 +361,7 @@ function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
                 <ProviderName row={r} />
               </TableCell>
               <TableCell className="text-sm">
-                <PlanLabel plan={r.plan} />
+                <PlanCell row={r} plan={plan} />
               </TableCell>
               <TableCell className="text-right tabular-nums">{formatInt(r.sent)}</TableCell>
               <TableCell className="text-right tabular-nums">
@@ -419,8 +423,29 @@ function ProviderName({ row }: { row: { partnerId: string; name: string; tier: s
   )
 }
 
-function PlanLabel({ plan }: { plan: PartnerPlan | null }) {
-  return plan ? <>{PARTNER_PLAN_LABELS[plan]}</> : <span className="text-muted-foreground">sin plan</span>
+interface PlanEditing {
+  assignments: ReadonlyMap<string, PartnerPlanAssignment>
+  actorEmail: string
+}
+
+/** El plan, editable desde la fila. Pide confirmación (`PartnerPlanEditor`). */
+function PlanCell({
+  row,
+  plan,
+}: {
+  row: { partnerId: string; name: string; tier: string | null }
+  plan: PlanEditing
+}) {
+  return (
+    <PartnerPlanEditor
+      compact
+      partnerId={row.partnerId}
+      partnerName={row.name}
+      tier={row.tier}
+      assignment={plan.assignments.get(row.partnerId)}
+      actorEmail={plan.actorEmail}
+    />
+  )
 }
 
 function toneRowClass(tone: CapTone) {

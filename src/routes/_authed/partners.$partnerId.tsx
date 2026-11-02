@@ -132,7 +132,7 @@ function PartnerServicesEditor() {
         contacto/coordenadas— tienen que verse en la misma pantalla. Separarlas
         haría que arreglar una y no la otra sea el resultado normal.
       */}
-      <PartnerFicha partner={view.partner} />
+      <PartnerFicha partner={view.partner} actorEmail={user.email} />
 
       {/* Sellos: Aliado es real (tier); redes y aseguradoras, de ejemplo. */}
       <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />
