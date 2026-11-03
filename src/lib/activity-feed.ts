@@ -248,7 +248,7 @@ export const ACTIVITY_OUTCOMES: Record<string, { label: string; tone: OutcomeTon
   con_deuda: { label: 'con deuda', tone: 'warn' },
   sin_deuda: { label: 'sin deuda', tone: 'ok' },
   admin: { label: 'admin', tone: 'muted' },
-  provider: { label: 'provider', tone: 'muted' },
+  partner: { label: 'partner', tone: 'muted' },
 }
 
 export function outcomeLabel(code: string): string {

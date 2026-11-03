@@ -13,14 +13,16 @@
  */
 
 /**
- * Mirrors the Postgres enum `user_role` exactly: `user | admin | provider`.
+ * Mirrors the Postgres enum `user_role` exactly: `user | admin | partner`.
  *
- * `'provider'` is legacy and known to be wrong — the backend says Partner, not
- * Provider — but the enum still carries it because changing it means recreating
- * the type. Do NOT "clean it up" here: a front-end enum that disagrees with the
- * database renders blank rows the day a value appears that it does not know.
+ * Era `provider` hasta la migración 0138 del backend
+ * (`ALTER TYPE user_role RENAME VALUE 'provider' TO 'partner'`, 2026-11-03).
+ * Este espejo se despliega JUNTO con esa migración: `users.repo.ts` castea el
+ * filtro a `$n::user_role`, así que un valor que la base no conoce es un 22P02.
+ * Un enum de front que no coincide con la base renderiza filas en blanco el
+ * día que aparece un valor que no conoce.
  */
-export type UserRole = 'user' | 'admin' | 'provider'
+export type UserRole = 'user' | 'admin' | 'partner'
 
 export interface SessionUser {
   /** `users.id` (uuid) — la identidad de AutoLibre, no la de Clerk. */

@@ -32,12 +32,8 @@ export type AuthProvider = 'clerk' | 'native'
 export const USER_ROLE_LABELS: Record<UserRole, string> = {
   user: 'Usuario',
   admin: 'Admin',
-  /**
-   * Legacy, y se etiqueta como tal. El enum `user_role` de Postgres todavía lo
-   * lleva aunque el backend diga Partner — ver la nota en `~/lib/types`. Un
-   * `Record` parcial acá renderizaría la celda vacía el día que aparezca uno.
-   */
-  provider: 'Provider (legacy)',
+  /** Era `provider` hasta la 0138 del backend — ver `~/lib/types`. */
+  partner: 'Partner',
 }
 
 export const LEGAL_DOCUMENT_LABELS: Record<string, string> = {
@@ -603,7 +599,7 @@ export function deriveUserFlags(user: UserDetail): Array<UserFlag> {
 
 // ── Search params ────────────────────────────────────────────────────────────
 
-export const USER_ROLE_FILTERS = ['all', 'user', 'admin', 'provider'] as const
+export const USER_ROLE_FILTERS = ['all', 'user', 'admin', 'partner'] as const
 export type UserRoleFilter = (typeof USER_ROLE_FILTERS)[number]
 
 /**

@@ -568,10 +568,21 @@ Reglas que salen de esto y no son negociables:
 
 ## Decisión abierta
 
-**El enum `user_role` todavía tiene `'provider'`.** El backend ya avisó que quedó viejo (se dice
-Partner). Cambiarlo obliga a recrear el tipo entero — es una decisión aparte, no un olvido.
-`src/lib/types.ts` lo espeja tal cual a propósito: un enum de front que no coincide con la base
-renderiza filas en blanco el día que aparece un valor que no conoce.
+**Cerrada el 2026-11-03: `user_role` pasa de `'provider'` a `'partner'`** con la migración 0138 del
+backend (`ALTER TYPE … RENAME VALUE`, sin recrear el tipo). `src/lib/types.ts`, `~/lib/users`,
+`usuarios.index.tsx` y `~/lib/activity-feed` ya espejan `'partner'`, y **se despliegan JUNTO con la
+0138**: `users.repo.ts` castea el filtro a `$n::user_role`, así que un espejo desfasado de la base
+es un 22P02. Un enum de front que no coincide con la base renderiza filas en blanco.
+
+> **En curso (backend, cambio SDD `partner-identity`)**: ser partner es una RELACIÓN usuario↔taller
+> (`partner_members`, 0141 — `drizzle/0141_partner_members.sql`; `partner_claim_codes`, 0144 — `drizzle/0144_partner_claim_codes.sql`), no
+> un rol. Activo = `revoked_at IS NULL` (sin status ni `updated_at`; re-alta = fila nueva);
+> `member_role` enum `owner|staff`; `verified_via` enum ABIERTO (hoy `admin_code`, va a sumar
+> `whatsapp_otp`); `revoked_by_id` puede ser NULL en una revocada (SET NULL si se borró el admin). Emitir códigos de reclamo y
+> revocar miembros van por HTTP (`POST /admin/partners/:id/claim-codes`,
+> `POST /admin/partner-members/:id/revoke`); la lectura de miembros y códigos, por SQL con guard de
+> `to_regclass`. **No escribir un SP sobre `partner_members`.** No asumir nombres de columnas hasta
+> tener el DDL commiteado. Estado de un código: derivado (canjeado / revocado / invalidado / vencido / pendiente), sin columna; el código en claro NO está en la base.
 
 > **Pedido abierto al backend (2026-10-03)**: reglas de notificación editables (texto, plazos, alta) en un solo modelo, y `users.phone` para deduplicar canales → `docs/pedido-backend-2026-10-03.md`.
 

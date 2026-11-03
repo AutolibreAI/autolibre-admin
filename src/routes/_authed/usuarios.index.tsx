@@ -55,7 +55,7 @@ const ROLE_FILTER_LABELS: Record<UserRoleFilter, string> = {
   all: 'Todos',
   user: 'Usuarios',
   admin: 'Admins',
-  provider: 'Provider (legacy)',
+  partner: 'Partners',
 }
 
 const VEHICLE_FILTER_LABELS: Record<UserVehicleFilter, string> = {
