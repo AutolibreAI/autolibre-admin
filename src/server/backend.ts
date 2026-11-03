@@ -881,3 +881,28 @@ export async function setPartnerLogo(input: {
 export async function removePartnerLogo(partnerId: string): Promise<void> {
   await partnerLogoFetch(partnerId, { method: 'DELETE' })
 }
+
+// ── Miembros de un partner ───────────────────────────────────────────────────
+
+/**
+ * Revoca la membresía de un usuario a un taller: `POST
+ * /admin/partner-members/:id/revoke` (`AdminGuard`, 0141 del backend). Sin
+ * cuerpo. 204 sin cuerpo, idempotente (uno ya revocado también da 204): no se
+ * lee JSON. Nunca SQL a `partner_members`. → `.claude/rules/partner-members.md`
+ */
+export async function revokePartnerMember(memberId: string): Promise<void> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/partner-members/${memberId}/revoke`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'Revocar el miembro', { detailed: true })
+}

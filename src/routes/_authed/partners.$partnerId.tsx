@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react'
 import { Link, createFileRoute, notFound, useRouter } from '@tanstack/react-router'
 import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
+import { listPartnerMembersFn } from '~/fn/partner-members'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerFicha } from '~/components/PartnerFicha'
 import { PartnerSealsCard } from '~/components/PartnerSeals'
+import { PartnerMembersCard } from '~/components/PartnerMembersCard'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
@@ -13,16 +15,18 @@ import type { PartnerServicesView, ServiceItem } from '~/lib/catalog'
 
 export const Route = createFileRoute('/_authed/partners/$partnerId')({
   loader: async ({ params, abortController }) => {
-    const view = await getPartnerServicesView({
-      data: params,
-      signal: abortController.signal,
-    }).catch((cause: unknown) => {
-      if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
-      throw cause
-    })
+    const signal = abortController.signal
+    const [view, members] = await Promise.all([
+      getPartnerServicesView({ data: params, signal }).catch((cause: unknown) => {
+        if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
+        throw cause
+      }),
+      // Sin la 0141 del backend vuelve `{ available: false }`, nunca un 500.
+      listPartnerMembersFn({ data: params, signal }),
+    ])
 
     if (!view) throw notFound()
-    return view
+    return { ...view, members }
   },
 
   head: ({ loaderData }) => ({
@@ -136,6 +140,9 @@ function PartnerServicesEditor() {
 
       {/* Sellos: Aliado es real (tier); redes y aseguradoras, de ejemplo. */}
       <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />
+
+      {/* Quién opera el taller desde la app (partner_members, 0141). Lee por SQL, revoca por HTTP. */}
+      <PartnerMembersCard partnerId={view.partner.id} result={view.members} />
 
       <Suggestions view={view} onApply={(ids) => setSelected((p) => new Set([...p, ...ids]))} />
 
