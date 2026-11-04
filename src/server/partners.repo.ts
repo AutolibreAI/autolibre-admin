@@ -781,6 +781,8 @@ export async function listPartners(
     ],
   )
 
+  const slugs = await currentPartnerSlugs(rows.map((r) => r.id))
+
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
@@ -796,7 +798,29 @@ export async function listPartners(
     // El par va junto o no va: `set_partner_location` (007) rechaza uno incompleto.
     location:
       r.latitude === null || r.longitude === null ? null : { lat: Number(r.latitude), lng: Number(r.longitude) },
+    publicSlug: slugs.get(r.id) ?? null,
   }))
+}
+
+/**
+ * El slug VIGENTE del perfil público de cada partner pedido.
+ *
+ * `partner_slugs` es del BACKEND (drizzle 0107): una base que no la migró no la
+ * tiene, y nombrarla sin que exista explota al planificarse — por eso el
+ * `to_regclass` antes, mismo guard que `quote-responses.repo.ts`. Consulta
+ * aparte y no columna del SELECT de `listPartners`, para no condicionar esa
+ * sentencia entera al guard. El índice único parcial
+ * `idx_partner_slugs_current_unique` garantiza a lo sumo una fila por partner.
+ */
+async function currentPartnerSlugs(partnerIds: ReadonlyArray<string>): Promise<Map<string, string>> {
+  if (partnerIds.length === 0) return new Map()
+  const guard = await sqlOne<{ ok: boolean }>(`select to_regclass('public.partner_slugs') is not null as ok`)
+  if (guard?.ok !== true) return new Map()
+  const rows = await sql<{ partner_id: string; slug: string }>(
+    `select ps.partner_id, ps.slug from partner_slugs ps where ps.is_current and ps.partner_id = any($1::uuid[])`,
+    [partnerIds],
+  )
+  return new Map(rows.map((r) => [r.partner_id, r.slug]))
 }
 
 /**
@@ -1081,12 +1105,13 @@ export async function getPartnerServices(
 
   if (!partner) return null
 
-  const [families, assigned] = await Promise.all([
+  const [families, assigned, slugs] = await Promise.all([
     loadCatalog(),
     sql<{ service_id: string }>(
       `SELECT service_id FROM partner_services WHERE partner_id = $1`,
       [partnerId],
     ),
+    currentPartnerSlugs([partnerId]),
   ])
 
   const declaredServices = partner.declared_services ?? []
@@ -1161,6 +1186,7 @@ export async function getPartnerServices(
       // `count(*)::int` ya viene como number desde `pg`; el cast es la red doble
       // que este repo usa en todos lados, por si el `::int` se cae del SQL.
       nameCollisions: Number(partner.name_collisions ?? 0),
+      publicSlug: slugs.get(partner.id) ?? null,
       logoUrl: applicationLogoUrl(partner.logo_url),
       applicationLogoUrl: applicationLogoUrl(partner.application_logo_url),
     },

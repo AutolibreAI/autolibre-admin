@@ -43,6 +43,12 @@ export interface PartnerListItem {
   tier: string
   /** Para la vista de mapa. `null` = sin coordenadas cargadas. */
   location: { lat: number; lng: number } | null
+  /**
+   * El slug VIGENTE de su perfil público (`partner_slugs.is_current`), sin
+   * mirar el estado. `null` = no tiene, o la base no tiene `partner_slugs`.
+   * Si se publica o no lo decide `publicProfile()` de `~/lib/partners`.
+   */
+  publicSlug: string | null
 }
 
 export interface PartnerServicesView {
@@ -67,6 +73,8 @@ export interface PartnerServicesView {
      * problema pasó a ser real.
      */
     nameCollisions: number
+    /** Igual que en `PartnerListItem`: el slug vigente, sin mirar el estado. */
+    publicSlug: string | null
     /** La solicitud de origen, si vino por ahí (`source = 'application'`). */
     applicationId: string | null
     /** Lo que declaró en el formulario. Vacío para los de planilla o manuales. */
