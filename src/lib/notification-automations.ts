@@ -22,6 +22,26 @@ import { BROADCAST_BODY_MAX, BROADCAST_TITLE_MAX } from './notifications'
 /** Cuánto dura un pedido abierto. No está modelado en la base (no hay `expires_at`). */
 export const QUOTE_REQUEST_LIFETIME_HOURS = 72
 
+/**
+ * Las reglas del pedido que las automatizaciones tienen que respetar (decididas
+ * por producto; ninguna está modelada en la base todavía):
+ *
+ * - dura `QUOTE_REQUEST_LIFETIME_HOURS` (72 h) abierto;
+ * - recibe hasta `QUOTE_PROPOSAL_CAP` (3) propuestas;
+ * - el tope sube a `QUOTE_PROPOSAL_CAP_EXTENDED` (5) sólo si la 4ª y la 5ª son
+ *   de un Aliado (`tier = founding`) o de su taller de cabecera (este último no
+ *   existe todavía en ningún lado del sistema);
+ * - se puede extender, pero SÓLO si la persona lo confirma: ningún aviso
+ *   extiende un pedido por su cuenta.
+ *
+ * Por eso «llegó una propuesta» admite 1ª a 5ª, y la 4ª/5ª lo dicen; y el
+ * aviso de extensión pregunta, no avisa que se extendió.
+ */
+export const QUOTE_PROPOSAL_CAP = 3
+export const QUOTE_PROPOSAL_CAP_EXTENDED = 5
+export const QUOTE_PROPOSAL_ORDINALS = [1, 2, 3, 4, 5] as const
+export type QuoteProposalOrdinal = (typeof QUOTE_PROPOSAL_ORDINALS)[number]
+
 export const AUTOMATION_CHANNELS = ['push', 'email', 'whatsapp', 'user_choice'] as const
 export type AutomationChannel = (typeof AUTOMATION_CHANNELS)[number]
 
@@ -48,6 +68,7 @@ export const QUOTE_TRIGGERS = [
   'open_reminder',
   'proposal_received',
   'hours_left',
+  'extension_offer',
   'proposals_unviewed',
 ] as const
 export type QuoteTrigger = (typeof QUOTE_TRIGGERS)[number]
@@ -56,21 +77,29 @@ export const QUOTE_TRIGGER_LABELS: Record<QuoteTrigger, string> = {
   open_reminder: 'Pedido abierto sin propuestas',
   proposal_received: 'Llegó una propuesta',
   hours_left: 'Quedan pocas horas del pedido',
+  extension_offer: 'Ofrecer extender la búsqueda',
   proposals_unviewed: 'Propuestas sin mirar',
 }
 
 /** Qué hecho del backend hace falta para que el disparador funcione. */
 export const QUOTE_TRIGGER_NEEDS: Record<QuoteTrigger, string> = {
   open_reminder: 'Un job que revise los pedidos abiertos sin propuestas.',
-  proposal_received: 'El evento quote_proposal_sent con el número de propuesta (1ª, 2ª, 3ª).',
+  proposal_received:
+    'El evento quote_proposal_sent con el número de propuesta (1ª a 5ª). La 4ª y la 5ª, además, que el backend deje pasar el tope de 3 con Aliados o el taller de cabecera.',
   hours_left: 'La hora de vencimiento del pedido (72 h) y un job que la mire.',
+  extension_offer:
+    'La hora de vencimiento (72 h), un endpoint para que la persona confirme la extensión desde la app, y cuánto se extiende.',
   proposals_unviewed: 'El evento quote_proposal_viewed desde la app.',
 }
 
 export const automationTriggerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('open_reminder'), afterHours: z.number().int().min(1).max(71) }),
-  z.object({ kind: z.literal('proposal_received'), ordinal: z.union([z.literal(1), z.literal(2), z.literal(3)]) }),
+  z.object({
+    kind: z.literal('proposal_received'),
+    ordinal: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+  }),
   z.object({ kind: z.literal('hours_left'), hoursLeft: z.number().int().min(1).max(71) }),
+  z.object({ kind: z.literal('extension_offer'), hoursLeft: z.number().int().min(1).max(71) }),
   z.object({ kind: z.literal('proposals_unviewed'), afterHours: z.number().int().min(1).max(71) }),
 ])
 export type AutomationTrigger = z.infer<typeof automationTriggerSchema>
@@ -116,9 +145,13 @@ export function describeTrigger(t: AutomationTrigger): string {
     case 'open_reminder':
       return `El pedido sigue abierto y sin propuestas ${t.afterHours} h después de creado.`
     case 'proposal_received':
-      return `Se le envió su ${t.ordinal}ª propuesta.`
+      return t.ordinal > QUOTE_PROPOSAL_CAP
+        ? `Se le envió su ${t.ordinal}ª propuesta. Sólo pasa si el tope subió de ${QUOTE_PROPOSAL_CAP} a ${QUOTE_PROPOSAL_CAP_EXTENDED} por un Aliado o su taller de cabecera.`
+        : `Se le envió su ${t.ordinal}ª propuesta${t.ordinal === QUOTE_PROPOSAL_CAP ? ` (llegó al tope de ${QUOTE_PROPOSAL_CAP})` : ''}.`
     case 'hours_left':
       return `Quedan ${t.hoursLeft} h para que venza el pedido (dura ${QUOTE_REQUEST_LIFETIME_HOURS} h).`
+    case 'extension_offer':
+      return `Quedan ${t.hoursLeft} h de las ${QUOTE_REQUEST_LIFETIME_HOURS}: se le pregunta si quiere seguir buscando. Sin su confirmación, el pedido vence igual.`
     case 'proposals_unviewed':
       return `Tiene propuestas y no abrió ninguna ${t.afterHours} h después de la última.`
   }
