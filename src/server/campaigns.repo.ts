@@ -3,7 +3,11 @@ import '@tanstack/react-start/server-only'
 import { sql } from './db'
 import { DERIVED_STATE } from './notifications.repo'
 import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
+import { notDuplicatePredicate, quoteRequestsAvailability } from './quote-requests.repo'
 import { CAMPAIGN_OUTCOMES, outcomeExistsSql } from '~/lib/campaigns'
+import { EFFECT_WINDOWS } from '~/lib/notification-effect'
+import type { OutcomeSource } from '~/lib/campaigns'
+import type { EffectAction, EffectBaseline, EffectWindowKey, NotificationEffect } from '~/lib/notification-effect'
 import type {
   CampaignDetail,
   CampaignListItem,
@@ -325,4 +329,152 @@ export async function findCampaign(
   })
 
   return { campaign: mapCampaign(campaign), outcomes, recipients: rows }
+}
+
+// ── Efecto de un envío: conversión por ventana contra la ventana previa ─────
+
+const EFFECT_SOURCES: Record<Exclude<EffectAction, 'quote_request'>, ReadonlyArray<OutcomeSource>> = {
+  // Los MISMOS predicados que `/notificaciones/envios/:id`: si "cargó un
+  // documento" se midiera distinto acá y allá, el mismo envío daría dos números.
+  vehicle: CAMPAIGN_OUTCOMES.find((o) => o.key === 'vehicle')?.sources ?? [],
+  document: CAMPAIGN_OUTCOMES.find((o) => o.key === 'document')?.sources ?? [],
+}
+
+/** `select <ts> as ts from <tabla> t where t.<user> = r.user_id …`, una rama por fuente. */
+const eventsSql = (sources: ReadonlyArray<OutcomeSource>): string =>
+  sources
+    .map(
+      (s) =>
+        `select t.${s.tsColumn} as ts from ${s.table} t where t.${s.userColumn} = r.user_id` +
+        (s.where ? ` and ${s.where}` : ''),
+    )
+    .join('\n          union all\n          ')
+
+interface EffectRow {
+  reached: number
+  existed: number
+  eligible: number
+  channels: Array<string> | null
+  [key: string]: unknown
+}
+
+/**
+ * Conversión de UN envío a una acción, a 24 h / 72 h / 7 días, contra la misma
+ * audiencia en la ventana del mismo largo que termina en el envío.
+ *
+ * Una persona, una fila (`idx_notifications_adhoc_source_unique`), y su momento
+ * es el SUYO (`coalesce(sent_at, scheduled_at)`), igual que `findCampaign`.
+ *
+ * - **Después**: denominador = existía antes del envío y no había hecho la
+ *   acción; numerador = de ésos, su primera acción posterior cae en la ventana.
+ * - **Base** (por ventana `w`): denominador = existía al empezar `[ref − w, ref]`
+ *   y no la había hecho hasta ese momento; numerador = la hizo dentro de esa
+ *   ventana.
+ *
+ * Los tres largos de ventana entran por parámetro (`make_interval`), nunca
+ * interpolados. Sólo devuelve conteos: ningún dato de persona sale de acá.
+ *
+ * «Crear pedido» cuenta `quote_requests` de la persona sin los cerrados como
+ * duplicado / prueba (`notDuplicatePredicate`, el mismo corte de todo el panel)
+ * y necesita la tabla: sin ella, `available: false` en vez de un 500.
+ */
+export async function notificationEffect(
+  broadcastId: string,
+  action: EffectAction,
+  opts: { signal?: AbortSignal } = {},
+): Promise<NotificationEffect> {
+  void opts.signal
+
+  let sources: ReadonlyArray<OutcomeSource>
+  if (action === 'quote_request') {
+    const availability = await quoteRequestsAvailability()
+    if (!availability.available) return emptyEffect(false)
+    sources = [
+      {
+        table: 'quote_requests',
+        userColumn: 'user_id',
+        tsColumn: 'created_at',
+        where: notDuplicatePredicate('t.'),
+      },
+    ]
+  } else {
+    sources = EFFECT_SOURCES[action]
+  }
+
+  const win = (i: number) => `make_interval(hours => $${i + 2}::int)`
+  const lateralCols = EFFECT_WINDOWS.map(
+    (_, i) =>
+      `coalesce(bool_or(ev.ts <= r.ref - ${win(i)}), false) as had_b${i},\n` +
+      `          coalesce(bool_or(ev.ts > r.ref - ${win(i)} and ev.ts <= r.ref), false) as did_b${i}`,
+  ).join(',\n          ')
+  const countCols = EFFECT_WINDOWS.map(
+    (_, i) =>
+      `count(*) filter (where x.user_created_at < x.ref and not x.had and x.first_after <= x.ref + ${win(i)})::int as c${i},\n` +
+      `      count(*) filter (where x.user_created_at < x.ref - ${win(i)} and not x.had_b${i})::int as be${i},\n` +
+      `      count(*) filter (where x.user_created_at < x.ref - ${win(i)} and not x.had_b${i} and x.did_b${i})::int as bc${i}`,
+  ).join(',\n      ')
+
+  const rows = await sql<EffectRow>(
+    `
+    with r as (
+      select n.user_id, n.channel, coalesce(n.sent_at, n.scheduled_at) as ref, u.created_at as user_created_at
+        from notifications n
+        join users u on u.id = n.user_id
+       where n.source_type = 'broadcast' and n.source_id = $1
+    ), x as (
+      select r.*, e.*
+        from r
+        cross join lateral (
+          select
+          coalesce(bool_or(ev.ts <= r.ref), false) as had,
+          min(ev.ts) filter (where ev.ts > r.ref) as first_after,
+          ${lateralCols}
+          from (
+          ${eventsSql(sources)}
+          ) ev
+        ) e
+    )
+    select
+      count(*)::int as reached,
+      count(*) filter (where x.user_created_at < x.ref)::int as existed,
+      count(*) filter (where x.user_created_at < x.ref and not x.had)::int as eligible,
+      ${countCols},
+      array_agg(distinct x.channel::text) filter (where x.channel is not null) as channels
+    from x
+    `,
+    [broadcastId, ...EFFECT_WINDOWS.map((w) => w.hours)],
+  )
+
+  const row = rows[0]
+  if (!row) return emptyEffect(true)
+
+  const converted = {} as Record<EffectWindowKey, number>
+  const baseline = {} as Record<EffectWindowKey, EffectBaseline>
+  EFFECT_WINDOWS.forEach((w, i) => {
+    converted[w.key] = toInt(row[`c${i}`])
+    baseline[w.key] = { eligible: toInt(row[`be${i}`]), converted: toInt(row[`bc${i}`]) }
+  })
+
+  return {
+    reached: toInt(row.reached),
+    existed: toInt(row.existed),
+    eligible: toInt(row.eligible),
+    converted,
+    baseline,
+    channels: [...(row.channels ?? [])].sort(),
+    available: true,
+  }
+}
+
+function emptyEffect(available: boolean): NotificationEffect {
+  const zero = { eligible: 0, converted: 0 }
+  return {
+    reached: 0,
+    existed: 0,
+    eligible: 0,
+    converted: { h24: 0, h72: 0, d7: 0 },
+    baseline: { h24: zero, h72: zero, d7: zero },
+    channels: [],
+    available,
+  }
 }
