@@ -66,7 +66,7 @@ function ApplicationsQueue() {
               to="/solicitudes/otros"
               className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
             >
-              Revisar rubros «Otro»
+              Revisar rubros «Otro» y servicios declarados
             </Link>
             <SsrTag>ssr: full + streaming</SsrTag>
           </>
