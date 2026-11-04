@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useRouter } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import { Check, List, Map as MapIcon, MapPin, MessageCircle, Save, Send, Sparkles } from 'lucide-react'
 import {
   addQuoteRequestInternalNoteFn,
@@ -525,7 +525,14 @@ function CandidateRow({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-medium">{c.name}</span>
+            {/* La ficha del proveedor en el admin, en el mismo lugar donde se decide a quién derivar. */}
+            <Link
+              to="/partners/$partnerId"
+              params={{ partnerId: c.id }}
+              className="font-medium text-brand hover:underline"
+            >
+              {c.name}
+            </Link>
             {c.tier === 'founding' ? (
               <Badge variant="outline" className="border-brand/30 bg-brand-soft text-brand">
                 Aliado

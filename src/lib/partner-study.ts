@@ -224,3 +224,143 @@ export function partnerMonthlyReport(row: PartnerStudyRow, month: string, peers:
   lines.push('', 'Cuanto más rápido respondés, más chances de que te elijan. ¡Gracias por estar en AutoLibre!')
   return lines.join('\n')
 }
+
+// ── Propuestas por rubro del pedido ──────────────────────────────────────────
+
+export interface RubroStudyRow {
+  /** `null` = pedidos sin rubro (ni del operador ni de la IA). */
+  slug: string | null
+  name: string
+  /** Pedidos distintos con al menos una propuesta en el período. */
+  requests: number
+  /** Propuestas (activas + retiradas), como «Enviadas» del ranking. */
+  proposals: number
+  selected: number
+  /** Cuántos de esos pedidos tienen el rubro sólo por la IA (no confirmado por el operador). */
+  fromAi: number
+}
+
+/**
+ * Propuestas del período agrupadas por el RUBRO DEL PEDIDO (no del proveedor).
+ *
+ * Un pedido con dos rubros cuenta en los dos: la suma de filas puede pasar el
+ * total, y la pantalla lo dice. Un pedido sin rubro va a una fila propia, nunca
+ * se descarta. Mismo corte de período que `studyRows` (fecha de la propuesta).
+ */
+export function proposalsByRubro(
+  facts: ReadonlyArray<ProposalFact>,
+  rubros: ReadonlyMap<string, { categorySlugs: ReadonlyArray<string>; source: 'operator' | 'ai' }>,
+  rubroNames: ReadonlyMap<string, string>,
+  range: StudyRange,
+): Array<RubroStudyRow> {
+  const acc = new Map<string | null, { requests: Set<string>; aiRequests: Set<string>; proposals: number; selected: number }>()
+  for (const f of facts) {
+    if (!inRange(f.createdAt, range)) continue
+    const r = rubros.get(f.quoteRequestId)
+    const slugs: Array<string | null> = r && r.categorySlugs.length > 0 ? [...r.categorySlugs] : [null]
+    for (const slug of slugs) {
+      const a = acc.get(slug) ?? { requests: new Set(), aiRequests: new Set(), proposals: 0, selected: 0 }
+      a.requests.add(f.quoteRequestId)
+      if (r?.source === 'ai') a.aiRequests.add(f.quoteRequestId)
+      a.proposals += 1
+      if (f.selected) a.selected += 1
+      acc.set(slug, a)
+    }
+  }
+  return [...acc.entries()]
+    .map(([slug, a]) => ({
+      slug,
+      name: slug === null ? 'Sin rubro' : (rubroNames.get(slug) ?? slug),
+      requests: a.requests.size,
+      proposals: a.proposals,
+      selected: a.selected,
+      fromAi: a.aiRequests.size,
+    }))
+    .sort((x, y) => (x.slug === null ? 1 : y.slug === null ? -1 : y.proposals - x.proposals || x.name.localeCompare(y.name, 'es')))
+}
+
+// ── Qué métrica depende de qué ───────────────────────────────────────────────
+
+export const STUDY_DEPENDENCIES = ['rubro', 'closure', 'budgetMigration'] as const
+export type StudyDependency = (typeof STUDY_DEPENDENCIES)[number]
+
+export const STUDY_DEPENDENCY_LABELS: Record<StudyDependency, string> = {
+  rubro: 'Rubro guardado en el pedido',
+  closure: 'Cierre «Contraté / No contraté»',
+  budgetMigration: 'Migración de presupuestos (tabla vieja → nueva)',
+}
+
+export type StudyMetricStatus = 'real' | 'partial' | 'blocked'
+
+/**
+ * Cada métrica del Estudio, su estado hoy y qué la frena. Lista CERRADA: es lo
+ * que se le muestra al equipo para decidir el orden del backend, no un cálculo.
+ * `blockedBy` vacío con estado `blocked` = la frena otra cosa (dicho en `note`).
+ */
+export const STUDY_METRIC_DEPENDENCIES: ReadonlyArray<{
+  metric: string
+  status: StudyMetricStatus
+  blockedBy: ReadonlyArray<StudyDependency>
+  note: string
+}> = [
+  {
+    metric: 'Propuestas enviadas, retiradas y elegidas',
+    status: 'partial',
+    blockedBy: ['budgetMigration'],
+    note: 'Reales desde el 27/10. Lo anterior vive en la tabla vieja de presupuestos y no se cuenta hasta migrarlo.',
+  },
+  {
+    metric: 'Mediana del tiempo de respuesta',
+    status: 'partial',
+    blockedBy: ['budgetMigration'],
+    note: 'Real desde el 27/10 (del alta del pedido a la propuesta).',
+  },
+  {
+    metric: 'Pedidos matcheados vs. propuestas (tasa de respuesta)',
+    status: 'blocked',
+    blockedBy: ['rubro'],
+    note: 'Falta registrar a qué proveedores se le ofreció cada pedido; el matcheo sale del rubro guardado.',
+  },
+  {
+    metric: 'Pedidos vencidos sin respuesta',
+    status: 'blocked',
+    blockedBy: ['rubro'],
+    note: 'Necesita el matcheo (a quién se le ofreció) y la hora de vencimiento del pedido (72 h, sin expires_at).',
+  },
+  {
+    metric: 'Propuestas por rubro',
+    status: 'partial',
+    blockedBy: ['rubro'],
+    note: 'Se muestra con el rubro que guardó el operador o, si no hay, el que sugirió la IA. Los pedidos sin ninguno van aparte.',
+  },
+  {
+    metric: 'Propuestas por canal',
+    status: 'real',
+    blockedBy: [],
+    note: 'El canal de entrada del pedido.',
+  },
+  {
+    metric: 'Propuestas por urgencia',
+    status: 'blocked',
+    blockedBy: [],
+    note: 'El pedido no guarda urgencia en ningún lado.',
+  },
+  {
+    metric: 'Elegidas / no elegidas / sin decisión',
+    status: 'partial',
+    blockedBy: ['closure'],
+    note: 'La elección en la app es real; si después contrató a ese proveedor, a otro o a nadie, no.',
+  },
+  {
+    metric: 'Confirmados y disputas',
+    status: 'blocked',
+    blockedBy: ['closure'],
+    note: 'Salen de la declaración de cierre y de la respuesta del proveedor.',
+  },
+  {
+    metric: 'Clics de perfil y reseñas',
+    status: 'blocked',
+    blockedBy: [],
+    note: 'No hay evento de vista ni de clic del perfil público, ni tabla de reseñas.',
+  },
+]

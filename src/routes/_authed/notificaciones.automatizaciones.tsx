@@ -22,6 +22,10 @@ import {
   AUTOMATION_CHANNEL_BLOCKERS,
   AUTOMATION_CHANNEL_LABELS,
   AUTOMATION_VARIABLES,
+  QUOTE_PROPOSAL_CAP,
+  QUOTE_PROPOSAL_CAP_EXTENDED,
+  QUOTE_PROPOSAL_ORDINALS,
+  QUOTE_REQUEST_LIFETIME_HOURS,
   QUOTE_TRIGGERS,
   QUOTE_TRIGGER_LABELS,
   automationIssues,
@@ -35,8 +39,17 @@ import type {
   AutomationChannel,
   AutomationInput,
   AutomationTrigger,
+  QuoteProposalOrdinal,
   QuoteTrigger,
 } from '~/lib/notification-automations'
+
+const ORDINAL_LABELS: Record<QuoteProposalOrdinal, string> = {
+  1: 'Primera propuesta',
+  2: 'Segunda propuesta',
+  3: 'Tercera propuesta (tope)',
+  4: 'Cuarta (sólo con tope extendido)',
+  5: 'Quinta (sólo con tope extendido)',
+}
 
 /**
  * Automatizaciones por evento del pedido, con canal.
@@ -111,6 +124,18 @@ function AutomationsPage() {
         . Las marcadas «Plantilla» son el seguimiento de pedidos abiertos: vienen pausadas y con un texto
         borrador para revisar, y avisan por el canal que eligió la persona al crear el pedido.
       </p>
+
+      <div className="mb-4 max-w-3xl rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">Reglas del pedido que respetan los disparadores</p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          <li>Un pedido dura {QUOTE_REQUEST_LIFETIME_HOURS} h abierto: ningún aviso de horas puede pasarse de eso.</li>
+          <li>
+            Recibe hasta {QUOTE_PROPOSAL_CAP} propuestas. Sube a {QUOTE_PROPOSAL_CAP_EXTENDED} sólo si la 4ª y la 5ª son
+            de un Aliado o de su taller de cabecera.
+          </li>
+          <li>Se extiende sólo si la persona lo confirma: el aviso de extensión pregunta, no extiende.</li>
+        </ul>
+      </div>
 
       {items === null ? (
         <p className="text-sm text-muted-foreground">Cargando…</p>
@@ -218,6 +243,8 @@ function defaultTrigger(kind: QuoteTrigger): AutomationTrigger {
       return { kind, ordinal: 1 }
     case 'hours_left':
       return { kind, hoursLeft: 12 }
+    case 'extension_offer':
+      return { kind, hoursLeft: 6 }
     case 'proposals_unviewed':
       return { kind, afterHours: 24 }
   }
@@ -295,25 +322,35 @@ function AutomationEditor({
               {t.kind === 'proposal_received' ? (
                 <Select
                   value={String(t.ordinal)}
-                  onValueChange={(v) => set({ trigger: { kind: 'proposal_received', ordinal: Number(v) as 1 | 2 | 3 } })}
+                  onValueChange={(v) =>
+                    set({ trigger: { kind: 'proposal_received', ordinal: Number(v) as QuoteProposalOrdinal } })
+                  }
                 >
                   <SelectTrigger className="mt-2 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1">Primera propuesta</SelectItem>
-                    <SelectItem value="2">Segunda propuesta</SelectItem>
-                    <SelectItem value="3">Tercera propuesta</SelectItem>
+                    {QUOTE_PROPOSAL_ORDINALS.map((o) => (
+                      <SelectItem key={o} value={String(o)}>
+                        {ORDINAL_LABELS[o]}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               ) : (
                 <HoursInput
-                  label={t.kind === 'hours_left' ? 'Horas que le quedan al pedido' : 'Horas después'}
-                  value={t.kind === 'hours_left' ? t.hoursLeft : t.afterHours}
+                  label={
+                    t.kind === 'hours_left' || t.kind === 'extension_offer'
+                      ? 'Horas que le quedan al pedido'
+                      : 'Horas después'
+                  }
+                  value={t.kind === 'hours_left' || t.kind === 'extension_offer' ? t.hoursLeft : t.afterHours}
                   onChange={(n) =>
                     set({
                       trigger:
-                        t.kind === 'hours_left' ? { kind: 'hours_left', hoursLeft: n } : { kind: t.kind, afterHours: n },
+                        t.kind === 'hours_left' || t.kind === 'extension_offer'
+                          ? { kind: t.kind, hoursLeft: n }
+                          : { kind: t.kind, afterHours: n },
                     })
                   }
                 />

@@ -9,6 +9,7 @@ import {
   markQuoteRequestAnsweredSchema,
   markQuoteRequestContactedSchema,
   quoteRequestIdSchema,
+  quoteRequestRubrosInputSchema,
   quoteRequestSearchSchema,
   setQuoteRequestRubrosSchema,
   updateQuoteRequestSchema,
@@ -18,6 +19,7 @@ import {
   closeQuoteRequest,
   createQuoteRequest,
   findQuoteRequestDetail,
+  listQuoteRequestRubros,
   listQuoteRequests,
   markQuoteRequestAnswered,
   markQuoteRequestContacted,
@@ -35,6 +37,7 @@ import { adminMiddleware } from './middleware'
 import type {
   QuoteGeocodeOutcome,
   QuoteRequestDetailResult,
+  QuoteRequestRubros,
   QuoteRequestSeries,
   QuoteRequestWriteResult,
   QuoteRequestsListResult,
@@ -91,6 +94,20 @@ export const getQuoteRequestSeriesFn = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<QuoteRequestSeries> =>
     quoteRequestSeries(data.unit, { signal: requestSignal() }),
   )
+
+/**
+ * El rubro de cada pedido, para «Propuestas por rubro» del Estudio de
+ * proveedores. Sólo slugs y la fuente (operador o IA). → `listQuoteRequestRubros`
+ */
+export const listQuoteRequestRubrosFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(quoteRequestRubrosInputSchema)
+  .handler(async ({ data }): Promise<Array<QuoteRequestRubros>> => {
+    const signal = requestSignal()
+    const availability = await quoteRequestsAvailability({ signal })
+    if (!availability.available) return []
+    return listQuoteRequestRubros(data.quoteRequestIds, { signal })
+  })
 
 export const getQuoteRequestFn = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])

@@ -3,7 +3,7 @@ import { Copy, FileText } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getServiceCatalog, listMarketplacePartners, listPartnerZonesFn } from '~/fn/partners'
-import { listQuoteRequestsFn } from '~/fn/quote-requests'
+import { listQuoteRequestRubrosFn, listQuoteRequestsFn } from '~/fn/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MockBanner } from '~/components/MockBanner'
 import { MultiSelect } from '~/components/MultiSelect'
@@ -35,7 +35,10 @@ import {
   monthRange,
   northStar,
   partnerMonthlyReport,
+  STUDY_DEPENDENCY_LABELS,
+  STUDY_METRIC_DEPENDENCIES,
   partnerStudySearchSchema,
+  proposalsByRubro,
   studyRows,
 } from '~/lib/partner-study'
 import { quoteChannelLabel } from '~/lib/quote-requests'
@@ -71,6 +74,10 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
             .filter((r) => r.status !== 'closed' || (r.closedAt ?? '') >= PROPOSAL_COUNT_START)
             .map((r) => ({ id: r.id, createdAt: r.createdAt, channel: r.channel }))
         : null
+    // El rubro de cada pedido (operador > IA). Sólo slugs: nada de la persona.
+    const rubrosByRequest = requests
+      ? await listQuoteRequestRubrosFn({ data: { quoteRequestIds: requests.map((r) => r.id) }, signal })
+      : []
     const refs: Array<StudyPartnerRef> = partners.map((p) => ({
       id: p.id,
       name: p.name,
@@ -84,6 +91,7 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
       partners: refs,
       zones,
       rubros: catalog.map((f) => ({ slug: f.slug, name: f.name })),
+      rubrosByRequest,
     }
   },
   head: () => ({ meta: [{ title: 'Partners · Estudio — AutoLibre' }] }),
@@ -93,7 +101,7 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
 const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v)} %`)
 
 function PartnerStudy() {
-  const { requests, partners, zones, rubros } = Route.useLoaderData()
+  const { requests, partners, zones, rubros, rubrosByRequest } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
@@ -106,6 +114,16 @@ function PartnerStudy() {
   const range = lastDaysRange(search.studyPeriod, now)
   const allRows = useMemo(() => studyRows(load.facts, partners, plans, range), [load.facts, partners, plans, range.from])
   const star = useMemo(() => northStar(load.facts, range), [load.facts, range.from])
+  const byRubro = useMemo(
+    () =>
+      proposalsByRubro(
+        load.facts,
+        new Map(rubrosByRequest.map((r) => [r.quoteRequestId, r])),
+        new Map(rubros.map((r) => [r.slug, r.name])),
+        range,
+      ),
+    [load.facts, rubrosByRequest, rubros, range.from],
+  )
 
   const rows = allRows.filter(
     (r) =>
@@ -139,7 +157,7 @@ function PartnerStudy() {
         items={[
           'Propuestas, elegidas, sin decisión, tiempo de respuesta, canal, dormidos y el «3 en menos de 1 h» son reales.',
           'Matcheados, tasa de respuesta, vencidos sin respuesta, confirmaciones, disputas, motivos de «no contraté», vistas y clics son de ejemplo (en cursiva). El plan también.',
-          'Propuestas por rubro y por urgencia no se muestran: el pedido no guarda urgencia, y el rubro del pedido no viene en el listado.',
+          'Propuestas por rubro usa el rubro que guardó el operador o, si no hay, el que sugirió la IA. Por urgencia no se puede: el pedido no la guarda.',
         ]}
       />
 
@@ -235,6 +253,88 @@ function PartnerStudy() {
           </TableBody>
         </Table>
       </div>
+
+      <section className="mb-8">
+        <h2 className="mb-2 font-heading text-base font-semibold">Propuestas por rubro del pedido</h2>
+        <p className="mb-3 max-w-3xl text-sm text-muted-foreground">
+          Últimos {search.studyPeriod} días, todos los proveedores (los filtros de arriba no aplican acá). Un pedido con
+          dos rubros cuenta en los dos, así que la suma puede pasar el total. «Por IA» = pedidos cuyo rubro sólo lo
+          sugirió el clasificador del backend y nadie lo confirmó.
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-border bg-card">
+          <Table className="min-w-[560px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Rubro</TableHead>
+                <TableHead className="text-right">Pedidos</TableHead>
+                <TableHead className="text-right">Propuestas</TableHead>
+                <TableHead className="text-right">Elegidas</TableHead>
+                <TableHead className="text-right">Por IA</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {byRubro.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                    {load.loading ? 'Cargando propuestas…' : 'Sin propuestas en este período.'}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                byRubro.map((r) => (
+                  <TableRow key={r.slug ?? 'sin-rubro'}>
+                    <TableCell className={cn(r.slug === null && 'text-muted-foreground')}>{r.name}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(r.requests)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(r.proposals)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(r.selected)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {r.slug === null ? '—' : formatInt(r.fromAi)}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="mb-2 font-heading text-base font-semibold">Qué falta para cada métrica</h2>
+        <div className="overflow-x-auto rounded-lg border border-border bg-card">
+          <Table className="min-w-[860px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Métrica</TableHead>
+                <TableHead>Hoy</TableHead>
+                <TableHead>La frena</TableHead>
+                <TableHead>Detalle</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {STUDY_METRIC_DEPENDENCIES.map((m) => (
+                <TableRow key={m.metric}>
+                  <TableCell className="text-sm font-medium">{m.metric}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        m.status === 'real' && 'border-status-green/30 bg-status-green-bg text-status-green',
+                        m.status === 'partial' && 'border-status-yellow/30 bg-status-yellow-bg text-status-yellow',
+                        m.status === 'blocked' && 'border-status-red/30 bg-status-red-bg text-status-red',
+                      )}
+                    >
+                      {m.status === 'real' ? 'Real' : m.status === 'partial' ? 'Parcial' : 'Bloqueada'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {m.blockedBy.length === 0 ? '—' : m.blockedBy.map((d) => STUDY_DEPENDENCY_LABELS[d]).join(' · ')}
+                  </TableCell>
+                  <TableCell className="max-w-md text-xs text-muted-foreground">{m.note}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
 
       <section>
         <h2 className="mb-2 font-heading text-base font-semibold">Proveedores dormidos ({formatInt(dormant.length)})</h2>
