@@ -3,6 +3,22 @@
 Versión 6 — 2026-11-02. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado) y las decisiones del 02/11/26 sobre propuestas y planes aplicadas (lista de cambios al final). Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
+> **Desde el 2026-11-03 cada pedido vive también en su archivo**, con qué hay hoy, qué falta con
+> campos exactos, permisos y criterio de listo — es lo que se manda a Ramiro:
+> `pedido-backend-notificaciones.md` (configurar, seguimiento, efecto, deep link, límite de 500) ·
+> `pedido-backend-rubros-otro.md` · `pedido-backend-asignar-pedido.md` ·
+> `pedido-backend-estudio-proveedores.md` (incluye la migración de presupuestos) ·
+> `pedido-backend-cierre-y-disputas.md` · `pedido-backend-sellos.md` ·
+> `pedido-backend-plan-proveedor.md` · `pedido-backend-aperturas.md` ·
+> `pedido-backend-cambios-normativos.md` · `pedido-backend-rol-comercial.md` (nuevo: el panel no
+> tiene un rol restringido) · `pedido-backend-cobertura.md` (sin cambios, sigue vigente).
+> Donde este archivo y esos difieran, mandan esos: son posteriores.
+>
+> Cambios del 03/11 que este archivo todavía no refleja abajo: el **efecto de cada notificación es
+> real** (sólo falta guardar la acción objetivo); `/solicitudes/otros` marca también servicios en
+> texto libre y cantidades anómalas; el Estudio muestra propuestas por rubro del pedido; la ficha y
+> el listado de proveedores tienen el link al perfil público (`/proveedores/<slug>`, no `/p/`).
+
 **Cómo leer esto**
 
 - "Backend" en este documento es todo lo que el front del admin no puede tocar: endpoints del
