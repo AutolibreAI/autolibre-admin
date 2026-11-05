@@ -30,6 +30,7 @@ import {
   type UpdateQuoteRequestInput,
 } from '~/lib/quote-requests'
 import type { QuoteVehicleProfile } from '~/lib/quote-vehicle-profile'
+import type { QuoteRequestRubros } from '~/lib/quote-requests'
 
 /**
  * Pedidos de presupuesto.
@@ -1547,4 +1548,63 @@ export async function findQuoteVehicleProfile(
     dtcScannedAt: row?.lds_vehicle_id ? toIso(row.dtc_scanned_at) : null,
     tasks: taskRows.map(mapTaskRow),
   }
+}
+
+// ── Rubro de cada pedido, para el Estudio de proveedores ─────────────────────
+
+/**
+ * Los rubros (`service_categories.slug`) de cada pedido pedido, con su fuente.
+ *
+ * Misma precedencia que `PartnerCandidates` (`.claude/rules/leads.md`,
+ * clasificación por IA): lo que guardó el OPERADOR en `ops.quote_request_rubro`
+ * (016) gana; si no hay, las categorías de los servicios que sugirió el
+ * clasificador del backend (`quote_request_services`, 0124). Un pedido sin
+ * ninguna de las dos no aparece en el resultado: es «sin rubro».
+ *
+ * Las dos tablas tienen guard propio (`to_regclass`): una base sin la 016 o sin
+ * la 0124 devuelve lo que pueda, nunca un 500. Sólo slugs: ni descripción ni
+ * datos de la persona.
+ */
+export async function listQuoteRequestRubros(
+  quoteRequestIds: ReadonlyArray<string>,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<QuoteRequestRubros>> {
+  void opts.signal
+  if (quoteRequestIds.length === 0) return []
+
+  const guard = await sqlOne<{ ops: boolean; ai: boolean }>(
+    `select to_regclass('ops.quote_request_rubro') is not null as ops,
+            to_regclass('public.quote_request_services') is not null as ai`,
+  )
+  const byRequest = new Map<string, QuoteRequestRubros>()
+
+  if (guard?.ops) {
+    const rows = await sql<{ quote_request_id: string; slugs: Array<string> }>(
+      `select r.quote_request_id, array_agg(distinct r.category_slug order by r.category_slug) as slugs
+         from ops.quote_request_rubro r
+        where r.quote_request_id = any($1::uuid[])
+        group by r.quote_request_id`,
+      [quoteRequestIds],
+    )
+    for (const r of rows) byRequest.set(r.quote_request_id, { quoteRequestId: r.quote_request_id, categorySlugs: r.slugs, source: 'operator' })
+  }
+
+  if (guard?.ai) {
+    const rows = await sql<{ quote_request_id: string; slugs: Array<string> }>(
+      `select qs.quote_request_id, array_agg(distinct sc.slug order by sc.slug) as slugs
+         from quote_request_services qs
+         join services s on s.id = qs.service_id
+         join service_categories sc on sc.id = s.category_id
+        where qs.quote_request_id = any($1::uuid[])
+        group by qs.quote_request_id`,
+      [quoteRequestIds],
+    )
+    for (const r of rows) {
+      if (!byRequest.has(r.quote_request_id)) {
+        byRequest.set(r.quote_request_id, { quoteRequestId: r.quote_request_id, categorySlugs: r.slugs, source: 'ai' })
+      }
+    }
+  }
+
+  return [...byRequest.values()]
 }

@@ -22,10 +22,14 @@ import {
   unmarkServiceOtherReviewedMock,
 } from '~/mocks/service-other-review'
 import { formatDate, formatDateTime } from '~/lib/format'
-import { serviceOtherReviewSearchSchema } from '~/lib/service-other-review'
+import {
+  SERVICE_OTHER_SIGNAL_LABELS,
+  isAnomalousDeclaredCount,
+  serviceOtherReviewSearchSchema,
+} from '~/lib/service-other-review'
 import type { ServiceFamily } from '~/lib/catalog'
 import type { ApplicationStatus } from '~/lib/partners'
-import type { ServiceOtherReview, ServiceOtherRow } from '~/lib/service-other-review'
+import type { ServiceOtherReview, ServiceOtherRow, ServiceOtherSignalFilter } from '~/lib/service-other-review'
 
 /**
  * Revisión de los rubros "Otro" que declaran los proveedores al anotarse.
@@ -39,9 +43,13 @@ import type { ServiceOtherReview, ServiceOtherRow } from '~/lib/service-other-re
  * Lo que NO puede todavía, y lo dice: crear un servicio nuevo en el catálogo
  * (no hay endpoint) y guardar "revisado" (no hay columna; `~/mocks`).
  *
- * SSR completo: son una docena de solicitudes. El loader lee la cola, se queda
- * con las que declararon "otros" (`declaredOther`, que también se prende por
- * "cómo nos conoció"), y pide el detalle de cada una para el texto y el partner.
+ * Desde el 2026-11-03 también entran las que declararon servicios en texto
+ * libre (`resolved.unknownSlugs`) o una cantidad anómala de servicios
+ * (`isAnomalousDeclaredCount`), con un filtro por señal.
+ *
+ * SSR completo: son un par de docenas de solicitudes. El loader lee la cola, se
+ * queda con las que tienen alguna señal, y pide el detalle de cada una para el
+ * texto de «Otro» y el partner.
  */
 export const Route = createFileRoute('/_authed/solicitudes/otros')({
   validateSearch: serviceOtherReviewSearchSchema,
@@ -51,14 +59,34 @@ export const Route = createFileRoute('/_authed/solicitudes/otros')({
       listPartnerApplications({ data: { published: 'show' }, signal }),
       getServiceCatalog({ signal }),
     ])
+    const activeServiceCount = catalog.reduce((n, f) => n + f.services.length, 0)
+    const signals = new Map(
+      applications.map((a) => [
+        a.id,
+        {
+          freeTextServices: a.resolved.unknownSlugs,
+          declaredCount: a.declaredServices.length,
+          anomalous: isAnomalousDeclaredCount(a.declaredServices.length, activeServiceCount),
+        },
+      ]),
+    )
+    const signalsOf = (id: string) =>
+      signals.get(id) ?? { freeTextServices: [], declaredCount: 0, anomalous: false }
+    // `declaredOther` también se prende por «cómo nos conoció»: el texto real de
+    // «Otro» se confirma con el detalle, más abajo.
+    const flagged = applications.filter((a) => {
+      const sig = signalsOf(a.id)
+      return a.declaredOther || sig.freeTextServices.length > 0 || sig.anomalous
+    })
     const details = await Promise.all(
-      applications
-        .filter((a) => a.declaredOther)
-        .map((a) => getPartnerApplication({ data: { applicationId: a.id }, signal })),
+      flagged.map((a) => getPartnerApplication({ data: { applicationId: a.id }, signal })),
     )
     const rows: Array<ServiceOtherRow> = await Promise.all(
       details
-        .filter((d) => (d.serviceOther ?? '').trim() !== '')
+        .filter((d) => {
+          const sig = signalsOf(d.id)
+          return (d.serviceOther ?? '').trim() !== '' || sig.freeTextServices.length > 0 || sig.anomalous
+        })
         .map(async (d) => {
           const view = d.partner
             ? await getPartnerServicesView({ data: { partnerId: d.partner.id }, signal })
@@ -72,6 +100,7 @@ export const Route = createFileRoute('/_authed/solicitudes/otros')({
             // normaliza acá: el tipo mentía y `localeCompare` reventaba.
             createdAt: new Date(d.createdAt).toISOString(),
             serviceOther: (d.serviceOther ?? '').trim(),
+            ...signalsOf(d.id),
             partner:
               d.partner && view
                 ? { id: d.partner.id, name: d.partner.name, assignedServiceIds: view.assignedServiceIds }
@@ -80,14 +109,14 @@ export const Route = createFileRoute('/_authed/solicitudes/otros')({
         }),
     )
     rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    return { rows, catalog }
+    return { rows, catalog, activeServiceCount }
   },
   head: () => ({ meta: [{ title: 'Solicitudes · Rubros «Otro» — AutoLibre' }] }),
   component: ServiceOtherReviewPage,
 })
 
 function ServiceOtherReviewPage() {
-  const { rows, catalog } = Route.useLoaderData()
+  const { rows, catalog, activeServiceCount } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -96,8 +125,10 @@ function ServiceOtherReviewPage() {
     void fetchServiceOtherReviewsMock().then(setReviews)
   }, [])
 
-  const pending = rows.filter((r) => !reviews.has(r.applicationId))
-  const visible = search.serviceOtherReview === 'pending' ? pending : rows
+  const bySignal = rows.filter((r) => hasSignal(r, search.serviceOtherSignal))
+  const pending = bySignal.filter((r) => !reviews.has(r.applicationId))
+  const visible = search.serviceOtherReview === 'pending' ? pending : bySignal
+  const signalCount = (f: ServiceOtherSignalFilter) => rows.filter((r) => hasSignal(r, f)).length
 
   const serviceName = useMemo(() => {
     const m = new Map<string, string>()
@@ -116,8 +147,8 @@ function ServiceOtherReviewPage() {
       </Link>
 
       <PageHeader
-        title="Rubros «Otro» declarados"
-        subtitle={`${rows.length} solicitudes con texto en «Otro» · ${pending.length} sin revisar`}
+        title="Rubros «Otro» y servicios declarados"
+        subtitle={`${rows.length} solicitudes para revisar · ${signalCount('other')} con «Otro» · ${signalCount('freeText')} con texto libre · ${signalCount('anomalous')} con cantidad anómala`}
         actions={<SsrTag>ssr: full</SsrTag>}
       />
 
@@ -126,29 +157,47 @@ function ServiceOtherReviewPage() {
           'La marca «Revisado» y su nota son de ejemplo: no se guardan y se pierden al recargar. Falta la columna en la base.',
           'Asignar servicios SÍ es real: guarda en el partner, igual que el editor de su ficha.',
           'Crear un servicio nuevo en el catálogo no se puede todavía desde el panel.',
+          `«Cantidad anómala» = declaró más de la mitad de los ${activeServiceCount} servicios activos del catálogo.`,
         ]}
       />
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap gap-x-6 gap-y-3">
+        <FilterGroup label="Señal">
+          <Chip
+            active={search.serviceOtherSignal === 'all'}
+            onClick={() => navigate({ search: (prev) => ({ ...prev, serviceOtherSignal: 'all' }), replace: true })}
+          >
+            Todas ({rows.length})
+          </Chip>
+          {SIGNAL_KEYS.map((k) => (
+            <Chip
+              key={k}
+              active={search.serviceOtherSignal === k}
+              onClick={() => navigate({ search: (prev) => ({ ...prev, serviceOtherSignal: k }), replace: true })}
+            >
+              {SERVICE_OTHER_SIGNAL_LABELS[k]} ({signalCount(k)})
+            </Chip>
+          ))}
+        </FilterGroup>
         <FilterGroup label="Revisión">
           <Chip
             active={search.serviceOtherReview === 'pending'}
-            onClick={() => navigate({ search: { serviceOtherReview: 'pending' }, replace: true })}
+            onClick={() => navigate({ search: (prev) => ({ ...prev, serviceOtherReview: 'pending' }), replace: true })}
           >
             Sin revisar ({pending.length})
           </Chip>
           <Chip
             active={search.serviceOtherReview === 'all'}
-            onClick={() => navigate({ search: { serviceOtherReview: 'all' }, replace: true })}
+            onClick={() => navigate({ search: (prev) => ({ ...prev, serviceOtherReview: 'all' }), replace: true })}
           >
-            Todas ({rows.length})
+            Todas ({bySignal.length})
           </Chip>
         </FilterGroup>
       </div>
 
       {visible.length === 0 ? (
         <div className="rounded-lg border border-border bg-card py-16 text-center text-sm text-muted-foreground">
-          {rows.length === 0 ? 'Ninguna solicitud declaró algo en «Otro».' : 'No queda nada sin revisar.'}
+          {bySignal.length === 0 ? 'Ninguna solicitud tiene esta señal.' : 'No queda nada sin revisar.'}
         </div>
       ) : (
         <div className="space-y-3">
@@ -250,10 +299,40 @@ function ReviewCard({
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Declaró en «Otro»</p>
-          <blockquote className="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm whitespace-pre-wrap">
-            {row.serviceOther}
-          </blockquote>
+          {row.serviceOther ? (
+            <>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Declaró en «Otro»</p>
+              <blockquote className="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm whitespace-pre-wrap">
+                {row.serviceOther}
+              </blockquote>
+            </>
+          ) : null}
+          {row.freeTextServices.length > 0 ? (
+            <div className="space-y-1">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Servicios en texto libre
+              </p>
+              <ul className="flex flex-wrap gap-1.5">
+                {row.freeTextServices.map((t) => (
+                  <li
+                    key={t}
+                    className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-2 py-0.5 text-xs text-status-yellow"
+                  >
+                    {t}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground">
+                No es un servicio ni una familia activa del catálogo: al aprobar no se cargó nada por esto.
+              </p>
+            </div>
+          ) : null}
+          {row.anomalous ? (
+            <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-sm text-status-yellow">
+              Declaró {row.declaredCount} servicios: más de la mitad del catálogo. Probablemente tildó todo;
+              conviene confirmar con el proveedor qué hace de verdad.
+            </p>
+          ) : null}
 
           {review ? (
             <div className="rounded-md border border-status-green/30 bg-status-green-bg px-3 py-2 text-sm text-status-green">
@@ -348,4 +427,13 @@ function ReviewCard({
       </CardContent>
     </Card>
   )
+}
+
+const SIGNAL_KEYS = Object.keys(SERVICE_OTHER_SIGNAL_LABELS) as Array<keyof typeof SERVICE_OTHER_SIGNAL_LABELS>
+
+function hasSignal(row: ServiceOtherRow, f: ServiceOtherSignalFilter): boolean {
+  if (f === 'other') return row.serviceOther !== ''
+  if (f === 'freeText') return row.freeTextServices.length > 0
+  if (f === 'anomalous') return row.anomalous
+  return true
 }

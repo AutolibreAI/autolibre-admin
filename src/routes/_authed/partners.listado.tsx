@@ -22,6 +22,7 @@ import {
 } from '~/components/ui/table'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
+import { PublicProfileIcon } from '~/components/PublicProfileLink'
 import type { PartnerListItem } from '~/lib/catalog'
 
 const TO = '/partners/listado'
@@ -345,13 +346,16 @@ function Row({
   return (
     <TableRow className={cn(partner.invisible && 'bg-status-red-bg/40')}>
       <TableCell>
-        <Link
-          to="/partners/$partnerId"
-          params={{ partnerId: partner.id }}
-          className="font-medium hover:text-brand hover:underline"
-        >
-          {partner.name}
-        </Link>
+        <span className="inline-flex items-center gap-1.5">
+          <Link
+            to="/partners/$partnerId"
+            params={{ partnerId: partner.id }}
+            className="font-medium hover:text-brand hover:underline"
+          >
+            {partner.name}
+          </Link>
+          <PublicProfileIcon status={partner.status} slug={partner.publicSlug} />
+        </span>
       </TableCell>
       <TableCell className="text-muted-foreground">{partner.coverageZone}</TableCell>
       <TableCell>

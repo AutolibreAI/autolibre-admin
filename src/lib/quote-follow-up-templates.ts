@@ -59,7 +59,7 @@ export const QUOTE_FOLLOW_UP_TEMPLATES: ReadonlyArray<FollowUpTemplate> = [
       name: 'Tercera propuesta recibida',
       trigger: { kind: 'proposal_received', ordinal: 3 },
       title: 'Ya tenés 3 propuestas',
-      body: 'Tu pedido {{codigo}} ya tiene 3 propuestas. Elegí la tuya desde la app.',
+      body: 'Tu pedido {{codigo}} ya tiene 3 propuestas, el máximo. Elegí la tuya desde la app.',
     },
   },
   {
@@ -70,6 +70,16 @@ export const QUOTE_FOLLOW_UP_TEMPLATES: ReadonlyArray<FollowUpTemplate> = [
       trigger: { kind: 'hours_left', hoursLeft: 12 },
       title: 'Tu pedido vence pronto',
       body: 'Quedan {{horas_restantes}} h para elegir entre las {{propuestas}} propuestas de tu pedido {{codigo}}.',
+    },
+  },
+  {
+    key: 'extension_offer',
+    input: {
+      ...base,
+      name: 'Ofrecer extender la búsqueda',
+      trigger: { kind: 'extension_offer', hoursLeft: 6 },
+      title: 'Tu pedido está por vencer',
+      body: 'Quedan {{horas_restantes}} h de tu pedido {{codigo}}. ¿Querés que sigamos buscando proveedores? Confirmalo desde la app.',
     },
   },
   {

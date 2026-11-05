@@ -1073,3 +1073,20 @@ export type QuoteRequestSeries =
 export function whatsappOptInLabel(v: boolean | null): string {
   return v === null ? 'sin dato' : v ? 'Sí' : 'No'
 }
+
+// ── Rubro de cada pedido (Estudio de proveedores) ────────────────────────────
+
+/** De dónde salió el rubro: lo que guardó el operador, o lo que sugirió la IA del backend. */
+export type QuoteRubroSource = 'operator' | 'ai'
+
+export interface QuoteRequestRubros {
+  quoteRequestId: string
+  /** `service_categories.slug`: el «rubro» de la UI. */
+  categorySlugs: Array<string>
+  source: QuoteRubroSource
+}
+
+/** POST: la lista de ids no entra en una query string. Tope holgado sobre los pedidos reales (~50 al 03/11). */
+export const quoteRequestRubrosInputSchema = z.object({
+  quoteRequestIds: z.array(z.uuid()).max(2000),
+})

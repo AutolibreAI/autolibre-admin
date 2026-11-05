@@ -365,6 +365,27 @@ export function partnerProfileUrl(slug: string): string {
   return `${PUBLIC_SITE_ORIGIN}/proveedores/${encodeURIComponent(slug)}`
 }
 
+/**
+ * El perfil público de un proveedor, o por qué no tiene.
+ *
+ * La URL es `/proveedores/<slug>`, NO `/p/<slug>` como decía la tarjeta de
+ * Trello: verificado el 2026-11-03, `autolibre.ai/proveedores/grubi` da 200 y
+ * `autolibre.ai/p/grubi` da 404.
+ *
+ * La web publica sólo los `active` (por eso el mensaje de WhatsApp tampoco
+ * linkea a un pausado). Un link a un perfil que da 404 es peor que decir que
+ * no hay: la ficha muestra el motivo, nunca un link roto.
+ */
+export type PublicProfile = { url: string } | { url: null; reason: string }
+
+export function publicProfile(status: string, slug: string | null): PublicProfile {
+  if (status !== 'active') {
+    return { url: null, reason: status === 'paused' ? 'pausado, la web no lo publica' : 'archivado, la web no lo publica' }
+  }
+  if (!slug) return { url: null, reason: 'todavía no tiene dirección asignada' }
+  return { url: partnerProfileUrl(slug) }
+}
+
 /** Sólo los dígitos, si el número YA está en la forma canónica. `null` si no se puede confiar. */
 export function canonicalWhatsAppDigits(phone: string): string | null {
   const digits = phone.replace(/\D/g, '')

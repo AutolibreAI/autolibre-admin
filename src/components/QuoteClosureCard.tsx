@@ -64,7 +64,20 @@ export function QuoteClosureCard({
             ) : null}
           </Item>
           <Item label="Propuesta elegida">
-            {selected ? selected.providerName : <span className="text-muted-foreground">ninguna</span>}
+            {!selected ? (
+              <span className="text-muted-foreground">ninguna</span>
+            ) : selected.partnerId ? (
+              <Link
+                to="/partners/$partnerId"
+                params={{ partnerId: selected.partnerId }}
+                className="text-brand hover:underline"
+              >
+                {selected.providerName}
+              </Link>
+            ) : (
+              // Un taller de afuera del directorio no tiene ficha: va el nombre solo.
+              selected.providerName
+            )}
           </Item>
           <Item label="Con quién contrató">
             {closure?.hiredWith ? `${HIRED_WITH_LABELS[closure.hiredWith]}: ${closure.providerName ?? '—'}` : missing}

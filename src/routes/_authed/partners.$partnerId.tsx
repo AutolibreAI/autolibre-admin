@@ -4,6 +4,7 @@ import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { listPartnerClaimCodesFn, listPartnerMembersFn } from '~/fn/partner-members'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
+import { PublicProfileLink } from '~/components/PublicProfileLink'
 import { PartnerFicha } from '~/components/PartnerFicha'
 import { PartnerSealsCard } from '~/components/PartnerSeals'
 import { PartnerMembersCard } from '~/components/PartnerMembersCard'
@@ -121,6 +122,7 @@ function PartnerServicesEditor() {
         subtitle={view.partner.coverageZone}
         actions={<SsrTag>ssr: full</SsrTag>}
       />
+      <PublicProfileLink status={view.partner.status} slug={view.partner.publicSlug} className="-mt-3 mb-4" />
 
       {wouldBeInvisible ? (
         <Alert className="mb-4 border-status-red/25 bg-status-red-bg">

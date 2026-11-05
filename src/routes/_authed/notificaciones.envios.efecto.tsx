@@ -1,7 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { listNotificationCampaigns } from '~/fn/notifications'
+import { getNotificationEffect, listNotificationCampaigns } from '~/fn/notifications'
 import { MockBanner } from '~/components/MockBanner'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
@@ -13,12 +13,13 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
-import { fetchNotificationEffectMock } from '~/mocks/notification-effect'
 import { formatDateTime, formatInt } from '~/lib/format'
 import {
   EFFECT_ACTIONS,
   EFFECT_ACTION_LABELS,
   EFFECT_WINDOWS,
+  audienceLooksSelectedByAction,
+  effectChannelLabel,
   lift,
   rate,
   windowClosed,
@@ -29,12 +30,15 @@ import type { EffectAction, NotificationEffect } from '~/lib/notification-effect
 
 /**
  * Efecto de cada envío: conversión a 24 h / 72 h / 7 días a una acción
- * objetivo, contra la misma audiencia en el período anterior.
+ * objetivo, contra la misma audiencia en la ventana del mismo largo previa al
+ * envío.
  *
- * Los envíos (fecha, mensaje, alcanzados) son REALES, de
- * `listNotificationCampaigns`. La conversión es de ejemplo
- * (`~/mocks/notification-effect`): no hay registro de envíos con audiencia
- * congelada ni consulta por ventana. Las celdas de ejemplo van en cursiva.
+ * Desde el 2026-11-03 todo es REAL: los envíos salen de
+ * `listNotificationCampaigns` y la conversión de `getNotificationEffect`
+ * (`notificationEffect` en `~/server/campaigns.repo`), una consulta por fila y
+ * por acción, al montarse la fila o cambiar la acción. Lo único que no se puede
+ * es GUARDAR la acción objetivo de cada envío: se elige acá y se pierde al
+ * recargar (`targetAction`, pedido al backend).
  *
  * `ssr: 'data-only'`: si una ventana ya cerró depende del reloj del
  * navegador; renderizarlo en el servidor daría un mismatch de hidratación.
@@ -47,6 +51,7 @@ export const Route = createFileRoute('/_authed/notificaciones/envios/efecto')({
 })
 
 const pct = (v: number | null) => (v === null ? '—' : `${v.toFixed(1).replace('.', ',')} %`)
+const pts = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1).replace('.', ',')}`
 
 function EffectPage() {
   const campaigns = Route.useLoaderData()
@@ -64,14 +69,13 @@ function EffectPage() {
 
       <PageHeader
         title="Efecto de cada envío"
-        subtitle={`${formatInt(sent.length)} envíos ya salidos · canal push`}
+        subtitle={`${formatInt(sent.length)} envíos ya salidos`}
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
       <MockBanner
         items={[
-          'Fecha, mensaje y alcanzados son reales. La conversión y la base de comparación son de ejemplo (en cursiva).',
-          'Falta en el backend: el registro de cada envío con la audiencia congelada y la acción objetivo, y la consulta de conversión por ventana.',
+          'Todos los números son reales. Lo único que falta en el backend es GUARDAR la acción objetivo de cada envío: acá se elige por fila y se pierde al recargar.',
         ]}
       />
 
@@ -81,7 +85,7 @@ function EffectPage() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[1080px]">
+          <Table className="min-w-[1160px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Fecha</TableHead>
@@ -109,13 +113,19 @@ function EffectPage() {
 
       <div className="mt-3 max-w-3xl space-y-1 text-xs text-muted-foreground">
         <p>
-          Conversión = de los alcanzados que no habían hecho la acción antes del envío, qué % la hizo dentro de
-          la ventana. Entre paréntesis, la diferencia en puntos contra la base: la misma audiencia, en una
-          ventana del mismo largo justo antes del envío.
+          Conversión = de los alcanzados que ya tenían cuenta y no habían hecho la acción antes del envío,
+          cuántos la hicieron dentro de la ventana (cantidad y %). Entre paréntesis, la diferencia en puntos
+          contra la base: la misma audiencia, en una ventana del mismo largo que termina en el envío.
         </p>
         <p>
-          Sólo cuentan usuarios que ya existían al enviar: las altas posteriores no entran. Es correlación, no
-          causa. Una ventana que todavía no cerró dice «en curso».
+          Sólo cuentan usuarios que ya existían al enviar: las altas posteriores no entran. «Cargar documento»
+          es seguro, VTV, cédula o licencia con archivo; «Crear pedido» no cuenta los cerrados como duplicado o
+          prueba. Es correlación, no causa. Una ventana que todavía no cerró dice «en curso».
+        </p>
+        <p>
+          <span className="text-status-yellow">⚠ Base sesgada</span>: si casi nadie de la audiencia había hecho
+          la acción antes (95 % o más), seguramente se eligió por eso, y en la ventana previa nadie pudo hacerla.
+          La base da cerca de 0 por construcción y la diferencia exagera el efecto: mirá el % solo.
         </p>
       </div>
     </>
@@ -123,20 +133,29 @@ function EffectPage() {
 }
 
 function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
-  const [action, setAction] = useState<EffectAction>('vehicle')
+  const [action, setAction] = useState<EffectAction>(() => guessAction(c))
   const [effect, setEffect] = useState<NotificationEffect | null>(null)
+  const [error, setError] = useState(false)
   const now = useMemo(() => new Date(), [])
 
   useEffect(() => {
     let cancelled = false
     setEffect(null)
-    void fetchNotificationEffectMock(c.broadcastId, action, c.recipients).then((e) => {
-      if (!cancelled) setEffect(e)
-    })
+    setError(false)
+    getNotificationEffect({ data: { broadcastId: c.broadcastId, action } })
+      .then((e) => {
+        if (!cancelled) setEffect(e)
+      })
+      .catch(() => {
+        if (!cancelled) setError(true)
+      })
     return () => {
       cancelled = true
     }
-  }, [c.broadcastId, c.recipients, action])
+  }, [c.broadcastId, action])
+
+  const biased = effect ? audienceLooksSelectedByAction(effect) : false
+  const pending = error ? '×' : '…'
 
   return (
     <TableRow>
@@ -149,7 +168,7 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
           {formatDateTime(c.sentAt ?? c.scheduledAt)}
         </Link>
       </TableCell>
-      <TableCell className="text-sm">Push</TableCell>
+      <TableCell className="text-sm">{effect ? effectChannelLabel(effect.channels) : '…'}</TableCell>
       <TableCell className="max-w-xs">
         <p className="truncate text-sm font-medium" title={c.title}>
           {c.title}
@@ -171,27 +190,41 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
             ))}
           </SelectContent>
         </Select>
+        {error ? <p className="mt-1 text-xs text-destructive">No pudimos calcularlo.</p> : null}
+        {effect && !effect.available ? (
+          <p className="mt-1 text-xs text-muted-foreground">Esta base no tiene pedidos.</p>
+        ) : null}
       </TableCell>
       <TableCell className="text-right tabular-nums">{formatInt(c.recipients)}</TableCell>
-      <TableCell className="text-right tabular-nums italic">
-        {effect ? formatInt(effect.eligible) : '…'}
+      <TableCell className="text-right tabular-nums">
+        {effect ? (
+          <>
+            {formatInt(effect.eligible)}
+            {effect.existed < effect.reached ? (
+              <span className="block text-xs text-muted-foreground">
+                {formatInt(effect.reached - effect.existed)} sin cuenta al enviar
+              </span>
+            ) : null}
+          </>
+        ) : (
+          pending
+        )}
       </TableCell>
       {EFFECT_WINDOWS.map((w) => {
         const closed = windowClosed(c.sentAt ?? c.scheduledAt, w.hours, now)
         const l = effect ? lift(effect, w.key) : null
         return (
-          <TableCell key={w.key} className="text-right tabular-nums italic">
+          <TableCell key={w.key} className="text-right tabular-nums">
             {!effect ? (
-              '…'
+              pending
             ) : !closed ? (
-              <span className="not-italic text-muted-foreground">en curso</span>
+              <span className="text-muted-foreground">en curso</span>
             ) : (
               <>
-                {pct(rate(effect.converted[w.key], effect.eligible))}
+                {formatInt(effect.converted[w.key])} · {pct(rate(effect.converted[w.key], effect.eligible))}
                 {l !== null ? (
-                  <span className={cn('ml-1 text-xs', l < 0 && 'text-status-red')}>
-                    ({l >= 0 ? '+' : ''}
-                    {l.toFixed(1).replace('.', ',')})
+                  <span className={cn('ml-1 text-xs', l < 0 && 'text-status-red', biased && 'text-status-yellow')}>
+                    ({pts(l)})
                   </span>
                 ) : null}
               </>
@@ -199,9 +232,32 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
           </TableCell>
         )
       })}
-      <TableCell className="text-right tabular-nums italic">
-        {effect ? pct(rate(effect.baselineConverted.d7, effect.baselineEligible)) : '…'}
+      <TableCell className="text-right tabular-nums">
+        {effect ? (
+          <>
+            {pct(rate(effect.baseline.d7.converted, effect.baseline.d7.eligible))}
+            <span className="block text-xs text-muted-foreground">
+              {formatInt(effect.baseline.d7.converted)} de {formatInt(effect.baseline.d7.eligible)}
+            </span>
+            {biased ? <span className="block text-xs text-status-yellow">⚠ base sesgada</span> : null}
+          </>
+        ) : (
+          pending
+        )}
       </TableCell>
     </TableRow>
   )
+}
+
+/**
+ * Acción inicial por palabras del título: sólo elige qué se muestra primero,
+ * nunca cambia un número, y la persona la cambia en el selector. Sin match,
+ * «Cargar vehículo» como antes.
+ */
+function guessAction(c: CampaignListItem): EffectAction {
+  const t = `${c.title} ${c.body}`.toLowerCase()
+  if (/veh[ií]culo|auto\b/.test(t)) return 'vehicle'
+  if (/seguro|vtv|c[eé]dula|licencia|documento|p[oó]liza/.test(t)) return 'document'
+  if (/pedido|presupuesto|propuesta|necesit/.test(t)) return 'quote_request'
+  return 'vehicle'
 }

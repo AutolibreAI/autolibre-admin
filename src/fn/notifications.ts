@@ -14,7 +14,9 @@ import {
   searchRecipients,
 } from '~/server/notifications.repo'
 import { previewAudience } from '~/server/audience.repo'
-import { findCampaign, listCampaigns } from '~/server/campaigns.repo'
+import { findCampaign, listCampaigns, notificationEffect } from '~/server/campaigns.repo'
+import { notificationEffectInputSchema } from '~/lib/notification-effect'
+import type { NotificationEffect } from '~/lib/notification-effect'
 import { broadcastNotification } from '~/server/backend'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
@@ -138,6 +140,21 @@ export const getNotificationCampaign = createServerFn({ method: 'GET' })
   .validator(z.object({ broadcastId: z.uuid() }))
   .handler(async ({ data }): Promise<CampaignDetail | null> =>
     findCampaign(data.broadcastId, { signal: requestSignal() }),
+  )
+
+/**
+ * Efecto de un envío sobre una acción, a 24 h / 72 h / 7 días contra la misma
+ * audiencia en la ventana previa. Sólo conteos (`~/lib/notification-effect`).
+ *
+ * `adminMiddleware` aunque no devuelva personas: la pregunta ("¿cuántos de los
+ * que recibieron X hicieron Y?") ya es dato del padrón, y un server function es
+ * un endpoint HTTP público.
+ */
+export const getNotificationEffect = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .validator(notificationEffectInputSchema)
+  .handler(async ({ data }): Promise<NotificationEffect> =>
+    notificationEffect(data.broadcastId, data.action, { signal: requestSignal() }),
   )
 
 /**
