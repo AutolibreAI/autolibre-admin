@@ -25,6 +25,7 @@ import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { formatDate } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { ApplicationDetail } from '~/lib/partners'
+import { readableApprovalError, type ApprovalResult } from '~/lib/partner-approval'
 
 export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
   loader: async ({ params, abortController }) => {
@@ -54,6 +55,12 @@ function ApplicationDetailPage() {
   const { app, catalog } = Route.useLoaderData()
   const [draft, setDraftState] = useState<ApplicationDraft | null>(null)
   const setDraft = useCallback((next: ApplicationDraft) => setDraftState(next), [])
+  /**
+   * El resultado de la última aprobación vive ACÁ y no en `ApprovePanel`: al
+   * aprobar, `router.invalidate()` trae el partner y `ApprovePanel` se
+   * desmonta — el resultado (dueño, ubicación) se perdería con él.
+   */
+  const [approval, setApproval] = useState<{ result: ApprovalResult; zone: string } | null>(null)
 
   return (
     <>
@@ -85,6 +92,15 @@ function ApplicationDetailPage() {
         </div>
 
         <div className="space-y-4">
+          {approval ? (
+            <ApprovalResultCard
+              app={app}
+              result={approval.result}
+              zone={approval.zone}
+              onResult={(result, zone) => setApproval({ result, zone })}
+            />
+          ) : null}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
@@ -106,7 +122,11 @@ function ApplicationDetailPage() {
             <PublishedPanel app={app} />
           ) : (
             <>
-              <ApprovePanel app={app} draft={draft} />
+              <ApprovePanel
+                app={app}
+                draft={draft}
+                onApproved={(result, zone) => setApproval({ result, zone })}
+              />
               <StatusPanel app={app} />
             </>
           )}
@@ -147,9 +167,9 @@ function StuckWarning({ app }: { app: ApplicationDetail }) {
       <AlertTitle className="text-status-red">Solicitud trabada</AlertTitle>
       <AlertDescription className="text-muted-foreground">
         <p>
-          Está en <strong>acuerdo verbal</strong> pero no tiene partner. La función de
-          aprobación la va a rechazar para siempre en este estado. Devolvela a{' '}
-          <strong>en conversación</strong> y volvé a aprobarla.
+          Está en <strong>acuerdo verbal</strong> pero no tiene partner. El backend la
+          rechaza en este estado (409). Devolvela a <strong>en conversación</strong> y volvé
+          a aprobarla.
         </p>
         <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={onUnstick}>
           {busy ? 'Destrabando…' : 'Destrabar'}
@@ -173,6 +193,7 @@ function PublishedPanel({ app }: { app: ApplicationDetail }) {
       <CardContent className="space-y-3">
         <Field label="Partner" value={app.partner!.name} />
         <Field label="Zona de cobertura" value={app.partner!.coverageZone} />
+        <SubmittedByField app={app} />
         <Field
           label="Rubros cargados"
           value={
@@ -200,15 +221,42 @@ function PublishedPanel({ app }: { app: ApplicationDetail }) {
 }
 
 /**
- * Consultas 2 + 3 del runbook, en un solo acto.
- *
- * En DBeaver son dos pasos y el segundo es "el que se olvida". Acá van en una
- * transacción (`approveApplication` en el repo), así que o pasan los dos o no
- * pasa ninguno.
+ * «Registrado por»: `submitted_by_user_id` (0149). Sin la columna en la base,
+ * o con una solicitud anónima, lo dice en vez de esconderse: decide si el
+ * taller va a tener dueño al aprobar o va a necesitar un código de reclamo.
  */
-function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: ApplicationDraft | null }) {
+function SubmittedByField({ app }: { app: ApplicationDetail }) {
+  return (
+    <Field
+      label="Registrado por"
+      value={
+        app.submittedBy ? (
+          (app.submittedBy.email ?? <span className="text-muted-foreground">cuenta sin email</span>)
+        ) : (
+          <span className="text-muted-foreground">nadie logueado (anónima o anterior)</span>
+        )
+      }
+    />
+  )
+}
+
+/**
+ * Aprobar: desde el 2026-11-05 lo hace el backend
+ * (`POST /admin/partner-applications/:id/approval`), que crea el partner, carga
+ * los rubros, copia la ubicación y asigna el dueño. Lo tipeado sin guardar se
+ * guarda ANTES, en una llamada aparte (`approveApplication` en el repo).
+ */
+function ApprovePanel({
+  app,
+  draft,
+  onApproved,
+}: {
+  app: ApplicationDetail
+  draft: ApplicationDraft | null
+  onApproved: (result: ApprovalResult, zone: string) => void
+}) {
   const router = useRouter()
-  const [coverageZone, setCoverageZone] = useState('')
+  const [coverageZone, setCoverageZone] = useState(app.suggestedCoverageZone ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmedInvisible, setConfirmedInvisible] = useState(false)
@@ -225,24 +273,21 @@ function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: Applicati
     event.preventDefault()
     setBusy(true)
     setError(null)
+    const zone = coverageZone.trim()
     try {
-      await approvePartnerApplication({
+      const result = await approvePartnerApplication({
         data: {
           applicationId: app.id,
-          coverageZone: coverageZone.trim(),
+          coverageZone: zone,
           ...(pending ? { edits: pending.edits } : {}),
         },
       })
+      onApproved(result, zone)
       await router.invalidate()
     } catch (cause) {
-      const raw = cause instanceof Error ? cause.message : String(cause)
-      setError(
-        raw.includes('inexistente o ya aprobada')
-          ? 'La función rechazó la solicitud: no existe o ya fue aprobada. Si está en acuerdo verbal sin partner, destrabala primero.'
-          : /_REQUIRED|INVALID_FOLLOW_UP_DATE|too_small/i.test(raw)
-            ? 'Hay un campo obligatorio vacío o inválido en el formulario (nombre, email, WhatsApp, dirección o fecha). Corregilo y volvé a aprobar.'
-            : 'No pudimos aprobar la solicitud. No se creó ni se guardó nada — la operación es transaccional.',
-      )
+      setError(readableApprovalError(cause, { savedEdits: pending !== null }))
+      // El paso 0 pudo haber guardado aunque el backend fallara: releer.
+      if (pending) await router.invalidate()
     } finally {
       setBusy(false)
     }
@@ -260,7 +305,7 @@ function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: Applicati
             <AlertTitle className="text-status-red">Quedaría invisible</AlertTitle>
             <AlertDescription className="text-xs leading-relaxed text-muted-foreground">
               <p>
-                Nada de lo declarado matchea una familia activa, así que no se le cargaría
+                Nada de lo declarado matchea un servicio o familia activos, así que no se le cargaría
                 ningún rubro. El partner se publicaría igual y se listaría sin filtro, pero
                 no saldría bajo ningún chip de la app.
               </p>
@@ -279,10 +324,19 @@ function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: Applicati
 
         {pending ? (
           <p className="mb-3 rounded-md border border-status-yellow/30 bg-status-yellow-bg p-2.5 text-xs leading-relaxed text-muted-foreground">
-            Tenés cambios sin guardar en el formulario. Se guardan junto con la aprobación, y el
-            partner se crea con esos datos.
+            Tenés cambios sin guardar en el formulario. Se guardan justo antes de aprobar y el
+            partner se crea con esos datos. Si la aprobación falla, los cambios quedan guardados.
           </p>
         ) : null}
+
+        <div className="mb-3 space-y-1">
+          <SubmittedByField app={app} />
+          <p className="text-xs text-muted-foreground">
+            {app.submittedBy
+              ? 'Al aprobar, esa cuenta queda como dueña del taller.'
+              : 'Sin cuenta que la haya registrado: después de aprobar, emitile un código de reclamo desde la ficha del partner.'}
+          </p>
+        </div>
 
         <form onSubmit={onSubmit} className="space-y-3">
           <div className="space-y-1.5">
@@ -298,8 +352,8 @@ function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: Applicati
               onChange={(e) => setCoverageZone(e.currentTarget.value)}
               placeholder="CABA y GBA Norte"
               required
-              minLength={3}
-              maxLength={120}
+              minLength={1}
+              maxLength={200}
             />
             {/* Es texto libre y es lo que el usuario ve en la ficha. */}
             <p className="text-xs text-muted-foreground">
@@ -317,7 +371,7 @@ function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: Applicati
           <Button
             type="submit"
             className="w-full"
-            disabled={busy || blocked || coverageZone.trim().length < 3}
+            disabled={busy || blocked || coverageZone.trim().length === 0}
           >
             {busy
               ? 'Aprobando…'
@@ -333,6 +387,173 @@ function ApprovePanel({ app, draft }: { app: ApplicationDetail; draft: Applicati
       </CardContent>
     </Card>
   )
+}
+
+/**
+ * Lo que devolvió el backend al aprobar. «Rubros» decide "invisible" con
+ * `totalServices` (conteo por SQL después de la llamada), NUNCA con
+ * `servicesLoaded`: ése cuenta lo insertado por ESTA llamada y es 0 en
+ * cualquier re-aprobación aunque el partner tenga rubros.
+ */
+function ApprovalResultCard({
+  app,
+  result,
+  zone,
+  onResult,
+}: {
+  app: ApplicationDetail
+  result: ApprovalResult
+  zone: string
+  onResult: (result: ApprovalResult, zone: string) => void
+}) {
+  const router = useRouter()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const invisible = result.totalServices === 0
+
+  // Re-aprobar es idempotente: mismo partner, repara rubros y dueño. La zona la
+  // ignora el backend en ese caso, pero el DTO la exige.
+  async function onRetry() {
+    setBusy(true)
+    setError(null)
+    const retryZone = app.partner?.coverageZone.trim() || zone
+    try {
+      const next = await approvePartnerApplication({
+        data: { applicationId: app.id, coverageZone: retryZone },
+      })
+      onResult(next, retryZone)
+      await router.invalidate()
+    } catch (cause) {
+      setError(readableApprovalError(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className={cn(invisible && 'border-status-red/25')}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <CheckCircle2 className="size-4 text-status-green" aria-hidden />
+          {result.alreadyApproved ? 'Ya estaba aprobada — se reparó' : 'Aprobada y publicada'}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {result.alreadyApproved ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            La solicitud ya tenía partner. El backend devolvió el mismo y completó lo que faltara
+            (rubros y dueño); la zona de cobertura no se cambió.
+          </p>
+        ) : null}
+
+        <Field
+          label="Rubros"
+          value={
+            invisible ? (
+              <span className="text-status-red">0 — invisible en la app</span>
+            ) : (
+              `${result.totalServices} en total · ${result.servicesLoaded} cargados ahora`
+            )
+          }
+        />
+        {invisible ? (
+          <Alert className="border-status-red/25 bg-status-red-bg">
+            <AlertTriangle className="size-4 text-status-red" />
+            <AlertDescription className="text-xs leading-relaxed text-muted-foreground">
+              El partner se lista sin filtro pero no sale bajo ningún chip. Cargale los rubros a
+              mano desde la ficha.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        <Field
+          label="Ubicación"
+          value={
+            result.locationCopied ? (
+              'Copiada de la solicitud'
+            ) : (
+              <span className="text-muted-foreground">
+                No se copió (la solicitud no traía coordenadas válidas, o el partner ya tenía):
+                si falta, cargala desde la ficha.
+              </span>
+            )
+          }
+        />
+
+        <Field label="Dueño" value={<OwnerOutcome result={result} />} />
+
+        {result.ownerGrant === 'failed' ? (
+          <div className="space-y-2">
+            <Button size="sm" variant="outline" disabled={busy} onClick={onRetry}>
+              {busy ? 'Aprobando…' : 'Volver a aprobar'}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Es seguro: no duplica el partner, sólo completa lo que faltó.
+            </p>
+          </div>
+        ) : null}
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+
+        <Link
+          to="/partners/$partnerId"
+          params={{ partnerId: result.partnerId }}
+          className="inline-block text-sm underline underline-offset-2"
+        >
+          Ir a la ficha del partner
+        </Link>
+      </CardContent>
+    </Card>
+  )
+}
+
+function OwnerOutcome({ result }: { result: ApprovalResult }) {
+  const who = result.ownerEmail ?? (result.ownerUserId ? 'una cuenta sin email' : null)
+
+  switch (result.ownerGrant) {
+    case 'granted':
+      return <span>{who ?? 'La cuenta que la registró'} quedó como dueño.</span>
+    case 'already_granted':
+      return <span>{who ?? 'Esa cuenta'} ya era dueño.</span>
+    case 'owner_taken':
+      return (
+        <span className="block rounded-md border border-status-yellow/30 bg-status-yellow-bg p-2 text-xs leading-relaxed">
+          El taller ya tenía otro dueño{who ? ` (${who})` : ''}: no se le asignó a quien registró
+          la solicitud. Revisalo en «Miembros» de la ficha.
+        </span>
+      )
+    case 'no_submitter':
+      return (
+        <span>
+          Nadie la registró logueado: emitile un código de reclamo desde{' '}
+          <Link
+            to="/partners/$partnerId"
+            params={{ partnerId: result.partnerId }}
+            className="underline underline-offset-2"
+          >
+            la ficha del partner
+          </Link>{' '}
+          («Miembros»).{who ? ` Hoy el dueño es ${who}.` : ''}
+        </span>
+      )
+    case 'failed':
+      return (
+        <span className="text-status-red">
+          No se pudo asignar el dueño. La aprobación sí quedó hecha.
+        </span>
+      )
+    default:
+      // Un valor nuevo del backend: crudo, nunca escondido.
+      return (
+        <span>
+          Resultado del backend: <code>{result.ownerGrant}</code>
+          {who ? ` · ${who}` : ''}
+        </span>
+      )
+  }
 }
 
 /**

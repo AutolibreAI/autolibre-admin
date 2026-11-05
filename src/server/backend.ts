@@ -950,3 +950,45 @@ export async function issuePartnerClaimCode(partnerId: string): Promise<IssuedCl
 }
 
 // ── Despacho de un pedido a talleres por WhatsApp (0142) ─────────────────────
+
+// ── Aprobar una solicitud de partner (0149/0150) ─────────────────────────────
+
+/**
+ * `POST /admin/partner-applications/:id/approval` (`AdminGuard`), cuerpo
+ * `{ coverageZone }` y NADA más (`forbidNonWhitelisted`). Reemplaza los pasos
+ * 1–3 que el panel hacía por SQL (`approve_partner_application()`, el INSERT
+ * de `partner_services` y la copia de la coordenada). Idempotente.
+ *
+ * Devuelve el JSON crudo: lo valida `approveApplication` en
+ * `partners.repo.ts` con `backendApprovalSchema` (`~/lib/partner-approval`).
+ * Errores con `detailed`: 404 de solicitud vs "Cannot POST" (backend sin
+ * desplegar), 409 = aprobada sin partner (destrabar).
+ * → `.claude/rules/partner-approval.md`
+ */
+export async function approvePartnerApplicationInBackend(input: {
+  applicationId: string
+  coverageZone: string
+}): Promise<unknown> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/partner-applications/${input.applicationId}/approval`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ coverageZone: input.coverageZone }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'Aprobar la solicitud', { detailed: true })
+
+  try {
+    return (await response.json()) as unknown
+  } catch {
+    throw new Error('APPROVAL_BAD_RESPONSE')
+  }
+}

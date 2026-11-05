@@ -11,6 +11,8 @@ import {
   type PartnerOption,
 } from '~/lib/partners'
 import { normalizeForMatch } from '~/lib/catalog'
+import { APPROVAL_BAD_RESPONSE, backendApprovalSchema, type ApprovalResult } from '~/lib/partner-approval'
+import { approvePartnerApplicationInBackend } from './backend'
 import type {
   PartnerLink,
   PartnerListItem,
@@ -82,6 +84,15 @@ interface ExpandedRow {
  * rubros activos (N filas). Las dos condiciones exigen familia activa: un rubro
  * activo colgando de una familia retirada no se carga, igual que en el catálogo
  * que ve el formulario.
+ *
+ * ── Espeja la regla del BACKEND, que es el que carga de verdad ──────────────
+ *
+ * Desde el 2026-11-05 los rubros los inserta el backend al aprobar
+ * (`DrizzleServiceCatalogReader.findActiveServiceIdsForDeclaredSlugs`, rama
+ * `redesign` 92de7865): servicio activo de familia activa, matcheando por el
+ * slug del servicio O el de su familia. Es exactamente este JOIN — verificado
+ * leyendo ese archivo. Lo que la pantalla PROMETE cargar y lo que el backend
+ * carga son la misma pregunta: si uno de los dos cambia, se toca el otro.
  */
 async function expandDeclaredSlugs(
   slugs: ReadonlyArray<string>,
@@ -293,6 +304,43 @@ interface DetailRow extends QueueRow {
   partner_name: string | null
   partner_coverage_zone: string | null
   partner_service_count: number | null
+  suggested_coverage_zone: string | null
+}
+
+/**
+ * ¿La base tiene `partner_applications.submitted_by_user_id` (0149 del
+ * backend)? Se pregunta a `information_schema` en vez de leerla a ciegas: en
+ * una base sin la 0149 el SELECT explotaría al planificarse y la ficha de la
+ * solicitud daría un 500. Se cachea sólo el `true` — una base que migra en
+ * caliente empieza a mostrarlo sin reiniciar el proceso.
+ */
+let submittedByColumnSeen = false
+async function submittedByAvailable(): Promise<boolean> {
+  if (submittedByColumnSeen) return true
+  const row = await sqlOne<{ ok: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'partner_applications'
+          AND column_name = 'submitted_by_user_id'
+     ) AS ok`,
+  )
+  submittedByColumnSeen = row?.ok === true
+  return submittedByColumnSeen
+}
+
+/** Quién registró la solicitud logueado (0149). `LEFT JOIN`: la cuenta pudo borrarse. */
+async function findSubmittedBy(
+  applicationId: string,
+): Promise<{ userId: string; email: string | null } | null> {
+  if (!(await submittedByAvailable())) return null
+  const row = await sqlOne<{ user_id: string | null; email: string | null }>(
+    `SELECT a.submitted_by_user_id AS user_id, u.email
+       FROM partner_applications a
+       LEFT JOIN users u ON u.id = a.submitted_by_user_id
+      WHERE a.id = $1`,
+    [applicationId],
+  )
+  return row?.user_id ? { userId: row.user_id, email: row.email } : null
 }
 
 export async function findApplication(
@@ -316,7 +364,15 @@ export async function findApplication(
             p.name                                   AS partner_name,
             p.coverage_zone                          AS partner_coverage_zone,
             (SELECT count(*)::int FROM partner_services ps
-              WHERE ps.partner_id = p.id)            AS partner_service_count
+              WHERE ps.partner_id = p.id)            AS partner_service_count,
+            -- La planilla vieja traía la zona escrita; el formulario nuevo,
+            -- localidad y provincia. Sólo para precargar el campo.
+            coalesce(
+              nullif(btrim(a.raw_submission->>'Zona de cobertura'), ''),
+              nullif(concat_ws(', ',
+                nullif(btrim(a.raw_submission->>'locality'), ''),
+                nullif(btrim(a.raw_submission->>'province'), '')), '')
+            )                                        AS suggested_coverage_zone
        FROM partner_applications a
        LEFT JOIN partners p ON p.application_id = a.id
       WHERE a.id = $1`,
@@ -325,7 +381,10 @@ export async function findApplication(
 
   if (!row) return null
 
-  const resolved = await resolveDeclared(row.declared_services)
+  const [resolved, submittedBy] = await Promise.all([
+    resolveDeclared(row.declared_services),
+    findSubmittedBy(row.id),
+  ])
 
   return {
     id: row.id,
@@ -365,6 +424,8 @@ export async function findApplication(
           serviceCount: row.partner_service_count ?? 0,
         }
       : null,
+    submittedBy,
+    suggestedCoverageZone: row.suggested_coverage_zone?.slice(0, 200) ?? null,
   }
 }
 
@@ -401,9 +462,14 @@ export async function pipelineHealth(
    * Solicitudes pendientes que HOY producirían un partner invisible.
    *
    * Cubre dos casos, y el segundo es el que la consulta 4 del runbook no ve:
-   *  - declaró slugs que no son familia activa (labels viejos, familias de baja)
+   *  - declaró slugs que no resuelven a ningún servicio activo (labels viejos,
+   *    familias o servicios de baja)
    *  - no declaró nada: `unnest('{}')` da cero filas, así que nunca aparece en
    *    la consulta 4, pero igual termina invisible.
+   *
+   * Misma regla que `expandDeclaredSlugs` y que el backend al aprobar: slug de
+   * servicio activo O de familia activa. Hasta el 2026-11-05 miraba sólo
+   * familias, y contaba como "invisible" a toda solicitud que declaró rubros.
    */
   const wouldBeInvisible = await sqlOne<{ n: number }>(
     `SELECT count(*)::int AS n
@@ -413,7 +479,9 @@ export async function pipelineHealth(
         AND NOT EXISTS (
           SELECT 1
             FROM unnest(a.declared_services) AS decl(slug)
-            JOIN service_categories sc ON sc.slug = decl.slug AND sc.active
+            JOIN service_categories sc ON sc.active
+            JOIN services s ON s.category_id = sc.id AND s.active
+           WHERE s.slug = decl.slug OR sc.slug = decl.slug
         )`,
   )
 
@@ -424,26 +492,31 @@ export async function pipelineHealth(
   }
 }
 
-// ── Consultas 2 + 3: aprobar ─────────────────────────────────────────────────
-
-export interface ApprovalResult {
-  partnerId: string
-  servicesLoaded: number
-  /** Si la solicitud traía coordenadas válidas y se le copiaron al partner. */
-  locationCopied: boolean
-}
+// ── Aprobar: el backend (0149/0150) ──────────────────────────────────────────
 
 /**
- * Aprueba una solicitud: crea el partner y le carga los rubros.
+ * Aprueba una solicitud. Desde el 2026-11-05 la hace el BACKEND:
+ * `POST /admin/partner-applications/:id/approval` (`approvePartnerApplicationInBackend`
+ * en `~/server/backend`). En una transacción suya pasa la solicitud a
+ * `verbal_agreement`, crea el partner, le carga los rubros y copia la
+ * coordenada; después del commit asigna el dueño. Re-aprobar es idempotente.
  *
- * LOS DOS PASOS VAN EN UNA TRANSACCIÓN, y esa es la mejora real sobre el
- * runbook. En DBeaver son dos consultas separadas y el segundo paso es "el que
- * se olvida": si no corre, el partner queda activo con cero rubros — listado
- * sin filtro e invisible bajo todo chip. Acá o pasan los dos o no pasa ninguno.
+ * Lo que se SACÓ de acá, porque ahora lo hace el backend: la llamada a
+ * `approve_partner_application()`, el `INSERT INTO partner_services` y la
+ * copia de `raw_submission->latitude/longitude` por `ops.set_partner_location`.
+ * Si alguno vuelve a aparecer acá, hay dos escritores para lo mismo.
  *
- * `approve_partner_application()` NO se toca ni se reimplementa. La condición
- * que le puso el backend sigue vigente: mueve estado y copia datos, no decide
- * nada. Lo que decide es esto de acá.
+ * Lo que QUEDA en el panel:
+ *
+ *  - **Paso 0**: lo tipeado en el editor y sin guardar, por
+ *    `ops.update_partner_application` (010) con nota «Guardado al aprobar».
+ *    Va ANTES porque el backend copia la solicitud al partner. Ya NO es la
+ *    misma transacción que la aprobación (son dos sistemas): si el backend
+ *    falla, la edición queda guardada — `readableApprovalError` lo dice.
+ *  - **El conteo de rubros**, por SQL después de la llamada. `servicesLoaded`
+ *    del backend son las filas insertadas por ESTA llamada (0 en un
+ *    reintento); "invisible" se decide con `totalServices`.
+ *  - **El email del dueño**, por SQL sobre `ownerUserId`.
  */
 export async function approveApplication(
   applicationId: string,
@@ -451,121 +524,34 @@ export async function approveApplication(
   coverageZone: string,
   edits?: ApplicationEdits,
 ): Promise<ApprovalResult> {
-  return withTransaction(async (client) => {
-    /**
-     * Paso cero: lo tipeado en el editor y sin guardar. Va ANTES de la función
-     * de aprobación porque ella copia la solicitud al partner — guardarlo
-     * después dejaría el partner con los datos viejos. Mismo SP que «Guardar
-     * solicitud» (010), así que queda en `ops.action_log` igual. Si la
-     * aprobación falla, el rollback se lleva también la edición: o pasan las
-     * dos cosas o ninguna.
-     */
-    if (edits) {
-      await client.query(
-        `SELECT ops.update_partner_application($1::uuid, $2::uuid, $3::jsonb, $4)`,
-        [applicationId, reviewerId, applicationPatchJson(edits), 'Guardado al aprobar'],
-      )
-    }
-
-    const approved = await client.query<{ partner_id: string }>(
-      `SELECT approve_partner_application($1::uuid, $2::uuid, $3::text) AS partner_id`,
-      [applicationId, reviewerId, coverageZone],
+  if (edits) {
+    await sql(
+      `SELECT ops.update_partner_application($1::uuid, $2::uuid, $3::jsonb, $4)`,
+      [applicationId, reviewerId, applicationPatchJson(edits), 'Guardado al aprobar'],
     )
+  }
 
-    const partnerId = approved.rows[0]?.partner_id
-    if (!partnerId) {
-      // La función tira excepción si la solicitud no existe o ya se aprobó, así
-      // que llegar acá sin id significa que cambió su contrato.
-      throw new Error('APPROVE_NO_PARTNER_ID')
-    }
+  const raw = await approvePartnerApplicationInBackend({ applicationId, coverageZone })
+  const parsed = backendApprovalSchema.safeParse(raw)
+  if (!parsed.success) throw new Error(APPROVAL_BAD_RESPONSE)
+  const res = parsed.data
 
-    /**
-     * Carga de rubros, acotada a ESTE partner.
-     *
-     * El runbook usa `WHERE NOT EXISTS (... partner_services ...)` sin id porque
-     * en DBeaver se corre suelta y tiene que autolimitarse a los que no tienen
-     * nada. Acá tenemos el id, así que se filtra por él: más preciso, y no
-     * depende de que ningún otro partner esté a medio cargar.
-     *
-     * ── El OR del WHERE es lo que evita aprobar partners invisibles ─────────
-     *
-     * Este JOIN unía `decl.slug` contra `service_categories` y nada más. Cuando
-     * el formulario pasó a declarar RUBROS, eso dejó de matchear: cero filas,
-     * cero rubros cargados, y un partner activo que no sale bajo ningún chip de
-     * la app. El mismo modo de falla silencioso que esta pantalla existe para
-     * evitar, reintroducido por la puerta de atrás.
-     *
-     * Ahora un slug declarado entra si es el rubro (`s.slug`) o si es su familia
-     * (`sc.slug`). Debe seguir espejando `expandDeclaredSlugs()` de este mismo
-     * archivo: lo que la pantalla PROMETE cargar y lo que este INSERT carga de
-     * verdad son la misma pregunta, y el día que se separen la pantalla miente
-     * sin que nada falle.
-     */
-    const loaded = await client.query(
-      `INSERT INTO partner_services (partner_id, service_id)
-       SELECT p.id, s.id
-         FROM partners p
-         JOIN partner_applications a ON a.id = p.application_id
-         CROSS JOIN LATERAL unnest(a.declared_services) AS decl(slug)
-         JOIN service_categories sc ON sc.active
-         JOIN services s ON s.category_id = sc.id AND s.active
-        WHERE p.id = $1
-          AND (s.slug = decl.slug OR sc.slug = decl.slug)
-       ON CONFLICT DO NOTHING`,
-      [partnerId],
-    )
+  const after = await sqlOne<{ total: number; owner_email: string | null }>(
+    `SELECT (SELECT count(*)::int FROM partner_services WHERE partner_id = $1::uuid) AS total,
+            (SELECT email FROM users WHERE id = $2::uuid)                          AS owner_email`,
+    [res.partnerId, res.ownerUserId],
+  )
 
-    /**
-     * Tercer paso: la ubicación que el taller eligió en el formulario.
-     *
-     * El backend guarda el body entero en `raw_submission` (`{ ...dto }`), y el
-     * DTO trae `latitude`/`longitude` de primer nivel: el geocode de Google
-     * Places de la dirección (AUT-81). Sin este paso el partner nace sin
-     * coordenadas y no sale en el mapa ni ordena por distancia.
-     *
-     * NO va adentro de `approve_partner_application()`: es del backend (la
-     * migra su Drizzle, no este repo) y tiene que quedar flaca. Leer un jsonb
-     * que no es contrato nuestro es decidir, y decidir es de acá.
-     *
-     * Sólo se copia si vienen LAS DOS como número y en rango. Una solicitud
-     * vieja (planilla, formulario previo a AUT-81) o con un par roto se
-     * aprueba igual, sin ubicación: no es motivo para frenar el alta, y la
-     * coordenada se carga después desde la ficha. Escribe por
-     * `ops.set_partner_location` (007) para que quede en `ops.action_log`
-     * con el reviewer como actor, igual que si la cargara a mano.
-     */
-    const location = await client.query<{ latitude: number; longitude: number }>(
-      `SELECT (a.raw_submission->>'latitude')::float8  AS latitude,
-              (a.raw_submission->>'longitude')::float8 AS longitude
-         FROM partner_applications a
-        WHERE a.id = $1
-          AND jsonb_typeof(a.raw_submission->'latitude')  = 'number'
-          AND jsonb_typeof(a.raw_submission->'longitude') = 'number'
-          AND (a.raw_submission->>'latitude')::float8  BETWEEN -90  AND 90
-          AND (a.raw_submission->>'longitude')::float8 BETWEEN -180 AND 180`,
-      [applicationId],
-    )
-
-    const coords = location.rows[0]
-    if (coords) {
-      await client.query(
-        `SELECT ops.set_partner_location(
-           p_partner_id => $1::uuid,
-           p_latitude   => $2::float8,
-           p_longitude  => $3::float8,
-           p_actor_id   => $4::uuid,
-           p_note       => 'Copiada de la solicitud al aprobar'
-         )`,
-        [partnerId, coords.latitude, coords.longitude, reviewerId],
-      )
-    }
-
-    return {
-      partnerId,
-      servicesLoaded: loaded.rowCount ?? 0,
-      locationCopied: coords !== undefined,
-    }
-  })
+  return {
+    partnerId: res.partnerId,
+    alreadyApproved: res.alreadyApproved,
+    servicesLoaded: res.servicesLoaded,
+    totalServices: after?.total ?? 0,
+    locationCopied: res.locationCopied,
+    ownerGrant: res.ownerGrant,
+    ownerUserId: res.ownerUserId,
+    ownerEmail: after?.owner_email ?? null,
+  }
 }
 
 /**

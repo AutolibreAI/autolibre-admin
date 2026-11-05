@@ -49,8 +49,8 @@ import type {
   PartnerOption,
   PipelineHealth,
 } from '~/lib/partners'
+import type { ApprovalResult } from '~/lib/partner-approval'
 import type {
-  ApprovalResult,
   EditServicesResult,
   PartnerWriteResult,
 } from '~/server/partners.repo'
@@ -92,11 +92,13 @@ export const getPipelineHealth = createServerFn({ method: 'GET' })
   .handler(async (): Promise<PipelineHealth> => pipelineHealth({ signal: requestSignal() }))
 
 /**
- * Aprobar. El reviewer sale de la sesión, NUNCA del payload.
+ * Aprobar. El reviewer sale de la sesión, NUNCA del payload: el paso 0
+ * (`ops.update_partner_application`) lo usa como actor, y el backend toma el
+ * suyo del token de Clerk de la misma sesión (graba `reviewed_by_id`).
  *
- * `approve_partner_application()` graba `reviewed_by_id` con FK a `users`, o
- * sea que es el registro de quién publicó a quién. Aceptarlo por parámetro
- * dejaría que quien llama firme con la identidad de otro.
+ * Desde el 2026-11-05 la aprobación la hace el backend
+ * (`POST /admin/partner-applications/:id/approval`). Sin `edits`, esta misma
+ * función sirve para «Volver a aprobar»: el endpoint es idempotente.
  */
 export const approvePartnerApplication = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])

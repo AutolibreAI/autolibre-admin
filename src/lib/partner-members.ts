@@ -22,12 +22,14 @@ export const PARTNER_MEMBER_ROLE_LABELS: Record<string, string> = {
 }
 
 /**
- * `partner_membership_verification` es un enum ABIERTO: hoy sólo
- * `admin_code`, mañana `whatsapp_otp`. Un valor sin etiqueta se muestra CRUDO
+ * `partner_membership_verification` es un enum ABIERTO: hoy `admin_code` y
+ * `application_approval` (0150), mañana `whatsapp_otp`. Un valor sin etiqueta se muestra CRUDO
  * (`verificationLabel`), nunca se esconde.
  */
 export const PARTNER_MEMBERSHIP_VERIFICATION_LABELS: Record<string, string> = {
   admin_code: 'código del equipo',
+  /** 0150: lo asigna el backend al aprobar la solicitud que esa cuenta registró logueada. */
+  application_approval: 'aprobación de la solicitud',
 }
 
 export const memberRoleLabel = (role: string): string => PARTNER_MEMBER_ROLE_LABELS[role] ?? role

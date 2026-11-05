@@ -129,6 +129,18 @@ export interface ApplicationDetail extends ApplicationListItem {
   reviewedAt: string | null
   /** Si ya se publicó, el partner resultante. */
   partner: { id: string; name: string; coverageZone: string; serviceCount: number } | null
+  /**
+   * Quién la registró logueado: `submitted_by_user_id` (0149 del backend) →
+   * `users`. `null` si fue anónima, anterior a la 0149, la cuenta se borró
+   * (FK `ON DELETE SET NULL`) o la base no tiene la columna.
+   */
+  submittedBy: { userId: string; email: string | null } | null
+  /**
+   * Zona para precargar el campo de aprobación: la «Zona de cobertura» de la
+   * planilla vieja, o «localidad, provincia» del formulario. No hay columna de
+   * zona en `partner_applications`; esto sale de `raw_submission`.
+   */
+  suggestedCoverageZone: string | null
 }
 
 /**
@@ -230,8 +242,9 @@ export type ApplicationEdits = z.infer<typeof applicationEditsSchema>
  * Escribila como la leería una persona ("CABA y GBA Norte"), no como un código.
  *
  * `edits` es lo que el operador tipeó en el editor y todavía no guardó. Viaja
- * con la aprobación y se guarda en la MISMA transacción, antes de que
- * `approve_partner_application()` copie la solicitud al partner. Sin esto,
+ * con la aprobación y se guarda ANTES de llamar al backend (paso 0, su propia
+ * sentencia — ya no la misma transacción), porque el backend copia la
+ * solicitud al partner. Sin esto,
  * aprobar tomaba lo que estaba en la base y lo tipeado se perdía en silencio
  * (relevado el 2026-10-06: ninguna de las últimas 8 solicitudes tenía una
  * edición guardada antes de aprobarse, y todas se corrigieron después en la
@@ -239,7 +252,8 @@ export type ApplicationEdits = z.infer<typeof applicationEditsSchema>
  */
 export const approveSchema = z.object({
   applicationId: z.uuid(),
-  coverageZone: z.string().trim().min(3).max(120),
+  /** Mismo contrato que el `CoverageZone` del backend: 1..200 tras `trim`. */
+  coverageZone: z.string().trim().min(1).max(200),
   edits: applicationEditsSchema.optional(),
 })
 

@@ -34,8 +34,9 @@ Las cuentas de la app vinculadas a un taller: `public.partner_members`, migraci�
 ## Semántica que no hay que romper
 
 - **Activo = `revoked_at IS NULL`.** No hay columna de estado; no la inventes.
-- **`verified_via` es un enum ABIERTO** (hoy `admin_code`, viene
-  `whatsapp_otp`). Un valor sin etiqueta en
+- **`verified_via` es un enum ABIERTO** (hoy `admin_code` y, desde la 0150,
+  `application_approval` — lo pone el backend al aprobar la solicitud que esa
+  cuenta registró logueada, ver `partner-approval.md`; viene `whatsapp_otp`). Un valor sin etiqueta en
   `PARTNER_MEMBERSHIP_VERIFICATION_LABELS` se muestra CRUDO. Los enums viajan
   `::text` desde el SQL por eso.
 - **`revoked_by_id` puede ser NULL en una fila revocada** (FK `ON DELETE SET

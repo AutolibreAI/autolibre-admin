@@ -24,6 +24,75 @@ git -C ../autolibre-backend-hex show ccb1cb50:scripts/sql/aprobar-partner-applic
 Desde entonces la spec viva es esta rule más `partners.repo.ts`, que dice qué consulta reemplaza
 cada función. Lo que sigue es lo que el panel tiene que preservar.
 
+## ⚠ Desde el 2026-11-05 la aprobación la hace el BACKEND
+
+`POST {AUTOLIBRE_BACKEND_URL}/admin/partner-applications/:id/approval` (`AdminGuard`, token de Clerk
+del admin; migraciones 0149/0150, rama `redesign` del backend, 32802a11..92de7865). Cuerpo
+`{ "coverageZone": string }` — 1..200 tras `trim`, **ninguna otra clave** (`forbidNonWhitelisted`).
+Cliente: `approvePartnerApplicationInBackend` en `src/server/backend.ts`; lo llama
+`approveApplication` en `partners.repo.ts`, que valida la respuesta con `backendApprovalSchema`
+(`~/lib/partner-approval`).
+
+**Qué se mudó al backend** (y se BORRÓ de `approveApplication`): la llamada a
+`approve_partner_application()`, el `INSERT INTO partner_services` y la copia de
+`raw_submission->latitude/longitude` por `ops.set_partner_location`. En UNA transacción suya: pasa la
+solicitud a `verbal_agreement`, crea el partner, carga los rubros (slug de servicio O de familia,
+activos — la misma regla que `expandDeclaredSlugs`, verificada leyendo
+`DrizzleServiceCatalogReader.findActiveServiceIdsForDeclaredSlugs`) y copia la coordenada si es
+válida y el partner no tenía. Después del commit asigna el **dueño** (`partner_members`,
+`verified_via = 'application_approval'`) a `submitted_by_user_id` y da de baja los códigos de reclamo
+pendientes. Si vuelve a aparecer alguno de esos tres SQL en el panel, hay dos escritores para lo mismo.
+
+**Qué queda en el panel:**
+
+- **Paso 0**: lo tipeado en el editor y sin guardar, por `ops.update_partner_application` (010) con
+  nota `'Guardado al aprobar'`. Va ANTES (el backend copia la solicitud al partner) y es una
+  **sentencia aparte**: ya no comparte transacción con la aprobación — son dos sistemas. Si el backend
+  falla, la edición queda guardada, y `readableApprovalError` lo dice.
+- **El chequeo de "invisible"**: `count(*)` de `partner_services` del partner, por SQL DESPUÉS de la
+  llamada (`totalServices`). **Nunca `servicesLoaded`**: son las filas insertadas por ESTA llamada,
+  0 en cualquier re-aprobación aunque el partner tenga rubros.
+- **El email del dueño**: SQL sobre `ownerUserId`.
+- **Destrabar** (consulta 5) y la regla de `verbal_agreement`, abajo: siguen igual.
+- **«Registrado por»**: `partner_applications.submitted_by_user_id` (0149, uuid NULLABLE, FK `users`
+  `ON DELETE SET NULL`) con `LEFT JOIN users`, detrás de un guard de `information_schema` (sin la
+  columna, la ficha no muestra a nadie en vez de dar 500). NULL en las anónimas y en todas las
+  anteriores a la 0149.
+- **Zona precargada**: no hay columna de zona en `partner_applications`; se precarga con
+  `raw_submission->>'Zona de cobertura'` (planilla) o «localidad, provincia» (formulario).
+
+**Respuesta 200**: `{ partnerId, alreadyApproved, servicesLoaded, locationCopied, ownerGrant,
+ownerUserId }`. `ownerGrant` se valida como `string`, no como enum: un valor nuevo se muestra crudo
+en vez de convertir en error una aprobación que ya se commiteó.
+
+| `ownerGrant` | La UI dice |
+|---|---|
+| `granted` | «<email> quedó como dueño» |
+| `already_granted` | ya era dueño |
+| `owner_taken` | ámbar: el taller ya tenía otro dueño (`ownerUserId` puede ser ése) |
+| `no_submitter` | nadie la registró logueado → emitir un código de reclamo en la ficha («Miembros») |
+| `failed` | no se pudo asignar → botón «Volver a aprobar» (la aprobación SÍ quedó hecha) |
+
+**Idempotente**: re-aprobar devuelve el mismo partner con `alreadyApproved: true`, repara rubros y
+dueño e ignora `coverageZone` (pero el DTO la exige: «Volver a aprobar» manda la del partner). El
+resultado vive en el estado de la PÁGINA, no del panel de aprobar: el `invalidate()` trae el partner y
+ese panel se desmonta.
+
+**Errores** (`backendError` modo `detailed`): 400 cuerpo inválido · 401/403 · 404 `NOT_FOUND` = la
+solicitud no existe · **404 con `Cannot POST` = el backend no tiene el endpoint (sin desplegar)** ·
+**409 `CONFLICT` = aprobada sin partner** → la UI manda a «Destrabar». Un timeout puede haber
+aprobado igual: reintentar es seguro.
+
+**Orden de deploy**: aprobar desde el panel EXIGE el backend con 0149/0150 desplegado en ese entorno.
+Hasta entonces, «Aprobar» muestra "el backend todavía no tiene el endpoint" y no aprueba nada (el
+paso 0, si había edición, sí guarda). Al 2026-11-05 las dos migraciones están en el Postgres local de
+DEV y **no** en producción ni preview.
+
+> Las secciones de abajo sobre los "dos pasos", el tercer paso de la ubicación y
+> `approve_partner_application()` describen el mecanismo ANTERIOR (SQL desde el panel). Las reglas de
+> fondo —rubros por familia, `verbal_agreement` como lock, el modo de falla silencioso— siguen
+> valiendo; quien las ejecuta ahora es el backend.
+
 ## Son DOS pasos, y el segundo es el que se olvida
 
 1. **`approve_partner_application(application_id, reviewer_id, coverage_zone)`** crea el partner.
@@ -88,7 +157,9 @@ chip. El runbook lo mira después de cada aprobación (consulta 6) y lo esperabl
 **Esto tiene que ser un indicador permanente del panel, no una consulta que alguien se acuerde de
 correr.** Es exactamente la clase de cosa que un panel existe para hacer imposible de olvidar.
 
-Igual con la consulta 4: solicitudes que declararon un slug que no es una familia activa. Con el
+Igual con la consulta 4: solicitudes cuyo declarado no resuelve a ningún servicio activo (slug de
+servicio O de familia — hasta el 2026-11-05 miraba sólo familias y contaba como "invisible" a toda
+solicitud que declaró rubros; `pipelineHealth.wouldBeInvisible`). Con el
 formulario nuevo debería dar cero siempre (el backend valida en el alta y devuelve 400), pero cubre
 dos casos que el backend no pudo: solicitudes cargadas antes de esa validación, y familias dadas de
 baja después de haber sido declaradas. En los dos, la carga automática no le pone **nada** a ese
