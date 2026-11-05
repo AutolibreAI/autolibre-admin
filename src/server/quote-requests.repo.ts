@@ -24,6 +24,7 @@ import {
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
   type QuoteAiClassification,
+  type QuoteTimingAndParts,
   type QuoteSortKey,
   type SetQuoteRequestRubrosInput,
   type UpdateQuoteRequestInput,
@@ -192,6 +193,45 @@ async function readAiClassification(id: string): Promise<QuoteAiClassification> 
       categoryName: r.category_name,
       score: Number(r.score),
     })),
+  }
+}
+
+/**
+ * "¿Para cuándo?" y repuestos (backend, migración 0143). Guard propio, como la
+ * 0124: NO va en `READ_COLUMNS`, que es el guard de TODA `/leads/pedidos` —una
+ * columna nueva ahí apagaría el listado y la ficha en una base sin la 0143
+ * (producción hasta su deploy). Sin la 0143 la ficha simplemente no los muestra.
+ *
+ * `preferred_date` sale como texto `YYYY-MM-DD` armado en SQL: `pg` entrega un
+ * `date` a la medianoche LOCAL del proceso y `toISOString()` devolvería el día
+ * anterior. Los enums con `::text`, como el resto del SELECT.
+ */
+async function readTimingAndParts(id: string): Promise<QuoteTimingAndParts> {
+  const guard = await sqlOne<{ ok: boolean }>(
+    `select count(*) = 3 as ok
+       from information_schema.columns
+      where table_schema = 'public' and table_name = 'quote_requests'
+        and column_name in ('timing', 'preferred_date', 'parts_supply')`,
+  )
+  if (guard?.ok !== true) return { available: false }
+
+  const row = await sqlOne<{
+    timing: string | null
+    preferred_date: string | null
+    parts_supply: string | null
+  }>(
+    `select timing::text as timing,
+            to_char(preferred_date, 'YYYY-MM-DD') as preferred_date,
+            parts_supply::text as parts_supply
+       from quote_requests
+      where id = $1`,
+    [id],
+  )
+  return {
+    available: true,
+    timing: row?.timing ?? null,
+    preferredDate: row?.preferred_date ?? null,
+    partsSupply: row?.parts_supply ?? null,
   }
 }
 
@@ -991,6 +1031,7 @@ export async function findQuoteRequestDetail(
   })
 
   const aiClassification = await readAiClassification(id)
+  const timingAndParts = await readTimingAndParts(id)
 
   return {
     ...mapListRow(r),
@@ -1014,6 +1055,7 @@ export async function findQuoteRequestDetail(
     locationProvince: r.location_province,
     editAvailable,
     aiClassification,
+    timingAndParts,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.

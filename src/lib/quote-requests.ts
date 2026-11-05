@@ -137,8 +137,43 @@ export const QUOTE_REQUEST_CANCELLATION_REASON_LABELS: Record<QuoteRequestCancel
   other: 'Otro',
 }
 
+/**
+ * "¿Para cuándo?" del formulario de la app (backend, migración 0143). Espejo de
+ * `quote_request_timing`: `date` es el único que trae `preferredDate`.
+ */
+export const QUOTE_REQUEST_TIMINGS = ['asap', 'this_week', 'date'] as const
+export type QuoteRequestTiming = (typeof QUOTE_REQUEST_TIMINGS)[number]
+
+export const QUOTE_REQUEST_TIMING_LABELS: Record<QuoteRequestTiming, string> = {
+  asap: 'Lo antes posible',
+  this_week: 'Esta semana',
+  date: 'Tiene una fecha',
+}
+
+/** "¿Y los repuestos?" (0143). Espejo de `quote_request_parts_supply`. */
+export const QUOTE_REQUEST_PARTS_SUPPLIES = ['workshop', 'customer'] as const
+export type QuoteRequestPartsSupply = (typeof QUOTE_REQUEST_PARTS_SUPPLIES)[number]
+
+export const QUOTE_REQUEST_PARTS_SUPPLY_LABELS: Record<QuoteRequestPartsSupply, string> = {
+  workshop: 'Los pone el taller',
+  customer: 'Ya los tiene (cotizar mano de obra)',
+}
+
 /** Tolerante: un valor que el espejo no conoce sale tal cual, no en blanco. */
 const labelOf = (labels: Record<string, string>, value: string): string => labels[value] ?? value
+
+export const quoteTimingLabel = (v: string) => labelOf(QUOTE_REQUEST_TIMING_LABELS, v)
+export const quotePartsSupplyLabel = (v: string) => labelOf(QUOTE_REQUEST_PARTS_SUPPLY_LABELS, v)
+
+/**
+ * `2026-11-20` → `20/11/2026`, armado del string y SIN `new Date()`: es un día
+ * calendario, y pasarlo por `Date` lo corre al día anterior en Buenos Aires.
+ * Un valor que no tiene esa forma sale tal cual.
+ */
+export const formatPlainDay = (day: string): string => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : day
+}
 
 export const quoteStatusLabel = (v: string) => labelOf(QUOTE_REQUEST_STATUS_LABELS, v)
 export const quoteChannelLabel = (v: string) => labelOf(QUOTE_REQUEST_CHANNEL_LABELS, v)
@@ -815,7 +850,30 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * Es una SUGERENCIA: el panel nunca escribe `quote_request_services`.
    */
   aiClassification: QuoteAiClassification
+  /** "¿Para cuándo?" y repuestos, lo que dijo la persona en la app (0143). */
+  timingAndParts: QuoteTimingAndParts
 }
+
+/**
+ * "¿Para cuándo?" y "¿Y los repuestos?" (backend, migración 0143). Sólo
+ * lectura: lo escribe la app al pedir.
+ *
+ * - `available: false` — la base no tiene la 0143 (producción hasta el deploy):
+ *   la ficha no muestra los campos.
+ * - Con la 0143, cada uno en `null` = la persona no lo dijo (cliente viejo,
+ *   landing, pedido cargado a mano).
+ *
+ * `preferredDate` es `YYYY-MM-DD` armado en SQL: un día calendario, nunca un
+ * `Date` (correría un día en Buenos Aires).
+ */
+export type QuoteTimingAndParts =
+  | { available: false }
+  | {
+      available: true
+      timing: string | null
+      preferredDate: string | null
+      partsSupply: string | null
+    }
 
 /**
  * Salida del clasificador del backend (migración 0124: `quote_requests.classified_at`

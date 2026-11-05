@@ -1491,3 +1491,19 @@ apagaría `/leads/pedidos` en una base sin la 0124. Verificado en producción el
   preselecciona nada en esos dos casos.
 - Scores sin calibrar: por debajo de `AI_SERVICE_LOW_SCORE` (0,5) se marcan «dudoso» en ámbar.
 - **Ni una escritura a `quote_request_services`**: es output del clasificador.
+
+### Para cuándo y repuestos (backend 0143) — desde el 2026-11-03
+
+La app manda "¿Para cuándo?" y "¿Y los repuestos?" al pedir: `quote_requests.timing`
+(`asap | this_week | date`), `preferred_date` (`date`, sólo con `timing = date`) y `parts_supply`
+(`workshop | customer`). Lo lee `readTimingAndParts` (`quote-requests.repo.ts`) para la ficha, con
+guard propio (las 3 columnas en `information_schema.columns`) — **no** está en `READ_COLUMNS`, por
+el mismo motivo que la 0124. Sin la 0143 la ficha no muestra los campos; con ella, `NULL` = «No lo
+dijo» (cliente viejo, landing, pedido cargado a mano). Sólo lectura: lo escribe la app.
+
+- `preferred_date` sale como texto con `to_char(..., 'YYYY-MM-DD')` y se formatea con
+  `formatPlainDay`, sin `new Date()`: `pg` entrega un `date` a la medianoche local y se correría un día.
+- Etiquetas en `QUOTE_REQUEST_TIMING_LABELS` / `QUOTE_REQUEST_PARTS_SUPPLY_LABELS`; un valor que el
+  espejo no conoce sale crudo, nunca en blanco.
+- Verificado contra la base local con la 0143 (y con una columna borrada en una transacción revertida:
+  el guard da `false`). Al 2026-11-03 la 0143 NO está en producción.

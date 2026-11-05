@@ -2,8 +2,11 @@ import { Link, createFileRoute, notFound } from '@tanstack/react-router'
 import { ArrowLeft, Globe, MessageCircle, Smartphone } from 'lucide-react'
 import {
   formatMinutes,
+  formatPlainDay,
   parseInternalNotes,
   quoteCancellationReasonLabel,
+  quotePartsSupplyLabel,
+  quoteTimingLabel,
   quoteChannelLabel,
   quoteCloseReasonLabel,
   quoteMapLocation,
@@ -372,6 +375,30 @@ function QuoteRequestScreen() {
             <Field label="Descripción">
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{d.description}</p>
             </Field>
+            {/* "¿Para cuándo?" y repuestos (backend 0143). Sin la 0143 en la
+                base no se muestran; con ella, "No lo dijo" es un dato. */}
+            {d.timingAndParts.available ? (
+              <>
+                <Field label="Para cuándo">
+                  {d.timingAndParts.timing === null ? (
+                    <span className="text-sm text-muted-foreground">No lo dijo</span>
+                  ) : (
+                    <span className="text-sm">
+                      {d.timingAndParts.timing === 'date' && d.timingAndParts.preferredDate
+                        ? `El ${formatPlainDay(d.timingAndParts.preferredDate)}`
+                        : quoteTimingLabel(d.timingAndParts.timing)}
+                    </span>
+                  )}
+                </Field>
+                <Field label="Repuestos">
+                  {d.timingAndParts.partsSupply === null ? (
+                    <span className="text-sm text-muted-foreground">No lo dijo</span>
+                  ) : (
+                    <span className="text-sm">{quotePartsSupplyLabel(d.timingAndParts.partsSupply)}</span>
+                  )}
+                </Field>
+              </>
+            ) : null}
             <Field label="Zona">
               {d.locationAddress ? (
                 <>
