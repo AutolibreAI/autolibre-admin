@@ -10,6 +10,15 @@ import '@tanstack/react-start/server-only'
 
 import { auth } from '@clerk/tanstack-react-start/server'
 import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
+import {
+  PARTNER_DISPATCH_BAD_RESPONSE,
+  approvedDispatchSchema,
+  dispatchDraftSchema,
+  outreachListSchema,
+  type ApprovedDispatch,
+  type DispatchDraft,
+  type OutreachRow,
+} from '~/lib/partner-dispatch'
 
 /**
  * El único cliente HTTP del panel contra `autolibre-backend-hex`.
@@ -134,6 +143,10 @@ interface BackendErrorBody {
    */
   proposalIndex?: unknown
   partnerId?: unknown
+  /** `details` del despacho por WhatsApp (0142): motivos, partners no elegibles, lugares libres. */
+  reasons?: unknown
+  partnerIds?: unknown
+  freeSlots?: unknown
 }
 
 /**
@@ -150,7 +163,7 @@ interface BackendErrorBody {
 async function backendError(
   response: Response,
   what: string,
-  opts: { detailed?: boolean; proposal?: boolean } = {},
+  opts: { detailed?: boolean; proposal?: boolean; dispatch?: boolean } = {},
 ): Promise<Error> {
   let body: BackendErrorBody | null = null
 
@@ -172,6 +185,33 @@ async function backendError(
       : Array.isArray(body?.message)
         ? body.message.filter((m): m is string => typeof m === 'string').join('; ') || null
         : null
+
+  /**
+   * Modo `dispatch` — opt-in, lo usa sólo el despacho por WhatsApp (0142,
+   * 2026-11-04). Va ANTES del corte genérico de 401/403 a propósito: el kill
+   * switch del backend (`PARTNER_DISPATCH_ENABLED`, apagado por default)
+   * contesta 403 `FEATURE_DISABLED`, y aplanarlo a `BACKEND_FORBIDDEN` diría
+   * "no sos admin" cuando lo que pasa es que la función está apagada.
+   *
+   * Formato: `PARTNER_DISPATCH_ERROR:` + JSON con status, code, los `details`
+   * que el filtro del backend esparce top-level (reasons / partnerIds /
+   * freeSlots) y el mensaje. JSON y no `:`-separado: son listas. Lo lee
+   * `parsePartnerDispatchError` de `~/lib/partner-dispatch`. Los otros modos
+   * no cambian: otras pantallas parsean sus strings.
+   */
+  if (opts.dispatch) {
+    const strings = (x: unknown) => (Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string') : [])
+    return new Error(
+      `PARTNER_DISPATCH_ERROR:${JSON.stringify({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        reasons: strings(body?.reasons),
+        partnerIds: strings(body?.partnerIds),
+        freeSlots: typeof body?.freeSlots === 'number' ? body.freeSlots : null,
+        message: message ?? `${what} falló sin explicación`,
+      })}`,
+    )
+  }
 
   if (response.status === 401) return new Error('BACKEND_UNAUTHENTICATED')
   if (response.status === 403) return new Error('BACKEND_FORBIDDEN')
@@ -949,8 +989,6 @@ export async function issuePartnerClaimCode(partnerId: string): Promise<IssuedCl
   return parsed.data
 }
 
-// ── Despacho de un pedido a talleres por WhatsApp (0142) ─────────────────────
-
 // ── Aprobar una solicitud de partner (0149/0150) ─────────────────────────────
 
 /**
@@ -991,4 +1029,101 @@ export async function approvePartnerApplicationInBackend(input: {
   } catch {
     throw new Error('APPROVAL_BAD_RESPONSE')
   }
+}
+
+// ── Despacho de un pedido a talleres por WhatsApp (0142) ─────────────────────
+
+/**
+ * Sexta excepción a "el panel habla con Postgres": el grep dio positivo
+ * (`AdminPartnerOutreachController` y `AdminQuoteRequestOutreachController`,
+ * `AdminGuard` en cada handler). El template de WhatsApp lo manda el backend;
+ * un SQL a `partner_outreach` no le avisaría a ningún taller.
+ * → `.claude/rules/partner-dispatch.md`
+ *
+ * Mismo esqueleto que `proposalFetch` (token del admin, `BACKEND_UNREACHABLE`
+ * cuando ni llegó, timeout que se deja pasar porque pudo haberse guardado),
+ * pero con GET y con el modo de error `dispatch`.
+ */
+async function dispatchFetch(
+  path: string,
+  init: { method: 'GET' | 'POST'; body?: unknown; signal?: AbortSignal },
+  what: string,
+): Promise<unknown> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  const timeout = AbortSignal.timeout(JSON_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: init.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      cache: 'no-store',
+      signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
+    })
+  } catch (cause) {
+    if (cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError')) throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, what, { dispatch: true })
+  try {
+    return await response.json()
+  } catch {
+    throw new Error(PARTNER_DISPATCH_BAD_RESPONSE)
+  }
+}
+
+/** Cálculo puro: si se puede despachar, a quién, y qué va a leer cada taller. No guarda nada. */
+export async function getPartnerDispatchDraft(
+  quoteRequestId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<DispatchDraft> {
+  const body = await dispatchFetch(
+    `/admin/quote-requests/${quoteRequestId}/dispatch-draft`,
+    { method: 'GET', signal: opts.signal },
+    'El borrador del despacho',
+  )
+  const parsed = dispatchDraftSchema.safeParse(body)
+  if (!parsed.success) throw new Error(PARTNER_DISPATCH_BAD_RESPONSE)
+  return parsed.data
+}
+
+/**
+ * Aprueba el despacho: 202, asincrónico. Idempotente por `dispatchId` (lo
+ * genera el CLIENTE). `descriptionReviewed: true` siempre: el server function
+ * sólo llega acá si la UI lo exigió; el backend lo vuelve a exigir.
+ */
+export async function approvePartnerDispatch(
+  quoteRequestId: string,
+  input: { dispatchId: string; partnerIds: Array<string> },
+): Promise<ApprovedDispatch> {
+  const body = await dispatchFetch(
+    `/admin/quote-requests/${quoteRequestId}/dispatches`,
+    {
+      method: 'POST',
+      body: { dispatchId: input.dispatchId, partnerIds: input.partnerIds, descriptionReviewed: true },
+    },
+    'La aprobación del despacho',
+  )
+  const parsed = approvedDispatchSchema.safeParse(body)
+  if (!parsed.success) throw new Error(PARTNER_DISPATCH_BAD_RESPONSE)
+  return parsed.data
+}
+
+/** El seguimiento: un contacto por taller, en orden de aprobación. `[]` si nunca se despachó. */
+export async function listQuoteRequestOutreach(
+  quoteRequestId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<OutreachRow>> {
+  const body = await dispatchFetch(
+    `/admin/quote-requests/${quoteRequestId}/outreach`,
+    { method: 'GET', signal: opts.signal },
+    'El seguimiento del despacho',
+  )
+  const parsed = outreachListSchema.safeParse(body)
+  if (!parsed.success) throw new Error(PARTNER_DISPATCH_BAD_RESPONSE)
+  return parsed.data
 }

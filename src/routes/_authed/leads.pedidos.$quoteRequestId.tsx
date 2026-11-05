@@ -38,6 +38,8 @@ import { QuoteUserLinker } from '~/components/QuoteUserLinker'
 import { whatsappOptInMock } from '~/mocks/quote-whatsapp-opt-in'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
+import { PartnerDispatch } from '~/components/PartnerDispatch'
+import { getPartnerDispatchFn } from '~/fn/partner-dispatch'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
@@ -118,6 +120,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         vehicleProfile: null,
         photos: { available: false as const },
         proposals: { available: false as const },
+        dispatch: { available: false as const },
       }
 
     // Los presupuestos viejos de `ops` ya no tienen tarjeta (2026-10-27): se
@@ -131,7 +134,9 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     // nada que pedir acá.
     // Las propuestas en la app tienen su PROPIO guard (0120–0122 del backend):
     // en una base sin ellas vuelven `{ available: false }`, nunca un 500.
-    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals] = await Promise.all([
+    // El despacho por WhatsApp (0142) va por HTTP y devuelve borrador y
+    // seguimiento como resultados propios: nunca tira, así que no frena la ficha.
+    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals, dispatch] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
       listQuoteResponsesFn({ data: params, signal }),
@@ -142,6 +147,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         : Promise.resolve(null),
       listQuoteRequestPhotosFn({ data: { quoteRequestId: params.quoteRequestId }, signal }),
       listQuoteProposalsFn({ data: params, signal }),
+      getPartnerDispatchFn({ data: params, signal }),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
@@ -182,6 +188,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       vehicleProfile,
       photos,
       proposals,
+      dispatch,
     }
   },
 
@@ -212,6 +219,7 @@ function QuoteRequestScreen() {
     vehicleProfile,
     photos,
     proposals,
+    dispatch,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -491,6 +499,13 @@ function QuoteRequestScreen() {
         siempre, arma el mensaje «Presupuestos» de arriba.
         → `.claude/rules/quote-proposals.md`
       */}
+      {/*
+        Despacho por WhatsApp (0142): el backend le manda el pedido a hasta 3
+        talleres. Va antes de las propuestas: es de donde salen.
+        → `.claude/rules/partner-dispatch.md`
+      */}
+      <PartnerDispatch key={`dispatch-${d.id}`} quoteRequestId={d.id} data={dispatch} />
+
       <QuoteProposals
         key={`proposals-${d.id}`}
         quoteRequestId={d.id}
