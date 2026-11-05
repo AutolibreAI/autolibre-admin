@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import type { PartnerMember } from '~/lib/partner-members'
+import type { PartnerClaimCode } from '~/lib/partner-claim-codes'
 
 /**
  * Miembros de un partner — la LECTURA de `public.partner_members` (0141 del
@@ -113,4 +114,138 @@ export async function memberBelongsToPartner(memberId: string, partnerId: string
     [memberId, partnerId],
   )
   return row?.ok === true
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Códigos para reclamar un taller — `public.partner_claim_codes` (0144).
+//
+// Sólo lectura, con su PROPIO guard: la 0144 puede faltar en una base que ya
+// tiene la 0141, y la parte de miembros tiene que seguir andando. Emitir va por
+// HTTP (`issuePartnerClaimCode` en `~/server/backend`).
+//
+// `code_hash` NO se selecciona nunca: no hace falta y no tiene por qué viajar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Las columnas de `partner_claim_codes` que este repo LEE. Se tocan junto con el SELECT. */
+const CLAIM_CODE_COLUMNS = [
+  'id',
+  'partner_id',
+  'expires_at',
+  'created_by_id',
+  'redeemed_by_id',
+  'redeemed_at',
+  'revoked_at',
+  'superseded_at',
+  'created_at',
+] as const
+
+export async function partnerClaimCodesAvailability(opts: { signal?: AbortSignal } = {}): Promise<boolean> {
+  void opts.signal
+  const row = await sqlOne<{ has_table: boolean; cols: number }>(
+    `select to_regclass('public.partner_claim_codes') is not null as has_table,
+            (select count(*)::int from information_schema.columns
+              where table_schema = 'public' and table_name = 'partner_claim_codes'
+                and column_name = any($1::text[])) as cols`,
+    [CLAIM_CODE_COLUMNS],
+  )
+  return row?.has_table === true && Number(row.cols) === CLAIM_CODE_COLUMNS.length
+}
+
+interface ClaimCodeRow {
+  id: string
+  state: string
+  created_at: unknown
+  expires_at: unknown
+  hours_left: number | null
+  created_by_id: string | null
+  created_by_email: string | null
+  redeemed_at: unknown
+  redeemed_by_id: string | null
+  redeemed_by_email: string | null
+  revoked_at: unknown
+  superseded_at: unknown
+}
+
+/**
+ * El estado y las horas que faltan los calcula Postgres: la ficha es SSR y
+ * restar contra el reloj del navegador sería un mismatch de hidratación (mismo
+ * criterio que `age_minutes` en `/actividad`). Pendientes primero, después lo
+ * más nuevo arriba. `left join users` a los dos: las dos FK son `ON DELETE SET NULL`.
+ */
+export async function listPartnerClaimCodes(
+  partnerId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Array<PartnerClaimCode>> {
+  void opts.signal
+  const rows = await sql<ClaimCodeRow>(
+    `select s.*
+       from (
+         select c.id,
+                case
+                  when c.redeemed_at is not null then 'canjeado'
+                  when c.revoked_at is not null then 'revocado'
+                  when c.superseded_at is not null then 'invalidado'
+                  when c.expires_at <= now() then 'vencido'
+                  else 'pendiente'
+                end as state,
+                c.created_at,
+                c.expires_at,
+                case
+                  when c.redeemed_at is null and c.revoked_at is null and c.superseded_at is null
+                       and c.expires_at > now()
+                  then ceil(extract(epoch from (c.expires_at - now())) / 3600)::int
+                end as hours_left,
+                c.created_by_id,
+                cb.email as created_by_email,
+                c.redeemed_at,
+                c.redeemed_by_id,
+                rb.email as redeemed_by_email,
+                c.revoked_at,
+                c.superseded_at
+           from partner_claim_codes c
+           left join users cb on cb.id = c.created_by_id
+           left join users rb on rb.id = c.redeemed_by_id
+          where c.partner_id = $1
+       ) s
+      order by (s.state = 'pendiente') desc, s.created_at desc, s.id`,
+    [partnerId],
+  )
+
+  return rows.map((r) => ({
+    id: r.id,
+    state: r.state,
+    createdAt: toIso(r.created_at) ?? '',
+    expiresAt: toIso(r.expires_at) ?? '',
+    hoursLeft: r.hours_left === null ? null : Number(r.hours_left),
+    createdById: r.created_by_id,
+    createdByEmail: r.created_by_email,
+    redeemedAt: toIso(r.redeemed_at),
+    redeemedById: r.redeemed_by_id,
+    redeemedByEmail: r.redeemed_by_email,
+    revokedAt: toIso(r.revoked_at),
+    supersededAt: toIso(r.superseded_at),
+  }))
+}
+
+/**
+ * Lo que decide si se puede emitir, leído ANTES de llamar al backend: el estado
+ * del partner y si tiene un dueño activo (sólo si la 0141 está; sin ella no hay
+ * dueño que mirar). `null` = el partner no existe.
+ */
+export async function claimCodePreconditions(
+  partnerId: string,
+): Promise<{ status: string; hasActiveOwner: boolean } | null> {
+  const partner = await sqlOne<{ status: string }>(`select status::text as status from partners where id = $1`, [
+    partnerId,
+  ])
+  if (!partner) return null
+  if (!(await partnerMembersAvailability())) return { status: partner.status, hasActiveOwner: false }
+  const owner = await sqlOne<{ ok: boolean }>(
+    `select exists (
+       select 1 from partner_members
+        where partner_id = $1 and member_role::text = 'owner' and revoked_at is null
+     ) as ok`,
+    [partnerId],
+  )
+  return { status: partner.status, hasActiveOwner: owner?.ok === true }
 }

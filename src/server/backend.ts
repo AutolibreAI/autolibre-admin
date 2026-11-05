@@ -9,6 +9,7 @@
 import '@tanstack/react-start/server-only'
 
 import { auth } from '@clerk/tanstack-react-start/server'
+import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
 
 /**
  * El único cliente HTTP del panel contra `autolibre-backend-hex`.
@@ -906,3 +907,46 @@ export async function revokePartnerMember(memberId: string): Promise<void> {
   }
   if (!response.ok) throw await backendError(response, 'Revocar el miembro', { detailed: true })
 }
+
+/**
+ * Emite un código para reclamar el taller (`POST /admin/partners/:id/claim-codes`,
+ * `AdminGuard`, sin cuerpo). 201 → `{ id, partnerId, code, expiresAt }`.
+ *
+ * **El `code` es un secreto al portador**: un solo uso, 7 días, y la base
+ * guarda sólo su hash. Esta función lo devuelve y NADA más lo toca: no se
+ * loguea, no se cachea, no se mete en ningún mensaje de error (el `ZodError`
+ * se descarta a propósito: su `message` incluiría el valor recibido).
+ *
+ * Errores con `detailed`: 409 `CONFLICT` cubre DOS casos (archivado o con
+ * dueño activo) con el mismo code; la UI no ramifica por el mensaje.
+ * → `.claude/rules/partner-members.md`
+ */
+export async function issuePartnerClaimCode(partnerId: string): Promise<IssuedClaimCode> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/partners/${partnerId}/claim-codes`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'Emitir el código', { detailed: true })
+
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new Error('CLAIM_CODE_BAD_RESPONSE')
+  }
+  const parsed = issuedClaimCodeSchema.safeParse(body)
+  if (!parsed.success || parsed.data.partnerId !== partnerId) throw new Error('CLAIM_CODE_BAD_RESPONSE')
+  return parsed.data
+}
+
+// ── Despacho de un pedido a talleres por WhatsApp (0142) ─────────────────────

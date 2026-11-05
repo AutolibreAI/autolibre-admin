@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, createFileRoute, notFound, useRouter } from '@tanstack/react-router'
 import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
-import { listPartnerMembersFn } from '~/fn/partner-members'
+import { listPartnerClaimCodesFn, listPartnerMembersFn } from '~/fn/partner-members'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PartnerFicha } from '~/components/PartnerFicha'
 import { PartnerSealsCard } from '~/components/PartnerSeals'
@@ -16,17 +16,20 @@ import type { PartnerServicesView, ServiceItem } from '~/lib/catalog'
 export const Route = createFileRoute('/_authed/partners/$partnerId')({
   loader: async ({ params, abortController }) => {
     const signal = abortController.signal
-    const [view, members] = await Promise.all([
+    const [view, members, claimCodes] = await Promise.all([
       getPartnerServicesView({ data: params, signal }).catch((cause: unknown) => {
         if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
         throw cause
       }),
       // Sin la 0141 del backend vuelve `{ available: false }`, nunca un 500.
       listPartnerMembersFn({ data: params, signal }),
+      // Guard propio (0144): puede faltar aunque esté la 0141. Nunca trae el
+      // código en claro ni su hash — sólo existe en la respuesta de «Emitir».
+      listPartnerClaimCodesFn({ data: params, signal }),
     ])
 
     if (!view) throw notFound()
-    return { ...view, members }
+    return { ...view, members, claimCodes }
   },
 
   head: ({ loaderData }) => ({
@@ -142,7 +145,14 @@ function PartnerServicesEditor() {
       <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />
 
       {/* Quién opera el taller desde la app (partner_members, 0141). Lee por SQL, revoca por HTTP. */}
-      <PartnerMembersCard partnerId={view.partner.id} result={view.members} />
+      <PartnerMembersCard
+        partnerId={view.partner.id}
+        partnerName={view.partner.name}
+        partnerStatus={view.partner.status}
+        partnerWhatsapp={view.partner.whatsapp}
+        result={view.members}
+        claimCodes={view.claimCodes}
+      />
 
       <Suggestions view={view} onApply={(ids) => setSelected((p) => new Set([...p, ...ids]))} />
 

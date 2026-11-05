@@ -79,3 +79,22 @@ export const formatBytes = (bytes: number) =>
   bytes < 1024 * 1024
     ? `${Math.round(bytes / 1024)} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+const dateTimeBuenosAires = new Intl.DateTimeFormat("es-AR", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: "America/Argentina/Buenos_Aires",
+});
+
+/**
+ * Fecha + hora en hora de Buenos Aires. La zona sigue PINEADA (no es la del
+ * navegador), así que no rompe la hidratación. Existe para textos que salen
+ * del panel hacia una persona de afuera —el vencimiento de un código para
+ * reclamar un taller, que viaja por WhatsApp—, donde una hora UTC se leería
+ * tres horas corrida.
+ */
+export const formatDateTimeBuenosAires = (iso: string) => dateTimeBuenosAires.format(new Date(iso));

@@ -11,6 +11,8 @@ import {
 import { formatDate } from '~/lib/format'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
+import { PartnerClaimCodesSection } from '~/components/PartnerClaimCodesSection'
+import type { PartnerClaimCodesResult } from '~/lib/partner-claim-codes'
 import { cn } from '~/lib/utils'
 
 /**
@@ -23,26 +25,46 @@ import { cn } from '~/lib/utils'
  */
 export function PartnerMembersCard({
   partnerId,
+  partnerName,
+  partnerStatus,
+  partnerWhatsapp,
   result,
+  claimCodes,
 }: {
   partnerId: string
+  partnerName: string
+  partnerStatus: string
+  partnerWhatsapp: string | null
   result: PartnerMembersResult
+  claimCodes: PartnerClaimCodesResult
 }) {
   const router = useRouter()
   const inFlight = useRef(false)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
-  async function revoke(memberId: string) {
+  async function revoke(memberId: string, wasActiveOwner: boolean) {
     if (inFlight.current) return
     inFlight.current = true
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       await revokePartnerMemberFn({ data: { partnerId, memberId } })
       setConfirming(null)
       await router.invalidate()
+      if (wasActiveOwner) {
+        // Revocar al DUEÑO hace que el backend invalide en segundo plano los
+        // códigos pendientes del taller (`superseded_at`, desde 884332bb). Es
+        // asincrónico: la relectura de recién puede todavía verlos pendientes,
+        // así que se relee una vez más un rato después.
+        setNotice(
+          'Los códigos pendientes de este taller quedaron sin efecto. Emití uno nuevo para el próximo dueño.',
+        )
+        setTimeout(() => void router.invalidate(), 1500)
+      }
     } catch (cause) {
       setError(readablePartnerMemberError(cause))
     } finally {
@@ -64,8 +86,8 @@ export function PartnerMembersCard({
           </p>
         ) : result.members.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Nadie reclamó este taller todavía: ninguna cuenta de la app está vinculada. Los códigos
-            para reclamarlo todavía no se emiten desde el panel.
+            Nadie reclamó este taller todavía: ninguna cuenta de la app está vinculada. Para que
+            alguien lo reclame, emitile un código (abajo).
           </p>
         ) : (
           <ul className="divide-y divide-border">
@@ -80,7 +102,7 @@ export function PartnerMembersCard({
                   setConfirming(m.id)
                 }}
                 onCancel={() => setConfirming(null)}
-                onConfirm={() => void revoke(m.id)}
+                onConfirm={() => void revoke(m.id, m.memberRole === 'owner' && m.revokedAt === null)}
               />
             ))}
           </ul>
@@ -91,6 +113,25 @@ export function PartnerMembersCard({
             {error}
           </p>
         ) : null}
+
+        {notice ? (
+          <p role="status" className="text-sm text-status-yellow">
+            {notice}
+          </p>
+        ) : null}
+
+        <PartnerClaimCodesSection
+          partnerId={partnerId}
+          partnerName={partnerName}
+          partnerStatus={partnerStatus}
+          partnerWhatsapp={partnerWhatsapp}
+          // La decisión de ofrecer «Emitir» sale de lo YA leído: si la 0141
+          // falta no hay dueño que mirar (el handler re-chequea igual).
+          hasActiveOwner={
+            result.available && result.members.some((m) => m.memberRole === 'owner' && m.revokedAt === null)
+          }
+          result={claimCodes}
+        />
       </CardContent>
     </Card>
   )
@@ -160,7 +201,7 @@ function MemberRow({
           <p className="text-xs leading-relaxed text-foreground">
             {m.userEmail} deja de poder operar este taller desde la app.
             {isOwner
-              ? ' El taller queda sin dueño; para pasárselo a otra persona hay que emitirle un código nuevo (todavía no disponible en el panel).'
+              ? ' El taller queda sin dueño; para pasárselo a otra persona, después emitile un código nuevo (sección «Códigos para reclamar»).'
               : ''}
           </p>
           <div className="flex gap-2">
