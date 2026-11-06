@@ -30,30 +30,99 @@ import { z } from 'zod'
  * 3. Los talleres de afuera del directorio siguen permitidos como excepción.
  *    Van en una sección aparte y no suman a ningún tope ni plan.
  * 4. Elegidas = la elegida de hoy (arriba).
- * 5. El plan se carga a mano desde el admin (`PartnerPlanEditor`).
+ * 5. Desde el 05/11/26 el plan NO se carga a mano: es el que el dueño del
+ *    taller contrató por Mercado Pago (`partner_subscriptions`, billing del
+ *    backend). El panel sólo lo LEE; no hay endpoint de admin para cambiarlo.
  *
  * Todo lo de este archivo es cálculo determinístico: no lee nada. Las dos
  * vistas (mes e histórico) salen del MISMO `bucketProposals`, así que no pueden
  * contar distinto.
  */
 
-export const PARTNER_PLANS = ['gratis', 'estandar', 'plus', 'plus_max'] as const
-export type PartnerPlan = (typeof PARTNER_PLANS)[number]
+// ── El plan: catálogo y plan efectivo ─────────────────────────────────────────
 
-export const PARTNER_PLAN_LABELS: Record<PartnerPlan, string> = {
-  gratis: 'Gratis',
-  estandar: 'Estándar',
-  plus: 'Plus',
-  plus_max: 'Plus Max',
+/**
+ * Un plan del catálogo del backend (`public.subscription_plans`). Código,
+ * nombre y tope salen de la base; ninguno se escribe a mano en el panel.
+ *
+ * ⚠ `cap` es `monthly_whatsapp_request_limit`: el backend lo define como
+ * PEDIDOS por WhatsApp al mes, y esta pantalla lo compara contra PROPUESTAS
+ * usadas. Hoy los números coinciden con lo decidido el 02/11 (1 / 10 / 15); si
+ * el backend separa los dos topes, este campo cambia de columna.
+ */
+export interface PlanInfo {
+  code: string
+  name: string
+  /** Por mes calendario. `null` = sin límite (hoy la columna es NOT NULL). */
+  cap: number | null
+  /** Se ofrece hoy. Uno inactivo puede seguir siendo el de una suscripción vieja. */
+  active: boolean
 }
 
-/** Propuestas por mes calendario. `null` = sin límite. */
-export const PARTNER_PLAN_CAPS: Record<PartnerPlan, number | null> = {
-  gratis: 1,
-  estandar: null,
-  plus: 10,
-  plus_max: 15,
+/** El plan de quien no tiene suscripción con acceso. */
+export const FREE_PLAN_CODE = 'free'
+
+/** `partner_subscriptions.status`. Un valor nuevo se muestra crudo. */
+export const SUBSCRIPTION_STATUS_LABELS: Record<string, string> = {
+  pending: 'pago pendiente',
+  trialing: 'en prueba',
+  active: 'activa',
+  paused: 'pausada en Mercado Pago',
+  cancelled: 'cancelada',
 }
+
+export const subscriptionStatusLabel = (s: string) => SUBSCRIPTION_STATUS_LABELS[s] ?? s
+
+/**
+ * La suscripción VIVA de un partner (a lo sumo una: índice único parcial
+ * `idx_partner_subscriptions_partner_live_unique`).
+ */
+export interface PartnerSubscriptionInfo {
+  partnerId: string
+  status: string
+  /** El plan de la suscripción, que NO es el efectivo si no da acceso. */
+  planCode: string
+  /**
+   * `trialing`/`active` con `access_until` nulo o futuro — la regla de
+   * `DrizzlePartnerEntitlementsReader` del backend. Lo calcula Postgres con su
+   * `now()`: el reloj del navegador daría otra respuesta en una pantalla SSR.
+   */
+  grantsAccess: boolean
+  trialEndsAt: string | null
+  currentPeriodEnd: string | null
+  accessUntil: string | null
+  cancelAtPeriodEnd: boolean
+  scheduledPlanCode: string | null
+  scheduledPlanAt: string | null
+}
+
+export type PartnerPlansResult =
+  | { available: false }
+  | { available: true; catalog: Array<PlanInfo>; subscriptions: Array<PartnerSubscriptionInfo> }
+
+/**
+ * El plan EFECTIVO de cada partner pedido: el de su suscripción si da acceso,
+ * si no Gratis (pendiente, pausada o sin suscripción). Sin billing en la base,
+ * o sin la fila `free` en el catálogo, el partner no entra al mapa: "sin plan".
+ */
+export function effectivePlans(
+  result: PartnerPlansResult,
+  partnerIds: ReadonlyArray<string>,
+): Map<string, PlanInfo> {
+  const out = new Map<string, PlanInfo>()
+  if (!result.available) return out
+  const byCode = new Map(result.catalog.map((p) => [p.code, p]))
+  const free = byCode.get(FREE_PLAN_CODE) ?? null
+  const subs = new Map(result.subscriptions.map((s) => [s.partnerId, s]))
+  for (const id of partnerIds) {
+    const sub = subs.get(id)
+    const plan = sub?.grantsAccess ? (byCode.get(sub.planCode) ?? null) : free
+    if (plan) out.set(id, plan)
+  }
+  return out
+}
+
+export const capLabel = (plan: PlanInfo) => (plan.cap === null ? 'sin límite' : `${plan.cap} por mes`)
 
 /**
  * 2026-10-27 00:00 en Buenos Aires (UTC−3, sin horario de verano).
@@ -177,19 +246,19 @@ export interface PartnerRef {
  *
  * | tono | cuándo | se pinta |
  * |---|---|---|
- * | `no_plan` | sin plan cargado | "sin plan", gris |
+ * | `no_plan` | sin billing en la base | "sin plan", gris |
  * | `founding` | Aliado, pase o no el tope | gris neutro + badge |
- * | `unlimited` | plan sin límite (Estándar) | normal |
+ * | `unlimited` | plan sin límite (hoy ninguno) | normal |
  * | `over` | usadas > tope | rojo |
  * | `at` | usadas = tope | amarillo |
  * | `under` | por debajo | normal |
  */
 export type CapTone = 'no_plan' | 'founding' | 'unlimited' | 'over' | 'at' | 'under'
 
-export function capTone(used: number, plan: PartnerPlan | null, tier: string | null): CapTone {
+export function capTone(used: number, plan: PlanInfo | null, tier: string | null): CapTone {
   if (plan === null) return 'no_plan'
   if (isFounding(tier)) return 'founding'
-  const cap = PARTNER_PLAN_CAPS[plan]
+  const cap = plan.cap
   if (cap === null) return 'unlimited'
   if (used > cap) return 'over'
   if (used === cap) return 'at'
@@ -299,7 +368,7 @@ export interface PartnerUsageRow extends UsageCounts {
   name: string
   tier: string | null
   status: string | null
-  plan: PartnerPlan | null
+  plan: PlanInfo | null
   /** `null` = sin límite, o sin plan. */
   cap: number | null
   tone: CapTone
@@ -316,7 +385,7 @@ export function aggregatePartnerUsage(
   facts: ReadonlyArray<ProposalFact>,
   month: string,
   partners: ReadonlyArray<PartnerRef>,
-  plans: ReadonlyMap<string, PartnerPlan>,
+  plans: ReadonlyMap<string, PlanInfo>,
   opts: { includeIdle: boolean },
 ): PartnerUsageView<PartnerUsageRow> {
   const buckets = bucketProposals(facts)
@@ -337,7 +406,7 @@ export function aggregatePartnerUsage(
       tier,
       status: p?.status ?? null,
       plan,
-      cap: plan ? PARTNER_PLAN_CAPS[plan] : null,
+      cap: plan ? plan.cap : null,
       ...counts,
       tone: capTone(counts.used, plan, tier),
     }
@@ -355,7 +424,7 @@ export interface PartnerHistoryRow extends UsageCounts {
   name: string
   tier: string | null
   status: string | null
-  plan: PartnerPlan | null
+  plan: PlanInfo | null
   /** elegidas / enviadas. `null` sin enviadas: no hay de qué sacar el porcentaje. */
   pctSelected: number | null
   firstAt: string | null
@@ -387,7 +456,7 @@ export interface AllTimeVolume {
 export function aggregatePartnerHistory(
   facts: ReadonlyArray<ProposalFact>,
   partners: ReadonlyArray<PartnerRef>,
-  plans: ReadonlyMap<string, PartnerPlan>,
+  plans: ReadonlyMap<string, PlanInfo>,
   opts: {
     includeIdle: boolean
     /** Por `partner_id`. `null` = la 025 no está; sin la clave = sin historial. */
@@ -462,7 +531,7 @@ export function partnerHistoryCsv(view: PartnerUsageView<PartnerHistoryRow>): st
     lines.push(
       [
         'directorio', r.name, r.partnerId, isFounding(r.tier) ? 'si' : 'no',
-        r.plan ? PARTNER_PLAN_LABELS[r.plan] : 'sin plan', r.sent, r.withdrawn, r.selected, r.used,
+        r.plan ? r.plan.name : 'sin plan', r.sent, r.withdrawn, r.selected, r.used,
         r.pctSelected === null ? null : Math.round(r.pctSelected * 10) / 10, day(r.firstAt), day(r.lastAt),
         r.activeMonths, r.peak?.month ?? null, r.peak?.used ?? null,
         r.tone === 'over' ? 'si' : r.tone === 'at' ? 'llego' : 'no',

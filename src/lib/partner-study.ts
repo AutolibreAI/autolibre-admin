@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { multiSelectParam } from './catalog'
-import { PARTNER_PLANS, PARTNER_PLAN_LABELS, PROPOSAL_COUNT_START, monthLabel } from './partner-plans'
-import type { PartnerPlan, ProposalFact } from './partner-plans'
+import { PROPOSAL_COUNT_START, monthLabel } from './partner-plans'
+import type { PlanInfo, ProposalFact } from './partner-plans'
 
 /**
  * Estudio de proveedores (`/partners/estudio`) — tarjeta "Panel admin: estudio
@@ -38,7 +38,8 @@ export const partnerStudySearchSchema = z.object({
     .default(30),
   studyZones: multiSelectParam(z.string().trim().max(120)),
   studyRubros: multiSelectParam(z.string().trim().max(60)),
-  studyPlans: multiSelectParam(z.enum(PARTNER_PLANS)),
+  /** Códigos de `subscription_plans` (`free`, `plus`…): el catálogo es de la base, no un enum nuestro. */
+  studyPlans: multiSelectParam(z.string().trim().regex(/^[a-z0-9_]{1,40}$/)),
 })
 export type PartnerStudySearch = z.infer<typeof partnerStudySearchSchema>
 
@@ -92,7 +93,7 @@ export interface PartnerStudyRow {
   status: string
   coverageZone: string
   categorySlugs: Array<string>
-  plan: PartnerPlan | null
+  plan: PlanInfo | null
   /** Activas. */
   sent: number
   withdrawn: number
@@ -113,7 +114,7 @@ export interface PartnerStudyRow {
 export function studyRows(
   facts: ReadonlyArray<ProposalFact>,
   partners: ReadonlyArray<StudyPartnerRef>,
-  plans: ReadonlyMap<string, PartnerPlan>,
+  plans: ReadonlyMap<string, PlanInfo>,
   range: StudyRange,
 ): Array<PartnerStudyRow> {
   const byPartner = new Map<string, Array<ProposalFact>>()
@@ -208,7 +209,7 @@ export function partnerMonthlyReport(row: PartnerStudyRow, month: string, peers:
     `• Todavía sin decisión del cliente: ${row.undecided}`,
     `• Tiempo típico desde que entra el pedido hasta tu propuesta: ${formatMinutes(row.medianResponseMinutes)}`,
   ]
-  if (row.plan) lines.push(`• Tu plan: ${PARTNER_PLAN_LABELS[row.plan]}`)
+  if (row.plan) lines.push(`• Tu plan: ${row.plan.name}`)
   lines.push('')
   if (zonePeers.length >= ZONE_PEERS_MIN) {
     const peerSent = median(zonePeers.map((p) => p.sent + p.withdrawn))

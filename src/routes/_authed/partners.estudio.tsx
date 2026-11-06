@@ -16,14 +16,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '~/components/ui/sheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { Textarea } from '~/components/ui/textarea'
-import { usePartnerPlans } from '~/components/usePartnerPlans'
+import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { partnerStudyExtrasMock } from '~/mocks/partner-study'
 import { formatDate, formatInt } from '~/lib/format'
 import {
-  PARTNER_PLANS,
-  PARTNER_PLAN_LABELS,
   PROPOSAL_COUNT_START,
   countableMonths,
+  effectivePlans,
   monthLabel,
 } from '~/lib/partner-plans'
 import {
@@ -52,7 +51,7 @@ import type { PartnerStudyRow, StudyPartnerRef } from '~/lib/partner-study'
  * Las propuestas son reales (las mismas que Partners › Propuestas, mismo hook y
  * misma cache). Matcheados, tasa de respuesta, vencidos, confirmaciones,
  * disputas, motivos y vistas/clics son de ejemplo (`~/mocks/partner-study`), en
- * cursiva. El plan también (`~/mocks/partner-plans`).
+ * cursiva. El plan es real (billing del backend, sólo lectura).
  *
  * `ssr: 'data-only'`: el período se mide contra el reloj del navegador y las
  * propuestas se cargan ahí.
@@ -62,11 +61,12 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners, zones, catalog] = await Promise.all([
+    const [quotes, partners, zones, catalog, plansResult] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
       listPartnerZonesFn({ signal }),
       getServiceCatalog({ signal }),
+      listPartnerPlansFn({ signal }),
     ])
     const requests =
       'rows' in quotes
@@ -92,6 +92,7 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
       zones,
       rubros: catalog.map((f) => ({ slug: f.slug, name: f.name })),
       rubrosByRequest,
+      plansResult,
     }
   },
   head: () => ({ meta: [{ title: 'Partners · Estudio — AutoLibre' }] }),
@@ -101,14 +102,15 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
 const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v)} %`)
 
 function PartnerStudy() {
-  const { requests, partners, zones, rubros, rubrosByRequest } = Route.useLoaderData()
+  const { requests, partners, zones, rubros, rubrosByRequest, plansResult } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
   const load = useProposalFacts(requests ?? [])
-  const { plans } = usePartnerPlans(useMemo(() => partners.map((p) => p.id), [partners]))
+  const plans = useMemo(() => effectivePlans(plansResult, partners.map((p) => p.id)), [plansResult, partners])
+  const planCatalog = plansResult.available ? plansResult.catalog.filter((p) => p.active) : []
 
   const now = useMemo(() => new Date(), [])
   const range = lastDaysRange(search.studyPeriod, now)
@@ -130,7 +132,7 @@ function PartnerStudy() {
       (search.studyZones.length === 0 ||
         search.studyZones.some((z) => r.coverageZone.toLowerCase().includes(z.toLowerCase()))) &&
       (search.studyRubros.length === 0 || search.studyRubros.some((s) => r.categorySlugs.includes(s))) &&
-      (search.studyPlans.length === 0 || (r.plan !== null && search.studyPlans.includes(r.plan))),
+      (search.studyPlans.length === 0 || (r.plan !== null && search.studyPlans.includes(r.plan.code))),
   )
   const active = rows.filter((r) => !r.dormant)
   const dormant = rows.filter((r) => r.dormant && r.status === 'active')
@@ -156,7 +158,7 @@ function PartnerStudy() {
       <MockBanner
         items={[
           'Propuestas, elegidas, sin decisión, tiempo de respuesta, canal, dormidos y el «3 en menos de 1 h» son reales.',
-          'Matcheados, tasa de respuesta, vencidos sin respuesta, confirmaciones, disputas, motivos de «no contraté», vistas y clics son de ejemplo (en cursiva). El plan también.',
+          'Matcheados, tasa de respuesta, vencidos sin respuesta, confirmaciones, disputas, motivos de «no contraté», vistas y clics son de ejemplo (en cursiva). El plan es el real de Mercado Pago.',
           'Propuestas por rubro usa el rubro que guardó el operador o, si no hay, el que sugirió la IA. Por urgencia no se puede: el pedido no la guarda.',
         ]}
       />
@@ -190,22 +192,22 @@ function PartnerStudy() {
           />
         </div>
         <FilterGroup
-          label="Plan (de ejemplo)"
+          label="Plan"
           onClear={search.studyPlans.length > 0 ? () => setSearch({ studyPlans: [] }) : undefined}
         >
-          {PARTNER_PLANS.map((p) => (
+          {planCatalog.map(({ code, name }) => (
             <Chip
-              key={p}
-              active={search.studyPlans.includes(p)}
+              key={code}
+              active={search.studyPlans.includes(code)}
               onClick={() =>
                 setSearch({
-                  studyPlans: search.studyPlans.includes(p)
-                    ? search.studyPlans.filter((x) => x !== p)
-                    : [...search.studyPlans, p],
+                  studyPlans: search.studyPlans.includes(code)
+                    ? search.studyPlans.filter((x) => x !== code)
+                    : [...search.studyPlans, code],
                 })
               }
             >
-              {PARTNER_PLAN_LABELS[p]}
+              {name}
             </Chip>
           ))}
         </FilterGroup>
@@ -375,7 +377,7 @@ function StudyRow({ row: r, onReport }: { row: PartnerStudyRow; onReport: () => 
         </div>
         <p className="text-xs text-muted-foreground">
           {r.coverageZone}
-          {r.plan ? ` · ${PARTNER_PLAN_LABELS[r.plan]}` : ''}
+          {r.plan ? ` · ${r.plan.name}` : ''}
           {r.lastProposalAt ? ` · última ${formatDate(r.lastProposalAt)}` : ''}
         </p>
       </TableCell>

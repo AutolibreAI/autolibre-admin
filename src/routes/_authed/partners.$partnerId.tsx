@@ -3,6 +3,7 @@ import { Link, createFileRoute, notFound, useRouter } from '@tanstack/react-rout
 import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { listPartnerClaimCodesFn, listPartnerMembersFn } from '~/fn/partner-members'
+import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PublicProfileLink } from '~/components/PublicProfileLink'
 import { PartnerFicha } from '~/components/PartnerFicha'
@@ -17,7 +18,7 @@ import type { PartnerServicesView, ServiceItem } from '~/lib/catalog'
 export const Route = createFileRoute('/_authed/partners/$partnerId')({
   loader: async ({ params, abortController }) => {
     const signal = abortController.signal
-    const [view, members, claimCodes] = await Promise.all([
+    const [view, members, claimCodes, plans] = await Promise.all([
       getPartnerServicesView({ data: params, signal }).catch((cause: unknown) => {
         if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
         throw cause
@@ -27,10 +28,12 @@ export const Route = createFileRoute('/_authed/partners/$partnerId')({
       // Guard propio (0144): puede faltar aunque esté la 0141. Nunca trae el
       // código en claro ni su hash — sólo existe en la respuesta de «Emitir».
       listPartnerClaimCodesFn({ data: params, signal }),
+      // El plan (billing del backend), de sólo lectura. Sin las tablas: `{ available: false }`.
+      listPartnerPlansFn({ data: params, signal }),
     ])
 
     if (!view) throw notFound()
-    return { ...view, members, claimCodes }
+    return { ...view, members, claimCodes, plans }
   },
 
   head: ({ loaderData }) => ({
@@ -141,7 +144,7 @@ function PartnerServicesEditor() {
         contacto/coordenadas— tienen que verse en la misma pantalla. Separarlas
         haría que arreglar una y no la otra sea el resultado normal.
       */}
-      <PartnerFicha partner={view.partner} actorEmail={user.email} />
+      <PartnerFicha partner={view.partner} plans={view.plans} />
 
       {/* Sellos: Aliado es real (tier); redes y aseguradoras, de ejemplo. */}
       <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />

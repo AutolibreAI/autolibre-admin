@@ -4,13 +4,11 @@ import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
 import { listPartnerQuoteVolumeFn } from '~/fn/partner-quote-volume'
+import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
-import { MockBanner } from '~/components/MockBanner'
-import { PartnerPlanEditor } from '~/components/PartnerPlanEditor'
 import { SearchInput } from '~/components/SearchInput'
 import { useProposalFacts } from '~/components/useProposalFacts'
-import { usePartnerPlans } from '~/components/usePartnerPlans'
 import { ProposalLoadStatus as LoadStatus } from '~/components/ProposalLoadStatus'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
@@ -26,15 +24,14 @@ import {
 import { normalizeForMatch } from '~/lib/catalog'
 import { formatInt } from '~/lib/format'
 import {
-  PARTNER_PLANS,
-  PARTNER_PLAN_CAPS,
-  PARTNER_PLAN_LABELS,
   PROPOSAL_COUNT_START,
   PROPOSAL_HISTORY,
   aggregatePartnerHistory,
   aggregatePartnerUsage,
   baDay,
+  capLabel,
   countableMonths,
+  effectivePlans,
   isFounding,
   monthLabel,
   partnerHistoryCsv,
@@ -42,14 +39,15 @@ import {
   shortDay,
 } from '~/lib/partner-plans'
 import { cn } from '~/lib/utils'
-import type { PartnerPlanAssignment } from '~/mocks/partner-plans'
 import type {
   AllTimeVolume,
   CapTone,
   ExternalUsageRow,
   PartnerHistoryRow,
   PartnerRef,
+  PartnerPlansResult,
   PartnerUsageRow,
+  PlanInfo,
   UsageCounts,
 } from '~/lib/partner-plans'
 
@@ -68,9 +66,11 @@ import type {
  * Sólo se piden los pedidos que pueden tener propuestas contables: abiertos, o
  * cerrados desde el 27/10. Sin duplicados (el equipo marca así sus pruebas).
  *
- * El PLAN es de ejemplo (`~/mocks/partner-plans`): `partners.plan` no existe.
- * El día que exista `GET /admin/partner-proposal-usage`, esta pantalla deja de
- * pedir propuestas una por una y consume esas filas.
+ * El PLAN es real desde el 05/11/26, y de sólo lectura: el plan EFECTIVO de
+ * la suscripción de Mercado Pago (billing del backend, `listPartnerPlansFn`),
+ * Gratis si no hay una que dé acceso. Topes y nombres salen del catálogo
+ * `subscription_plans`. El día que exista `GET /admin/partner-proposal-usage`,
+ * esta pantalla deja de pedir propuestas una por una y consume esas filas.
  *
  * La vista histórica (`proposalMonth=historico`) suma todo desde el 27/10 por
  * proveedor, con el pico mensual: el color va sobre ese pico, así se ve quién
@@ -85,7 +85,7 @@ import type {
  *
  * Los colores los decide `capTone` (`~/lib/partner-plans`), no esta pantalla:
  * rojo pasó el tope, amarillo llegó, Aliado siempre gris (sin límite por
- * ahora), sin plan gris. El tope no frena ningún envío: sólo se marca.
+ * ahora), sin plan (base sin billing) gris. El tope no frena ningún envío.
  *
  * `ssr: 'data-only'`: el loader corre en el servidor (lista de pedidos y de
  * proveedores), pero la carga de propuestas y el mes en curso son del
@@ -96,10 +96,11 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners, volume] = await Promise.all([
+    const [quotes, partners, volume, plans] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
       listPartnerQuoteVolumeFn({ signal }),
+      listPartnerPlansFn({ signal }),
     ])
     // Sólo proveedores del directorio: un taller de afuera no tiene plan ni ficha.
     const allTime: Array<[string, AllTimeVolume]> | null = volume.available
@@ -119,7 +120,7 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
       tier: p.tier,
       status: p.status,
     }))
-    return { requests, partners: partnerRefs, allTime }
+    return { requests, partners: partnerRefs, allTime, plansResult: plans }
   },
   head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
   component: PartnerProposals,
@@ -128,9 +129,8 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 function PartnerProposals() {
-  const { requests, partners, allTime } = Route.useLoaderData()
+  const { requests, partners, allTime, plansResult } = Route.useLoaderData()
   const allTimeMap = useMemo(() => (allTime ? new Map(allTime) : null), [allTime])
-  const { user } = Route.useRouteContext()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
@@ -141,8 +141,7 @@ function PartnerProposals() {
   const month = search.proposalMonth && months.includes(search.proposalMonth) ? search.proposalMonth : months[0]!
 
   const load = useProposalFacts(requests ?? [])
-  const { plans, assignments } = usePartnerPlans(useMemo(() => partners.map((p) => p.id), [partners]))
-  const plan = { assignments, actorEmail: user.email }
+  const plans = useMemo(() => effectivePlans(plansResult, partners.map((p) => p.id)), [plansResult, partners])
 
   const monthView = useMemo(
     () => aggregatePartnerUsage(load.facts, month, partners, plans, { includeIdle: search.proposalShowIdle }),
@@ -208,13 +207,12 @@ function PartnerProposals() {
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
-      <MockBanner
-        items={[
-          'El plan de cada proveedor es de ejemplo: todavía no existe la columna de plan en la base. Las propuestas, retiradas y elegidas son reales.',
-          'Cambiar el plan desde la fila o desde la ficha guarda sólo en esta sesión: se pierde al recargar.',
-          'Aliado sale del sello real (tier). «Taller de cabecera» no existe todavía en ningún lado.',
-        ]}
-      />
+      {!plansResult.available ? (
+        <p className="mb-4 rounded-lg border border-status-yellow/30 bg-status-yellow-bg px-4 py-2 text-xs text-status-yellow">
+          Esta base no tiene el billing del backend (subscription_plans / partner_subscriptions): los proveedores
+          salen «sin plan» y no se marca ningún tope.
+        </p>
+      ) : null}
 
       <div className="mb-4 flex flex-wrap items-end gap-5">
         <FilterGroup label="Mes">
@@ -303,7 +301,7 @@ function PartnerProposals() {
               «Desde siempre» no está disponible: falta aplicar la migración 025 de ops en esta base.
             </p>
           ) : null}
-          <HistoryTable rows={historyRows} plan={plan} />
+          <HistoryTable rows={historyRows} />
         </>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
@@ -320,7 +318,7 @@ function PartnerProposals() {
             </TableHeader>
             <TableBody>
               {monthRows.map((r) => (
-                <UsageRow key={r.partnerId} row={r} plan={plan} />
+                <UsageRow key={r.partnerId} row={r} />
               ))}
             </TableBody>
           </Table>
@@ -329,19 +327,19 @@ function PartnerProposals() {
 
       <ExternalSection rows={externals} history={isHistory} />
 
-      <Legend />
+      <Legend plansResult={plansResult} />
     </>
   )
 }
 
-function UsageRow({ row, plan }: { row: PartnerUsageRow; plan: PlanEditing }) {
+function UsageRow({ row }: { row: PartnerUsageRow }) {
   return (
     <TableRow className={toneRowClass(row.tone)}>
       <TableCell>
         <ProviderName row={row} />
       </TableCell>
       <TableCell className="text-sm">
-        <PlanCell row={row} plan={plan} />
+        <PlanCell plan={row.plan} />
       </TableCell>
       <TableCell className="text-right tabular-nums">{formatInt(row.sent)}</TableCell>
       <TableCell className="text-right tabular-nums">
@@ -362,7 +360,7 @@ function UsageRow({ row, plan }: { row: PartnerUsageRow; plan: PlanEditing }) {
  * Sin columna de tope: el tope es mensual. El color va sobre el PICO mensual,
  * con las mismas reglas que el mes (`capTone`).
  */
-function HistoryTable({ rows, plan }: { rows: ReadonlyArray<PartnerHistoryRow>; plan: PlanEditing }) {
+function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
       <Table className="min-w-[1280px]">
@@ -395,7 +393,7 @@ function HistoryTable({ rows, plan }: { rows: ReadonlyArray<PartnerHistoryRow>; 
                 <ProviderName row={r} />
               </TableCell>
               <TableCell className="text-sm">
-                <PlanCell row={r} plan={plan} />
+                <PlanCell plan={r.plan} />
               </TableCell>
               <TableCell className="text-right font-medium tabular-nums">
                 {r.allTime === null ? (
@@ -424,7 +422,7 @@ function HistoryTable({ rows, plan }: { rows: ReadonlyArray<PartnerHistoryRow>; 
                   <>
                     {formatInt(r.peak.used)}
                     <span className="ml-1 text-xs font-normal">en {monthLabel(r.peak.month)}</span>
-                    <ToneNote tone={r.tone} used={r.peak.used} cap={r.plan ? PARTNER_PLAN_CAPS[r.plan] : null} />
+                    <ToneNote tone={r.tone} used={r.peak.used} cap={r.plan ? r.plan.cap : null} />
                   </>
                 ) : (
                   <span className="text-muted-foreground">—</span>
@@ -467,29 +465,9 @@ function ProviderName({ row }: { row: { partnerId: string; name: string; tier: s
   )
 }
 
-interface PlanEditing {
-  assignments: ReadonlyMap<string, PartnerPlanAssignment>
-  actorEmail: string
-}
-
-/** El plan, editable desde la fila. Pide confirmación (`PartnerPlanEditor`). */
-function PlanCell({
-  row,
-  plan,
-}: {
-  row: { partnerId: string; name: string; tier: string | null }
-  plan: PlanEditing
-}) {
-  return (
-    <PartnerPlanEditor
-      compact
-      partnerId={row.partnerId}
-      partnerName={row.name}
-      tier={row.tier}
-      assignment={plan.assignments.get(row.partnerId)}
-      actorEmail={plan.actorEmail}
-    />
-  )
+/** El plan efectivo, de sólo lectura: lo contrata el taller por Mercado Pago. */
+function PlanCell({ plan }: { plan: PlanInfo | null }) {
+  return plan ? <span>{plan.name}</span> : <span className="text-muted-foreground">sin plan</span>
 }
 
 function toneRowClass(tone: CapTone) {
@@ -574,17 +552,17 @@ function ExternalSection({ rows, history }: { rows: ReadonlyArray<ExternalUsageR
   )
 }
 
-function Legend() {
+function Legend({ plansResult }: { plansResult: PartnerPlansResult }) {
+  const catalog = plansResult.available ? plansResult.catalog.filter((p) => p.active) : []
   return (
     <div className="mt-4 space-y-1 text-xs text-muted-foreground">
-      <p>
-        Topes por mes calendario:{' '}
-        {PARTNER_PLANS.map((p) => {
-          const cap = PARTNER_PLAN_CAPS[p]
-          return `${PARTNER_PLAN_LABELS[p]} ${cap === null ? 'sin límite' : formatInt(cap)}`
-        }).join(' · ')}
-        .
-      </p>
+      {catalog.length > 0 ? (
+        <p>
+          Topes por mes calendario: {catalog.map((p) => `${p.name} ${capLabel(p)}`).join(' · ')}. El plan es el
+          efectivo de la suscripción de Mercado Pago (en prueba o activa); sin suscripción, pendiente o pausada
+          es Gratis. Se ve, no se cambia desde el panel.
+        </p>
+      ) : null}
       <p>
         Usadas = enviadas + retiradas: una propuesta retirada no devuelve el lugar. Elegidas = la propuesta que
         la persona tiene elegida hoy en la app; si la eligió y después la des-eligió, no cuenta. El mes es el de

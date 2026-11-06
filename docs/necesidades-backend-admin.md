@@ -37,8 +37,16 @@ Trello, con el título exacto de la tarjeta.
 
 ## Admin: conteo mensual de propuestas por proveedor + tope por plan
 
-**Estado del front:** Hecho contra mock (solo el plan es de ejemplo; propuestas, retiradas y
-elegidas son reales).
+**Estado del front:** Hecho, todo real desde el 05/11/26. El plan dejó de ser mock: es el plan
+EFECTIVO de la suscripción de Mercado Pago (billing del backend: `subscription_plans` +
+`partner_subscriptions`), de **sólo lectura** (`src/server/partner-plans.repo.ts`). Efectivo =
+suscripción `trialing`/`active` con `access_until` nulo o futuro (la regla de
+`DrizzlePartnerEntitlementsReader`); sin suscripción, pendiente, pausada o cancelada = Gratis. Topes
+y nombres salen de `subscription_plans` (`monthly_whatsapp_request_limit` — ⚠ el backend lo define
+como pedidos por WhatsApp; acá se compara contra propuestas usadas. Hoy coinciden: 1 / 10 / 15).
+El editor manual (y `src/mocks/partner-plans.ts`, `PartnerPlanEditor`, `usePartnerPlans`) se
+borró: no hay endpoint de admin para cambiar un plan. **Pendiente al backend:** si el admin tiene
+que poder cambiarlo (regalar un mes, corregir), un endpoint; nunca por SQL.
 
 **Qué hiciste:** Pestaña Partners › Propuestas (`src/routes/_authed/partners.propuestas.tsx`)
 con selector de mes, enviadas / retiradas / elegidas / plan / usadas sobre tope. Los colores los
@@ -73,7 +81,7 @@ La explicación más probable es que esa consulta contó como retirada una propu
 `updated_at` posterior a `created_at`, sin `withdrawn_at`). Corregir no retira (`PUT`, sin push), así
 que la pantalla no la cuenta como retirada.
 
-**Plan cargado a mano** (decisión 5): en la ficha del proveedor, al lado de Perfil, la tarjeta
+**Plan cargado a mano** (decisión 5 — ⚠ REEMPLAZADO el 05/11/26 por la lectura de billing, ver arriba; queda como historia): en la ficha del proveedor, al lado de Perfil, la tarjeta
 "Plan" con selector Gratis / Estándar / Plus / Plus Max / sin plan y fecha de inicio; en las dos
 tablas de Propuestas, el plan se edita desde la misma fila (lápiz). Siempre con confirmación ("¿Cambiar
 el plan de X de Gratis a Plus desde el 01/11/26?"). La ficha muestra quién lo cambió y cuándo (el

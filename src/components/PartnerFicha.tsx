@@ -40,12 +40,13 @@ import {
   type PartnerTier,
   type SingleLinkKind,
 } from '~/lib/catalog'
-import { PartnerPlanCard } from '~/components/PartnerPlanEditor'
+import { PartnerPlanCard } from '~/components/PartnerPlanCard'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
 import { cn } from '~/lib/utils'
+import type { PartnerPlansResult } from '~/lib/partner-plans'
 
 type Partner = PartnerServicesView['partner']
 
@@ -81,13 +82,13 @@ type Partner = PartnerServicesView['partner']
  * De mayor a menor consecuencia: Estado saca al taller de la app; Perfil y
  * Ubicación deciden si lo encuentran; Contacto y Links, si lo pueden alcanzar.
  */
-export function PartnerFicha({ partner, actorEmail }: { partner: Partner; actorEmail: string }) {
+export function PartnerFicha({ partner, plans }: { partner: Partner; plans: PartnerPlansResult }) {
   return (
     <div className="mb-4 grid gap-4 lg:grid-cols-3">
       <StatusCard partner={partner} />
       <ProfileCard partner={partner} />
-      {/* El plan comercial va al lado del perfil, pero aparte: hoy guarda contra un mock, no por el SP. */}
-      <PartnerPlanCard partnerId={partner.id} partnerName={partner.name} tier={partner.tier} actorEmail={actorEmail} />
+      {/* El plan va al lado del perfil, de sólo lectura: lo contrata el taller por Mercado Pago. */}
+      <PartnerPlanCard partnerId={partner.id} tier={partner.tier} result={plans} />
       <LogoCard partner={partner} />
       <LocationCard partner={partner} />
       <ContactCard partner={partner} />
