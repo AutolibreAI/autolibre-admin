@@ -25,6 +25,7 @@ import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert'
 import { formatDate } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { ApplicationDetail } from '~/lib/partners'
+import { PartnerWelcomeCard } from '~/components/PartnerWelcomeCard'
 import { readableApprovalError, type ApprovalResult } from '~/lib/partner-approval'
 
 export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
@@ -117,6 +118,14 @@ function ApplicationDetailPage() {
               />
             </CardContent>
           </Card>
+
+          <PartnerWelcomeCard
+            // Al aprobar, `invalidate()` trae el partner y su slug: el cuadro se
+            // vuelve a completar en vez de quedarse con el aviso de antes.
+            key={`${app.partner?.id ?? 'sin-partner'}:${app.partner?.status ?? ''}:${app.partner?.publicSlug ?? ''}`}
+            businessName={app.businessName}
+            partner={app.partner}
+          />
 
           {app.partner ? (
             <PublishedPanel app={app} />

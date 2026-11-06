@@ -305,6 +305,7 @@ interface DetailRow extends QueueRow {
   partner_coverage_zone: string | null
   partner_service_count: number | null
   suggested_coverage_zone: string | null
+  partner_status: string | null
 }
 
 /**
@@ -363,6 +364,7 @@ export async function findApplication(
             p.id                                     AS partner_id,
             p.name                                   AS partner_name,
             p.coverage_zone                          AS partner_coverage_zone,
+            p.status::text                           AS partner_status,
             (SELECT count(*)::int FROM partner_services ps
               WHERE ps.partner_id = p.id)            AS partner_service_count,
             -- La planilla vieja traía la zona escrita; el formulario nuevo,
@@ -381,9 +383,10 @@ export async function findApplication(
 
   if (!row) return null
 
-  const [resolved, submittedBy] = await Promise.all([
+  const [resolved, submittedBy, slugs] = await Promise.all([
     resolveDeclared(row.declared_services),
     findSubmittedBy(row.id),
+    currentPartnerSlugs(row.partner_id ? [row.partner_id] : []),
   ])
 
   return {
@@ -422,6 +425,8 @@ export async function findApplication(
           name: row.partner_name ?? '',
           coverageZone: row.partner_coverage_zone ?? '',
           serviceCount: row.partner_service_count ?? 0,
+          status: row.partner_status ?? 'active',
+          publicSlug: slugs.get(row.partner_id) ?? null,
         }
       : null,
     submittedBy,
