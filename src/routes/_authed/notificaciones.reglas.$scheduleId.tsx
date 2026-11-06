@@ -11,7 +11,10 @@ import {
 } from '~/fn/schedules'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ScheduleForm, scheduleFormReady, type ScheduleFormValues } from '~/components/ScheduleForm'
+import { TargetActionField } from '~/components/TargetActionField'
 import { Button } from '~/components/ui/button'
+import { getScheduleTargetMock, setScheduleTargetMock } from '~/mocks/notification-targets'
+import type { EffectAction } from '~/lib/notification-effect'
 import { Badge } from '~/components/ui/badge'
 
 /**
@@ -69,6 +72,8 @@ function ScheduleDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  /** Mock en memoria: la columna no existe todavía. Los envíos de la regla lo heredan. */
+  const [target, setTarget] = useState<EffectAction | null>(() => getScheduleTargetMock(schedule.id))
 
   async function save() {
     if (!scheduleFormReady(values) || busy) return
@@ -91,6 +96,7 @@ function ScheduleDetailPage() {
           excludeInternal: values.excludeInternal,
         },
       })
+      setScheduleTargetMock(schedule.id, target)
       await router.invalidate()
       setSaved(true)
     } catch (cause) {
@@ -189,6 +195,9 @@ function ScheduleDetailPage() {
 
       <div className="max-w-2xl rounded-lg border border-border bg-card p-5">
         <ScheduleForm values={values} onChange={setValues} disabled={busy} />
+        <div className="mt-5">
+          <TargetActionField id="schedule-target" value={target} onChange={setTarget} disabled={busy} />
+        </div>
 
         {error ? (
           <p role="alert" className="mt-4 text-sm text-destructive">

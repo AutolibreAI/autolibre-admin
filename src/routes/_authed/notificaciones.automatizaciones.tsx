@@ -1,4 +1,6 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { TargetActionField } from '~/components/TargetActionField'
+import { EFFECT_ACTION_LABELS } from '~/lib/notification-effect'
 import { Pause, Pencil, Play, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -79,6 +81,7 @@ function emptyInput(): AutomationInput {
     sendFromHour: 9,
     sendToHour: 21,
     asksClosing: false,
+    targetAction: null,
   }
 }
 
@@ -200,6 +203,11 @@ function AutomationCard({
             </Badge>
             {a.fromTemplate ? <Badge variant="outline">Plantilla</Badge> : null}
             {a.asksClosing ? <Badge variant="outline">Pregunta de cierre</Badge> : null}
+            {a.targetAction ? (
+              <Badge variant="outline" className="italic">
+                Objetivo: {EFFECT_ACTION_LABELS[a.targetAction]}
+              </Badge>
+            ) : null}
           </div>
           <p className="text-sm">
             <span className="text-muted-foreground">Cuándo:</span> {describeTrigger(a.trigger)}
@@ -409,6 +417,12 @@ function AutomationEditor({
               />
               Termina con la pregunta de cierre (¿contrataste? ¿con quién?)
             </label>
+
+            <TargetActionField
+              id="auto-target"
+              value={values.targetAction ?? null}
+              onChange={(next) => set({ targetAction: next })}
+            />
 
             {error ? (
               <p role="alert" className="text-sm text-destructive">

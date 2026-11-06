@@ -1,3 +1,6 @@
+import { TargetActionField } from '~/components/TargetActionField'
+import { setSendTargetMock } from '~/mocks/notification-targets'
+import type { EffectAction } from '~/lib/notification-effect'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
@@ -114,6 +117,8 @@ export function BroadcastComposer({
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [scheduleLocal, setScheduleLocal] = useState('')
+  /** La acción buscada. Hoy va al mock (`~/mocks/notification-targets`): no viaja al backend. */
+  const [target, setTarget] = useState<EffectAction | null>(null)
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -244,6 +249,9 @@ export function BroadcastComposer({
         readError = readableBroadcastError(cause)
       }
 
+      // El envío salió: recién ahí el objetivo queda atado a SU broadcastId.
+      setSendTargetMock(id, target)
+
       setResult({ broadcastId: id, selected, scheduledAt: scheduledAt ?? null, summary, readError })
 
       // Campaña nueva: borrador limpio e id nuevo.
@@ -251,6 +259,7 @@ export function BroadcastComposer({
       setTitle('')
       setBody('')
       setScheduleLocal('')
+      setTarget(null)
       setAttempted(false)
       setBroadcastId(crypto.randomUUID())
 
@@ -472,6 +481,8 @@ export function BroadcastComposer({
                     : 'Hora local de tu navegador; se guarda en UTC. Vacío = ahora (sale en el próximo minuto).'}
               </p>
             </section>
+
+            <TargetActionField id="broadcast-target" value={target} onChange={setTarget} disabled={busy} />
           </div>
 
           <div className="space-y-3 border-t border-border px-5 py-4">
