@@ -41,6 +41,7 @@ import {
   type SingleLinkKind,
 } from '~/lib/catalog'
 import { PartnerPlanCard } from '~/components/PartnerPlanCard'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '~/components/ui/dialog'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
@@ -186,8 +187,57 @@ function Feedback({ error, saved }: { error: string | null; saved: boolean }) {
 
 // ── Estado ───────────────────────────────────────────────────────────────────
 
+/**
+ * Qué pasa en cada estado, según el backend (relevado el 06/11/26 en
+ * `autolibre-backend-hex`): la app, el perfil público, el asistente y el
+ * despacho de pedidos leen SÓLO `active`. Se dice antes de confirmar, porque
+ * es lo que el operador no ve desde acá.
+ */
+const STATUS_CONSEQUENCE: Record<PartnerStatus, string> = {
+  active:
+    'Vuelve a aparecer en la app, en su perfil público y en las recomendaciones del asistente.',
+  paused:
+    'Sale de la app, de su perfil público y de las recomendaciones del asistente, sin borrar nada. Se puede volver a publicar cuando quieras.',
+  archived:
+    'Es la baja: sale de la app, de su perfil público, del asistente y del despacho de pedidos, y su código de taller de cabecera deja de canjearse. No se borra nada y se puede revertir.',
+}
+
 function StatusCard({ partner }: { partner: Partner }) {
   const { busy, error, saved, run } = useAction()
+  const [target, setTarget] = useState<PartnerStatus | null>(null)
+  const [note, setNote] = useState('')
+  const [dialogError, setDialogError] = useState<string | null>(null)
+  // Ocupado mientras viaja el cambio: `busy` de `useAction` sólo cubre la relectura.
+  const [sending, setSending] = useState(false)
+  const locked = busy || sending
+
+  const open = (s: PartnerStatus) => {
+    if (s === partner.status) return
+    setTarget(s)
+    setNote('')
+    setDialogError(null)
+  }
+
+  async function confirm() {
+    if (!target || sending) return
+    const trimmed = note.trim()
+    setDialogError(null)
+    setSending(true)
+    try {
+      await setPartnerStatusFn({
+        data: { partnerId: partner.id, status: target, note: trimmed === '' ? undefined : trimmed },
+      })
+    } catch (cause) {
+      // El error queda en el recuadro: si se cerrara, no se vería qué pasó.
+      setDialogError(readableError(cause))
+      return
+    } finally {
+      setSending(false)
+    }
+    setTarget(null)
+    // Releer: el estado lo confirma la base, no una copia optimista.
+    await run(async () => {})
+  }
 
   return (
     <Card>
@@ -200,11 +250,9 @@ function StatusCard({ partner }: { partner: Partner }) {
             <button
               key={s}
               type="button"
-              disabled={busy}
+              disabled={locked}
               aria-pressed={partner.status === s}
-              onClick={() =>
-                run(() => setPartnerStatusFn({ data: { partnerId: partner.id, status: s } }))
-              }
+              onClick={() => open(s as PartnerStatus)}
               className={cn(
                 'rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-50',
                 partner.status === s
@@ -216,12 +264,78 @@ function StatusCard({ partner }: { partner: Partner }) {
             </button>
           ))}
         </div>
+        {partner.status !== 'archived' ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3 border-status-red/30 text-status-red hover:bg-status-red-bg hover:text-status-red"
+            disabled={locked}
+            onClick={() => open('archived')}
+          >
+            Dar de baja
+          </Button>
+        ) : null}
         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          Sólo <strong>Publicado</strong> aparece en la app: el índice del backend es parcial sobre
-          ese estado. Pausar lo saca del marketplace sin borrar nada.
+          Sólo <strong>Publicado</strong> aparece en la app. Dar de baja es pasarlo a{' '}
+          <strong>Archivado</strong>: no borra nada y queda registrado quién lo hizo y por qué.
         </p>
         <Feedback error={error} saved={saved} />
       </CardContent>
+
+      {target ? (
+        <Dialog
+          open
+          onOpenChange={(o) => {
+            if (!o && !locked) setTarget(null)
+          }}
+        >
+          <DialogContent>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                void confirm()
+              }}
+            >
+              <DialogTitle>
+                {target === 'archived' ? `¿Dar de baja a ${partner.name}?` : '¿Cambiar el estado?'}
+              </DialogTitle>
+              <DialogDescription className="mt-1">
+                {PARTNER_STATUS_LABELS[partner.status as PartnerStatus] ?? partner.status} →{' '}
+                <strong className="text-foreground">{PARTNER_STATUS_LABELS[target]}</strong>
+              </DialogDescription>
+              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{STATUS_CONSEQUENCE[target]}</p>
+              <label className="mt-4 block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Motivo (opcional)</span>
+                <Textarea
+                  value={note}
+                  onChange={(e) => setNote(e.currentTarget.value)}
+                  maxLength={280}
+                  rows={3}
+                  disabled={locked}
+                  placeholder="Ej.: cerró el local, no responde, pidió la baja…"
+                />
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Queda en el registro de cambios con el antes, el después y tu usuario.
+              </p>
+              {dialogError ? (
+                <p role="alert" className="mt-3 text-xs leading-relaxed text-destructive">
+                  {dialogError}
+                </p>
+              ) : null}
+              <div className="mt-5 flex justify-end gap-2">
+                <Button type="button" variant="outline" size="sm" disabled={locked} onClick={() => setTarget(null)}>
+                  Cancelar
+                </Button>
+                <Button type="submit" size="sm" disabled={locked}>
+                  {locked ? 'Guardando…' : target === 'archived' ? 'Dar de baja' : 'Confirmar'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </Card>
   )
 }
