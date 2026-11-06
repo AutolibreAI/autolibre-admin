@@ -1,6 +1,6 @@
 # Necesidades de backend del panel admin
 
-Versión 6 — 2026-11-02. Bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado) y las decisiones del 02/11/26 sobre propuestas y planes aplicadas (lista de cambios al final). Una sección por tarjeta de
+Versión 7 — 2026-11-06. Tanda del 06/11/26 aplicada: orden y filtros de Propuestas, bienvenida de solicitudes, baja de proveedores, taller de cabecera, objetivo de notificaciones y «Cómo mejorar tu perfil» (lista de cambios al final, sección 6). Versión 6 — 2026-11-02: bloques 1 a 4 implementados (el pedido de cobertura AMBA, sólo revisado) y las decisiones del 02/11/26 sobre propuestas y planes aplicadas. Una sección por tarjeta de
 Trello, con el título exacto de la tarjeta.
 
 > **Desde el 2026-11-03 cada pedido vive también en su archivo**, con qué hay hoy, qué falta con
@@ -170,8 +170,10 @@ llamado pedido por pedido desde el navegador, igual que hace hoy el mapa de cobe
 registrar los pedidos por proveedor en la automatización" (ver Solapamientos).
 
 **Preguntas abiertas:**
-1. "Taller de cabecera" no existe hoy en ningún lado del sistema: ¿es un sello nuevo, un plan, o
-   una marca manual? ¿Tiene tope?
+1. ~~"Taller de cabecera" no existe hoy en ningún lado del sistema~~ — **Contestada el 06/11/26**:
+   existe en el backend (0126) como código de referido: `partner_referral_codes` (la oferta) y
+   `preferred_partners` (el canje de cada persona). Tiene pantalla: Partners › Taller de cabecera.
+   Sigue abierto si tiene tope o plan propio.
 
 ---
 
@@ -288,9 +290,22 @@ pierde al recargar, a propósito.
   `audienceDefinition` (la condición usada, jsonb), `targetAction` (nullable), `createdBy`, y la
   relación a cada destinatario (hoy ya existe por fila en `notifications` vía `source_id`).
   **Bloquea el front: no** para esta tarjeta; **sí** para la de efecto.
+  **Ampliado el 06/11/26 — `targetAction`:** el front ya lo carga en el formulario del envío
+  puntual y del programado (campo «Objetivo», catálogo cerrado igual al de «Efecto por envío»:
+  `vehicle | document | quote_request`, o `null`). Hoy va a un mock en memoria
+  (`src/mocks/notification-targets.ts`). Hace falta que `POST /notifications/broadcast` lo acepte y
+  lo guarde en la cabecera. Al 06/11/26 `notification_sends` no existe (ni en producción ni en el
+  backend). Para los **programados** (`ops.notification_schedule`, del panel) hay dos caminos: que
+  el motor los registre en `notification_sends` con el `targetAction` de la regla, o una columna
+  `target_action` en `ops.notification_schedule` (migración del panel). **Bloquea el front: no**
+  (mock); **sí** para que el objetivo sobreviva a una recarga. **P0** (es lo único que le falta a
+  «Efecto por envío»).
 - [ ] **endpoint de escritura** — reglas en un solo modelo (pedido abierto desde el 2026-10-03,
   `docs/pedido-backend-2026-10-03.md` §1): `POST/PUT /admin/notification-rules`,
   `POST /admin/notification-rules/:id/activate|pause`. **Bloquea el front: no** (mock).
+  **Ampliado el 06/11/26:** la regla lleva `targetAction` (mismo catálogo) y **cada envío que
+  dispara la hereda** (se copia a su fila de `notification_sends`). El front ya lo guarda en la
+  automatización de ejemplo (`automationSchema.targetAction`).
 
 **Lo que ya existe y reusaste:** `sendBroadcastNotification`, `previewNotificationAudience`,
 `searchNotificationRecipients`, `listNotificationCampaigns`, `getNotificationCampaign`, las 6 fns de
@@ -787,6 +802,8 @@ qué):
 | Cambios normativos | detector + prueba de control | job | no | P3 |
 | Cobertura AMBA | `GET /admin/coverage` | endpoint de lectura | no | P2 |
 | Cobertura AMBA | usuarios por zona | endpoint de lectura | sí | P2 |
+| Configurar notificaciones | `targetAction` en el envío puntual y en las reglas (ampliado 06/11) | tabla o columna | no (mock) | **P0** |
+| Taller de cabecera | crear y deshabilitar códigos de referido desde el admin | endpoint de escritura | no | P2 |
 | Métricas › Pedidos | propuestas por pedido y red vs. afuera desde `quote_request_proposals` | endpoint de lectura | no (cartel) | P2 |
 
 ## 2. Solapamientos
@@ -862,7 +879,10 @@ qué):
    puntos (ya documentado en `docs/pedido-backend-cobertura.md`).
 10. **El backend tiene promociones de partner con endpoints admin** (`/promotions`, asignaciones)
    que el panel no usa ni muestra.
-11. **"Taller de cabecera" no existe** en ningún repo ni en la base.
+11. ~~**"Taller de cabecera" no existe** en ningún repo ni en la base.~~ Corregido el 06/11/26:
+   existe desde la 0126 del backend como código de referido (`partner_referral_codes` +
+   `preferred_partners`). Al 06/11/26 en producción: 1 código (SERMAY10, de Ser May), 2 canjes, 1
+   vigente, 1 auto.
 12. **`user_notification_preferences` tiene 0 filas**: el filtro de silenciados existe, pero nadie
    silenció nada todavía.
 13. **El repo de solicitudes devuelve `createdAt` como `Date` aunque el tipo diga `string`**
@@ -966,3 +986,40 @@ Para actualizar Trello:
    afuera; necesidad nueva P2 en la tabla resumen (hallazgo 2).
 9. **`CLAUDE.md`** — al día con los hallazgos 1, 17 y 18. Hallazgo nuevo 19 (corregidas ≠
    retiradas).
+
+## 6. Cambios respecto de la versión 6 (06/11/26)
+
+Tanda del 06/11/26, una rama por tarea (sin pushear). Para actualizar Trello:
+
+1. **Partners › Propuestas: ordenar y filtrar** (Tobías) — orden por cualquier columna y filtros
+   combinables (plan, propuestas del mes, propuestas desde el 27/10, zona, rubro, fecha de alta,
+   Aliado, último contacto), con chips y «Limpiar filtros», todo en la URL. **Real.** Sin pedido de
+   backend nuevo: el plan ya es real (billing) y no se duplicó el pedido de `partners.plan`.
+   Hallazgos: el catálogo `subscription_plans` trae **Gratis, Plus y Plus Max — no hay
+   «Estándar»**, así que el filtro no lo ofrece. Y **ningún contacto de Comercial está vinculado a un
+   proveedor** (`ops.partner_prospect.partner_id` en 0 de 47): «Último contacto» sale «sin
+   contacto» para todos hasta que se vinculen.
+2. **Solicitudes: mensaje de bienvenida** — autocompletado con `{nombre_taller}` y `{link_perfil}`
+   (el perfil público `/proveedores/<slug>`, el de la ficha). **Parcial:** el template «que ya
+   existe» no está en ningún repo ni en la base; se dejó un borrador marcado como ejemplo en
+   `src/lib/partner-welcome.ts`. El slug lo crea el trigger `partner_profile_slug_on_insert` del
+   backend (0107) al insertarse el partner, o sea **al aprobar**; antes no hay link y el copiado
+   queda deshabilitado. Sin pedido de backend.
+3. **Ficha del proveedor: dar de baja** — confirmación con motivo opcional, por
+   `ops.set_partner_status` (007), que ya escribía `ops.action_log`. **Real.** Sin pedido de backend.
+   Pregunta abierta nueva: el backend **acepta propuestas a un proveedor pausado o archivado**
+   (`DrizzlePartnerContactsReader` no mira el estado): ¿debería rechazarlas?
+4. **Partners › Taller de cabecera** — ranking por personas y autos vinculados, altas por semana y
+   mes, activos vs. inactivos (misma señal que Métricas, últimos 30 días). **Real**, con la
+   migración 027 de `ops` (dos funciones de sólo lectura). El canje de un código de referido está en
+   `preferred_partners`, **no** en `partner_claim_codes` (ése es el código con el que el dueño
+   reclama el taller): de ahí sólo sale «Reclamado». Pedido nuevo **P2**: crear y deshabilitar
+   códigos desde el admin (hoy es SQL, lo dice el propio schema del backend).
+5. **Notificaciones: «Objetivo»** — campo en envío puntual, programado y automatización; la
+   pantalla de efecto lo lee y se puede seguir corrigiendo ahí. **Contra mock** (en memoria).
+   Ampliados los pedidos existentes de registro de envíos (`targetAction`, ahora **P0**) y de reglas
+   en un solo modelo (la regla lleva el objetivo y los envíos lo heredan). Sin pedido duplicado.
+6. **Estudio de proveedores** — la rama `feat/estudio-rubro-y-dependencias` ya estaba mergeada en
+   `main`. Nuevo: bloque «Cómo mejorar tu perfil» en el Reporte, con reglas fijas (servicios,
+   ubicación, logo, descripción, horarios, dirección, WhatsApp, links). **Real.** «Fotos» es el
+   logo: el perfil no tiene galería en el backend.
