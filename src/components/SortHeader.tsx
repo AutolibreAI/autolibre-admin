@@ -41,6 +41,7 @@ export function SortHeader({
   align,
   firstClick = 'asc',
   searchKeys = DEFAULT_SEARCH_KEYS,
+  title,
 }: {
   label: string
   sortKey: string
@@ -52,6 +53,8 @@ export function SortHeader({
   firstClick?: 'asc' | 'desc'
   /** Cómo se llaman los search params de orden en ESTA ruta. */
   searchKeys?: { sort: string; dir: string }
+  /** Tooltip del encabezado (qué cuenta la columna). */
+  title?: string
 }) {
   const nextDir: 'asc' | 'desc' = active ? (dir === 'asc' ? 'desc' : 'asc') : firstClick
 
@@ -69,7 +72,7 @@ export function SortHeader({
   })
 
   return (
-    <TableHead className={align === 'right' ? 'text-right' : undefined}>
+    <TableHead className={align === 'right' ? 'text-right' : undefined} title={title}>
       <Link
         to={to}
         search={updateSearch as Parameters<typeof Link>[0]['search']}
