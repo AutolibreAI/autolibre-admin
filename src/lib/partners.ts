@@ -128,7 +128,16 @@ export interface ApplicationDetail extends ApplicationListItem {
   reviewNote: string | null
   reviewedAt: string | null
   /** Si ya se publicó, el partner resultante. */
-  partner: { id: string; name: string; coverageZone: string; serviceCount: number } | null
+  partner: {
+    id: string
+    name: string
+    coverageZone: string
+    serviceCount: number
+    /** `partners.status`. El link al perfil público sólo vale para `active`. */
+    status: string
+    /** Slug VIGENTE de `partner_slugs`. Lo crea un trigger al insertarse el partner. */
+    publicSlug: string | null
+  } | null
   /**
    * Quién la registró logueado: `submitted_by_user_id` (0149 del backend) →
    * `users`. `null` si fue anónima, anterior a la 0149, la cuenta se borró
