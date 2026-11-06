@@ -269,8 +269,16 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
  */
 function guessAction(c: CampaignListItem): EffectAction {
   const t = `${c.title} ${c.body}`.toLowerCase()
+  if (/seguro|p[oó]liza/.test(t)) return 'insurance'
+  if (/\bvtv\b/.test(t)) return 'vtv'
+  if (/c[eé]dula/.test(t)) return 'registration_card'
+  if (/licencia|registro de conducir/.test(t)) return 'license'
+  if (/documento/.test(t)) return 'document'
+  if (/propuesta/.test(t)) return 'proposal_selected'
+  if (/pedido|presupuesto|necesit/.test(t)) return 'quote_request'
+  if (/escane|esc[aá]ner/.test(t)) return 'scan'
+  if (/asistente|chat/.test(t)) return 'chat'
+  if (/mantenimiento|service\b/.test(t)) return 'maintenance'
   if (/veh[ií]culo|auto\b/.test(t)) return 'vehicle'
-  if (/seguro|vtv|c[eé]dula|licencia|documento|p[oó]liza/.test(t)) return 'document'
-  if (/pedido|presupuesto|propuesta|necesit/.test(t)) return 'quote_request'
   return 'vehicle'
 }

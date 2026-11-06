@@ -333,11 +333,29 @@ export async function findCampaign(
 
 // ── Efecto de un envío: conversión por ventana contra la ventana previa ─────
 
-const EFFECT_SOURCES: Record<Exclude<EffectAction, 'quote_request'>, ReadonlyArray<OutcomeSource>> = {
+const outcomeSources = (key: string): ReadonlyArray<OutcomeSource> =>
+  CAMPAIGN_OUTCOMES.find((o) => o.key === key)?.sources ?? []
+
+/** Un documento suelto: la rama de esa tabla dentro de «Cargó un documento». */
+const documentSource = (table: string): ReadonlyArray<OutcomeSource> =>
+  outcomeSources('document').filter((s) => s.table === table)
+
+const EFFECT_SOURCES: Record<
+  Exclude<EffectAction, 'quote_request' | 'proposal_selected'>,
+  ReadonlyArray<OutcomeSource>
+> = {
   // Los MISMOS predicados que `/notificaciones/envios/:id`: si "cargó un
   // documento" se midiera distinto acá y allá, el mismo envío daría dos números.
-  vehicle: CAMPAIGN_OUTCOMES.find((o) => o.key === 'vehicle')?.sources ?? [],
-  document: CAMPAIGN_OUTCOMES.find((o) => o.key === 'document')?.sources ?? [],
+  vehicle: outcomeSources('vehicle'),
+  document: outcomeSources('document'),
+  insurance: documentSource('insurances'),
+  vtv: documentSource('vehicle_inspections'),
+  registration_card: documentSource('registration_cards'),
+  license: documentSource('driver_licenses'),
+  scan: outcomeSources('scan'),
+  chat: outcomeSources('chat'),
+  maintenance: outcomeSources('maintenance'),
+  push_token: outcomeSources('pushToken'),
 }
 
 /** `select <ts> as ts from <tabla> t where t.<user> = r.user_id …`, una rama por fuente. */
@@ -395,6 +413,18 @@ export async function notificationEffect(
         userColumn: 'user_id',
         tsColumn: 'created_at',
         where: notDuplicatePredicate('t.'),
+      },
+    ]
+  } else if (action === 'proposal_selected') {
+    // Elegir una propuesta en la app: `selected_at` (backend 0122). Sin la
+    // columna, la acción no se puede medir en esta base.
+    if (!(await quoteSelectionAvailable())) return emptyEffect(false)
+    sources = [
+      {
+        table: 'quote_requests',
+        userColumn: 'user_id',
+        tsColumn: 'selected_at',
+        where: `t.selected_at is not null and ${notDuplicatePredicate('t.')}`,
       },
     ]
   } else {
@@ -464,6 +494,17 @@ export async function notificationEffect(
     channels: [...(row.channels ?? [])].sort(),
     available: true,
   }
+}
+
+async function quoteSelectionAvailable(): Promise<boolean> {
+  if (!(await quoteRequestsAvailability()).available) return false
+  const rows = await sql<{ ok: boolean }>(
+    `select exists (
+       select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'quote_requests' and column_name = 'selected_at'
+     ) as ok`,
+  )
+  return rows[0]?.ok === true
 }
 
 function emptyEffect(available: boolean): NotificationEffect {
