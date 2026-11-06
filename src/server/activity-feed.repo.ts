@@ -562,20 +562,20 @@ interface ActiveUsersRow {
  * Período en hora de Buenos Aires, como el resto de Crecimiento. Sin cuentas
  * internas (`INTERNAL_PREDICATE`, el mismo de "Usuarios reales").
  */
-export async function activeUsersSeries(
-  unit: GrowthUnit,
-  opts: { signal?: AbortSignal } = {},
-): Promise<ActiveUsersSeries> {
-  void opts.signal
-
+/**
+ * Las señales de "usuario activo" de Métricas, en UNA definición: las ramas
+ * del feed (`BRANCHES`), cada mensaje del usuario al asistente, y el refresh
+ * del token push (`is_action = false`: "sólo abrió"). No es un registro de
+ * aperturas de la app — no existe (`metricas.md`). La comparten
+ * `activeUsersSeries` y `activeUserIdsSince`; si divergieran, "activo" diría
+ * dos cosas en dos pantallas sin que nada lo delate.
+ */
+async function activitySignalsSql(): Promise<string> {
   // Mismo guard que el feed: sin `quote_requests`, la rama se saca y se sigue.
   const kinds = (await quoteRequestsAvailability()).available
     ? [...ACTIVITY_KINDS]
     : ACTIVITY_KINDS.filter((k) => k !== 'pedido')
-
-  const rows = await sql<ActiveUsersRow>(
-    `
-    with signals as (
+  return `
       select s.user_id, s.occurred_at, true as is_action
         from (
           ${kinds.map((k) => BRANCHES[k]).join(' union all ')}
@@ -587,8 +587,38 @@ export async function activeUsersSeries(
        where m.author::text = 'user'
       union all
       select ept.user_id, ept.updated_at, false
-        from expo_push_tokens ept
-    ),
+        from expo_push_tokens ept`
+}
+
+/**
+ * Los usuarios reales con alguna señal de actividad desde `since` (mismas
+ * señales que el gráfico de activos de Métricas, las dos capas juntas). Sólo
+ * para cruzar en el servidor: los ids no viajan al cliente.
+ */
+export async function activeUserIdsSince(since: Date): Promise<Array<string>> {
+  const rows = await sql<{ user_id: string }>(
+    `
+    with signals as (${await activitySignalsSql()})
+    select distinct sg.user_id
+      from signals sg
+      join users u on u.id = sg.user_id
+     where sg.occurred_at >= $1
+       and not ${INTERNAL_PREDICATE}
+    `,
+    [since],
+  )
+  return rows.map((r) => r.user_id)
+}
+
+export async function activeUsersSeries(
+  unit: GrowthUnit,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ActiveUsersSeries> {
+  void opts.signal
+
+  const rows = await sql<ActiveUsersRow>(
+    `
+    with signals as (${await activitySignalsSql()}),
     per_user as (
       select date_trunc($1, sg.occurred_at at time zone $2) as bucket,
              sg.user_id,
