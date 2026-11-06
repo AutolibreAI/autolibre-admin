@@ -67,7 +67,7 @@ export function PartnerWelcomeCard({
             setText(e.currentTarget.value)
             setCopy('idle')
           }}
-          rows={5}
+          rows={12}
           aria-label="Mensaje de bienvenida"
           className="text-sm"
         />
