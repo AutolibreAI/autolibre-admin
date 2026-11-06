@@ -1,4 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { listPartnerProfileFactsFn } from '~/fn/partner-profile'
+import { profileTipsBlock } from '~/lib/partner-profile-tips'
+import type { PartnerProfileFacts } from '~/lib/partner-profile-tips'
 import { Copy, FileText } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -61,12 +64,13 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners, zones, catalog, plansResult] = await Promise.all([
+    const [quotes, partners, zones, catalog, plansResult, profileFacts] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
       listPartnerZonesFn({ signal }),
       getServiceCatalog({ signal }),
       listPartnerPlansFn({ signal }),
+      listPartnerProfileFactsFn({ signal }),
     ])
     const requests =
       'rows' in quotes
@@ -93,6 +97,7 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
       rubros: catalog.map((f) => ({ slug: f.slug, name: f.name })),
       rubrosByRequest,
       plansResult,
+      profileFacts,
     }
   },
   head: () => ({ meta: [{ title: 'Partners · Estudio — AutoLibre' }] }),
@@ -101,8 +106,12 @@ export const Route = createFileRoute('/_authed/partners/estudio')({
 
 const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v)} %`)
 
+/** Separa el resumen del mes y «Cómo mejorar tu perfil» en el reporte. */
+const PARAGRAPH = '\n\n'
+
 function PartnerStudy() {
-  const { requests, partners, zones, rubros, rubrosByRequest, plansResult } = Route.useLoaderData()
+  const { requests, partners, zones, rubros, rubrosByRequest, plansResult, profileFacts } = Route.useLoaderData()
+  const profileById = useMemo(() => new Map(profileFacts.map((f) => [f.partnerId, f])), [profileFacts])
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
@@ -358,7 +367,13 @@ function PartnerStudy() {
         </details>
       </section>
 
-      <ReportSheet row={reportFor} facts={load.facts} partners={partners} onClose={() => setReportFor(null)} />
+      <ReportSheet
+        row={reportFor}
+        facts={load.facts}
+        partners={partners}
+        profile={reportFor ? (profileById.get(reportFor.partnerId) ?? null) : null}
+        onClose={() => setReportFor(null)}
+      />
     </>
   )
 }
@@ -419,11 +434,14 @@ function ReportSheet({
   row,
   facts,
   partners,
+  profile,
   onClose,
 }: {
   row: PartnerStudyRow | null
   facts: ReturnType<typeof useProposalFacts>['facts']
   partners: Array<StudyPartnerRef>
+  /** Qué tiene cargado su perfil, para «Cómo mejorar tu perfil». */
+  profile: PartnerProfileFacts | null
   onClose: () => void
 }) {
   const months = useMemo(() => countableMonths(new Date()), [])
@@ -434,7 +452,11 @@ function ReportSheet({
   // se recalculan para ese mes, con los mismos datos.
   const monthRows = useMemo(() => studyRows(facts, partners, new Map(), monthRange(month)), [facts, partners, month])
   const mine = row ? monthRows.find((r) => r.partnerId === row.partnerId) : undefined
-  const text = row && mine ? partnerMonthlyReport({ ...mine, plan: row.plan }, month, monthRows) : ''
+  const tips = profileTipsBlock(profile)
+  const text =
+    row && mine
+      ? [partnerMonthlyReport({ ...mine, plan: row.plan }, month, monthRows), tips].filter(Boolean).join(PARAGRAPH)
+      : ''
 
   return (
     <Sheet open={row !== null} onOpenChange={(o) => (o ? null : onClose())}>
@@ -443,7 +465,9 @@ function ReportSheet({
           <SheetTitle>Reporte para {row?.name}</SheetTitle>
           <SheetDescription className="mt-0.5 leading-relaxed">
             Texto para pegar en WhatsApp. No nombra clientes ni a otros proveedores: la zona va como mediana
-            anónima, y sólo si hay 3 o más proveedores más en la misma zona.
+            anónima, y sólo si hay 3 o más proveedores más en la misma zona. «Cómo mejorar tu perfil» sale de
+            reglas fijas según lo que le falta cargar (servicios, ubicación, logo, descripción, horarios,
+            dirección, WhatsApp y links).
           </SheetDescription>
         </div>
         <div className="space-y-3 px-5 py-5">
