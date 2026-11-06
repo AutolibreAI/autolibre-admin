@@ -8,7 +8,10 @@ import {
   scheduleFormReady,
   type ScheduleFormValues,
 } from '~/components/ScheduleForm'
+import { TargetActionField } from '~/components/TargetActionField'
 import { Button } from '~/components/ui/button'
+import { setScheduleTargetMock } from '~/mocks/notification-targets'
+import type { EffectAction } from '~/lib/notification-effect'
 import {
   Sheet,
   SheetContent,
@@ -32,11 +35,14 @@ export function ScheduleComposer() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<{ id: string; name: string } | null>(null)
+  /** Hoy va al mock: `ops.notification_schedule` no tiene la columna (ver `~/mocks/notification-targets`). */
+  const [target, setTarget] = useState<EffectAction | null>(null)
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
     if (!next) {
       setValues(emptyScheduleFormValues())
+      setTarget(null)
       setError(null)
       setCreated(null)
     }
@@ -61,6 +67,8 @@ export function ScheduleComposer() {
           excludeInternal: values.excludeInternal,
         },
       })
+      // Cada envío que dispare la regla hereda este objetivo.
+      setScheduleTargetMock(result.id, target)
       setCreated({ id: result.id, name: result.name })
       void router.invalidate()
     } catch (cause) {
@@ -108,7 +116,10 @@ export function ScheduleComposer() {
                 </Link>
               </div>
             ) : (
-              <ScheduleForm values={values} onChange={setValues} disabled={busy} />
+              <>
+                <ScheduleForm values={values} onChange={setValues} disabled={busy} />
+                <TargetActionField id="schedule-target" value={target} onChange={setTarget} disabled={busy} />
+              </>
             )}
 
             {error ? (

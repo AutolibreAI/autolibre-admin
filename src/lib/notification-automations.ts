@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { BROADCAST_BODY_MAX, BROADCAST_TITLE_MAX } from './notifications'
+import { EFFECT_ACTIONS } from './notification-effect'
 
 /**
  * Automatizaciones de notificaciones POR EVENTO (`/notificaciones/automatizaciones`)
@@ -124,6 +125,12 @@ export const automationSchema = z
     sendToHour: z.number().int().min(1).max(24),
     /** Pregunta de cierre (¿contrataste? ¿con quién?) al final del aviso. */
     asksClosing: z.boolean(),
+    /**
+     * Objetivo: la acción buscada, de la MISMA lista que mide «Efecto por
+     * envío». Cada envío que dispare la regla lo hereda. Opcional; ausente o
+     * `null` = sin objetivo. Va en el modelo único de reglas pedido al backend.
+     */
+    targetAction: z.enum(EFFECT_ACTIONS).nullable().optional(),
   })
   .refine((a) => a.sendFromHour < a.sendToHour, {
     message: 'La hora de inicio tiene que ser anterior a la de fin.',
