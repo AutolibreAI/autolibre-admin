@@ -1,12 +1,15 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { Download } from 'lucide-react'
+import { Download, X } from 'lucide-react'
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
 import { listPartnerQuoteVolumeFn } from '~/fn/partner-quote-volume'
 import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
-import { Chip, FilterGroup } from '~/components/Filters'
+import { listPartnerLastContactsFn } from '~/fn/partner-prospects'
+import { Chip, FilterGroup, RangeFilter } from '~/components/Filters'
+import { MultiSelect } from '~/components/MultiSelect'
+import { SortHeader } from '~/components/SortHeader'
 import { SearchInput } from '~/components/SearchInput'
 import { useProposalFacts } from '~/components/useProposalFacts'
 import { ProposalLoadStatus as LoadStatus } from '~/components/ProposalLoadStatus'
@@ -35,9 +38,18 @@ import {
   isFounding,
   monthLabel,
   partnerHistoryCsv,
-  partnerProposalsSearchSchema,
   shortDay,
 } from '~/lib/partner-plans'
+import {
+  CLEARED_PROPOSAL_FILTERS,
+  NO_PLAN,
+  TEXT_SORT_KEYS,
+  activeProposalFilterChips,
+  matchesProposalFilters,
+  partnerProposalsPageSearchSchema,
+  sortProposalRows,
+} from '~/lib/partner-proposal-filters'
+import type { PartnerFacts, ProposalSortKey } from '~/lib/partner-proposal-filters'
 import { cn } from '~/lib/utils'
 import type {
   AllTimeVolume,
@@ -87,20 +99,25 @@ import type {
  * rojo pasó el tope, amarillo llegó, Aliado siempre gris (sin límite por
  * ahora), sin plan (base sin billing) gris. El tope no frena ningún envío.
  *
+ * Orden y filtros (06/11/26, para Tobías): todo en la URL, sobre las filas ya
+ * contadas — ver `~/lib/partner-proposal-filters`. Los encabezados ordenan
+ * (`proposalSort`/`proposalDir`); sin orden elegido queda el de siempre.
+ *
  * `ssr: 'data-only'`: el loader corre en el servidor (lista de pedidos y de
  * proveedores), pero la carga de propuestas y el mes en curso son del
  * navegador. Está detrás de auth.
  */
 export const Route = createFileRoute('/_authed/partners/propuestas')({
-  validateSearch: partnerProposalsSearchSchema,
+  validateSearch: partnerProposalsPageSearchSchema,
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners, volume, plans] = await Promise.all([
+    const [quotes, partners, volume, plans, contacts] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
       listPartnerQuoteVolumeFn({ signal }),
       listPartnerPlansFn({ signal }),
+      listPartnerLastContactsFn({ signal }),
     ])
     // Sólo proveedores del directorio: un taller de afuera no tiene plan ni ficha.
     const allTime: Array<[string, AllTimeVolume]> | null = volume.available
@@ -120,7 +137,19 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
       tier: p.tier,
       status: p.status,
     }))
-    return { requests, partners: partnerRefs, allTime, plansResult: plans }
+    // Lo que los filtros necesitan y `PartnerRef` no trae. Sin datos de personas.
+    const partnerInfo = partners.map(
+      (p) => [p.id, { zone: p.coverageZone || null, categories: p.categories, createdAt: p.createdAt }] as const,
+    )
+    return {
+      requests,
+      partners: partnerRefs,
+      allTime,
+      plansResult: plans,
+      partnerInfo,
+      lastContacts: contacts.rows,
+      contactsAvailable: contacts.available,
+    }
   },
   head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
   component: PartnerProposals,
@@ -129,7 +158,8 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 function PartnerProposals() {
-  const { requests, partners, allTime, plansResult } = Route.useLoaderData()
+  const { requests, partners, allTime, plansResult, partnerInfo, lastContacts, contactsAvailable } =
+    Route.useLoaderData()
   const allTimeMap = useMemo(() => (allTime ? new Map(allTime) : null), [allTime])
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -157,11 +187,68 @@ function PartnerProposals() {
   )
   const view = isHistory ? historyView : monthView
 
+  // ── Lo que cada fila necesita para filtrarse y ordenarse ──────────────────
+  const infoMap = useMemo(() => new Map(partnerInfo), [partnerInfo])
+  const contactMap = useMemo(() => new Map(lastContacts.map((c) => [c.partnerId, c.lastContactOn])), [lastContacts])
+  const facts = useMemo(() => {
+    const monthUsed = new Map(monthView.rows.map((r) => [r.partnerId, r.used]))
+    const historyUsed = new Map(historyView.rows.map((r) => [r.partnerId, r.used]))
+    const out = new Map<string, PartnerFacts>()
+    for (const id of new Set([...monthUsed.keys(), ...historyUsed.keys()])) {
+      const info = infoMap.get(id)
+      out.set(id, {
+        zone: info?.zone ?? null,
+        categories: info?.categories ?? [],
+        createdAt: info?.createdAt ?? null,
+        lastContactOn: contactMap.get(id) ?? null,
+        monthUsed: monthUsed.get(id) ?? 0,
+        historyUsed: historyUsed.get(id) ?? 0,
+      })
+    }
+    return out
+  }, [monthView, historyView, infoMap, contactMap])
+  const factsFor = (id: string): PartnerFacts =>
+    facts.get(id) ?? { zone: null, categories: [], createdAt: null, lastContactOn: null, monthUsed: 0, historyUsed: 0 }
+
   const needle = search.q ? normalizeForMatch(search.q) : ''
   const matches = (name: string) => needle === '' || normalizeForMatch(name).includes(needle)
-  const keep = (r: { name: string; tone: CapTone }) => matches(r.name) && (!search.proposalOverCap || r.tone === 'over')
-  const monthRows = monthView.rows.filter(keep)
-  const historyRows = historyView.rows.filter(keep)
+  const keep = (r: PartnerUsageRow | PartnerHistoryRow) =>
+    matches(r.name) &&
+    (!search.proposalOverCap || r.tone === 'over') &&
+    matchesProposalFilters(r, factsFor(r.partnerId), search)
+  const monthRows = sortProposalRows(monthView.rows.filter(keep), search.proposalSort, search.proposalDir, (r, k) =>
+    monthSortValue(r, k, factsFor(r.partnerId)),
+  )
+  const historyRows = sortProposalRows(
+    historyView.rows.filter(keep),
+    search.proposalSort,
+    search.proposalDir,
+    (r, k) => historySortValue(r, k, factsFor(r.partnerId)),
+  )
+
+  // ── Opciones de los filtros (salen de los datos, nunca a mano) ────────────
+  const planOptions = useMemo(() => {
+    const catalog = plansResult.available ? plansResult.catalog : []
+    return [...catalog.map((p) => ({ value: p.code, label: p.name })), { value: NO_PLAN, label: 'Sin plan' }]
+  }, [plansResult])
+  const zoneOptions = useMemo(() => {
+    const zones = new Set<string>()
+    for (const [, info] of partnerInfo) if (info.zone) zones.add(info.zone.trim())
+    return [...zones].sort((a, b) => a.localeCompare(b, 'es')).map((z) => ({ value: z, label: z }))
+  }, [partnerInfo])
+  const rubroOptions = useMemo(() => {
+    const bySlug = new Map<string, string>()
+    for (const [, info] of partnerInfo) for (const c of info.categories) bySlug.set(c.slug, c.name)
+    return [...bySlug].sort((a, b) => a[1].localeCompare(b[1], 'es')).map(([value, label]) => ({ value, label }))
+  }, [partnerInfo])
+  const monthName = isHistory ? 'del mes en curso' : `de ${monthLabel(month).toLowerCase()}`
+  const chips = activeProposalFilterChips(search, {
+    plan: (code) => planOptions.find((o) => o.value === code)?.label ?? code,
+    rubro: (slug) => rubroOptions.find((o) => o.value === slug)?.label ?? slug,
+    monthName,
+  })
+  const toggle = (list: ReadonlyArray<string>, v: string) =>
+    list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
   const rows = isHistory ? historyRows : monthRows
   const externals = view.externals.filter((e) => matches(e.name))
 
@@ -258,6 +345,126 @@ function PartnerProposals() {
         ) : null}
       </div>
 
+      <div className="mb-3 flex flex-wrap items-end gap-5">
+        <FilterGroup
+          label="Plan"
+          onClear={search.proposalPlans.length > 0 ? () => setSearch({ proposalPlans: [] }) : undefined}
+        >
+          {planOptions.map((o) => (
+            <Chip
+              key={o.value}
+              active={search.proposalPlans.includes(o.value)}
+              onClick={() => setSearch({ proposalPlans: toggle(search.proposalPlans, o.value) })}
+            >
+              {o.label}
+            </Chip>
+          ))}
+        </FilterGroup>
+        <FilterGroup label="Aliado">
+          <Chip active={search.proposalAliado === 'all'} onClick={() => setSearch({ proposalAliado: 'all' })}>
+            Todos
+          </Chip>
+          <Chip active={search.proposalAliado === 'yes'} onClick={() => setSearch({ proposalAliado: 'yes' })}>
+            Sí
+          </Chip>
+          <Chip active={search.proposalAliado === 'no'} onClick={() => setSearch({ proposalAliado: 'no' })}>
+            No
+          </Chip>
+        </FilterGroup>
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">Zona</span>
+          <MultiSelect
+            label="Zona"
+            options={zoneOptions}
+            selected={search.proposalZones}
+            onChange={(next) => setSearch({ proposalZones: next })}
+            placeholder="Todas"
+            searchPlaceholder="Buscar zona…"
+            className="w-52"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">Rubro</span>
+          <MultiSelect
+            label="Rubro"
+            options={rubroOptions}
+            selected={search.proposalRubros}
+            onChange={(next) => setSearch({ proposalRubros: next })}
+            placeholder="Todos"
+            searchPlaceholder="Buscar rubro…"
+            className="w-52"
+          />
+        </div>
+      </div>
+      <div className="mb-4 flex flex-wrap items-end gap-5">
+        <RangeFilter
+          label={`Propuestas ${monthName}`}
+          type="number"
+          min={search.proposalMonthMin}
+          max={search.proposalMonthMax}
+          onCommit={({ min, max }) => setSearch({ proposalMonthMin: toCount(min), proposalMonthMax: toCount(max) })}
+        />
+        <RangeFilter
+          label="Propuestas desde 27/10"
+          type="number"
+          min={search.proposalHistMin}
+          max={search.proposalHistMax}
+          onCommit={({ min, max }) => setSearch({ proposalHistMin: toCount(min), proposalHistMax: toCount(max) })}
+        />
+        <RangeFilter
+          label="Fecha de alta"
+          type="date"
+          min={search.proposalJoinedFrom}
+          max={search.proposalJoinedTo}
+          onCommit={({ min, max }) => setSearch({ proposalJoinedFrom: min, proposalJoinedTo: max })}
+        />
+        {contactsAvailable ? (
+          <>
+            <RangeFilter
+              label="Último contacto"
+              type="date"
+              min={search.proposalContactFrom}
+              max={search.proposalContactTo}
+              onCommit={({ min, max }) => setSearch({ proposalContactFrom: min, proposalContactTo: max })}
+            />
+            <FilterGroup label="Comercial">
+              <Chip
+                active={search.proposalNoContact}
+                onClick={() => setSearch({ proposalNoContact: !search.proposalNoContact })}
+              >
+                Sin contacto
+              </Chip>
+            </FilterGroup>
+          </>
+        ) : null}
+      </div>
+
+      {chips.length > 0 ? (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5" aria-label="Filtros activos">
+          {chips.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => setSearch(c.clear as Partial<typeof search>)}
+              className="inline-flex h-7 items-center gap-1 rounded-full border border-brand/40 bg-brand-soft px-2.5 text-xs text-brand outline-none hover:border-brand focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Quitar filtro ${c.label}`}
+            >
+              {c.label}
+              <X className="size-3" aria-hidden />
+            </button>
+          ))}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              setSearch({ ...CLEARED_PROPOSAL_FILTERS, proposalPlans: [], proposalZones: [], proposalRubros: [] })
+            }
+          >
+            Limpiar filtros
+          </Button>
+        </div>
+      ) : null}
+
       <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-6">
         <Stat label="Enviadas" value={totals.sent} />
         <Stat label="Retiradas" value={totals.withdrawn} />
@@ -284,8 +491,8 @@ function PartnerProposals() {
         </Empty>
       ) : rows.length === 0 && !load.loading ? (
         <Empty>
-          {search.q
-            ? 'Ningún proveedor coincide con la búsqueda.'
+          {chips.length > 0
+            ? 'Ningún proveedor coincide con los filtros.'
             : search.proposalOverCap
               ? isHistory
                 ? 'Nadie pasó el tope en ningún mes.'
@@ -301,24 +508,28 @@ function PartnerProposals() {
               «Desde siempre» no está disponible: falta aplicar la migración 025 de ops en esta base.
             </p>
           ) : null}
-          <HistoryTable rows={historyRows} />
+          <HistoryTable rows={historyRows} factsFor={factsFor} />
         </>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[860px]">
+          <Table className="min-w-[1180px]">
             <TableHeader>
               <TableRow>
-                <TableHead>Proveedor</TableHead>
-                <TableHead>Plan</TableHead>
-                <TableHead className="text-right">Enviadas</TableHead>
-                <TableHead className="text-right">Retiradas</TableHead>
-                <TableHead className="text-right">Elegidas</TableHead>
-                <TableHead className="text-right">Usadas / tope</TableHead>
+                <Th label="Proveedor" k="name" />
+                <Th label="Plan" k="plan" />
+                <Th label="Zona" k="zone" />
+                <Th label="Alta" k="createdAt" />
+                <Th label="Último contacto" k="lastContact" title="Del seguimiento comercial (Comercial › Contactos)." />
+                <Th label="Enviadas" k="sent" align="right" />
+                <Th label="Retiradas" k="withdrawn" align="right" />
+                <Th label="Elegidas" k="selected" align="right" />
+                <Th label="Usadas / tope" k="used" align="right" />
+                <Th label="Desde 27/10" k="historyUsed" align="right" title="Usadas desde el 27/10/26 (el histórico)." />
               </TableRow>
             </TableHeader>
             <TableBody>
               {monthRows.map((r) => (
-                <UsageRow key={r.partnerId} row={r} />
+                <UsageRow key={r.partnerId} row={r} facts={factsFor(r.partnerId)} />
               ))}
             </TableBody>
           </Table>
@@ -332,7 +543,7 @@ function PartnerProposals() {
   )
 }
 
-function UsageRow({ row }: { row: PartnerUsageRow }) {
+function UsageRow({ row, facts }: { row: PartnerUsageRow; facts: PartnerFacts }) {
   return (
     <TableRow className={toneRowClass(row.tone)}>
       <TableCell>
@@ -341,6 +552,7 @@ function UsageRow({ row }: { row: PartnerUsageRow }) {
       <TableCell className="text-sm">
         <PlanCell plan={row.plan} />
       </TableCell>
+      <FactCells facts={facts} />
       <TableCell className="text-right tabular-nums">{formatInt(row.sent)}</TableCell>
       <TableCell className="text-right tabular-nums">
         {row.withdrawn > 0 ? formatInt(row.withdrawn) : <span className="text-muted-foreground">0</span>}
@@ -350,6 +562,7 @@ function UsageRow({ row }: { row: PartnerUsageRow }) {
         {formatInt(row.used)} / {row.plan === null ? '—' : row.cap === null ? 'sin límite' : formatInt(row.cap)}
         <ToneNote tone={row.tone} used={row.used} cap={row.cap} />
       </TableCell>
+      <TableCell className="text-right tabular-nums">{formatInt(facts.historyUsed)}</TableCell>
     </TableRow>
   )
 }
@@ -360,30 +573,39 @@ function UsageRow({ row }: { row: PartnerUsageRow }) {
  * Sin columna de tope: el tope es mensual. El color va sobre el PICO mensual,
  * con las mismas reglas que el mes (`capTone`).
  */
-function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
+function HistoryTable({
+  rows,
+  factsFor,
+}: {
+  rows: ReadonlyArray<PartnerHistoryRow>
+  factsFor: (id: string) => PartnerFacts
+}) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <Table className="min-w-[1280px]">
+      <Table className="min-w-[1600px]">
         <TableHeader>
           <TableRow>
-            <TableHead>Proveedor</TableHead>
-            <TableHead>Plan</TableHead>
-            <TableHead
-              className="text-right"
+            <Th label="Proveedor" k="name" />
+            <Th label="Plan" k="plan" />
+            <Th label="Zona" k="zone" />
+            <Th label="Alta" k="createdAt" />
+            <Th label="Último contacto" k="lastContact" title="Del seguimiento comercial (Comercial › Contactos)." />
+            <Th
+              label="Pedidos desde siempre"
+              k="allTime"
+              align="right"
               title="Pedidos distintos en los que cotizó, también antes del 27/10 (tabla vieja de ops). No entra al pico ni al color."
-            >
-              Pedidos desde siempre
-            </TableHead>
-            <TableHead title="La primera vez que cotizó, en cualquiera de las dos tablas.">Cotiza desde</TableHead>
-            <TableHead className="text-right">Enviadas</TableHead>
-            <TableHead className="text-right">Retiradas</TableHead>
-            <TableHead className="text-right">Elegidas</TableHead>
-            <TableHead className="text-right">Total usadas</TableHead>
-            <TableHead className="text-right">% elegidas</TableHead>
-            <TableHead>Primera</TableHead>
-            <TableHead>Última</TableHead>
-            <TableHead className="text-right">Meses</TableHead>
-            <TableHead className="text-right">Pico mensual</TableHead>
+            />
+            <Th label="Cotiza desde" k="allTimeFirst" title="La primera vez que cotizó, en cualquiera de las dos tablas." />
+            <Th label="Enviadas" k="sent" align="right" />
+            <Th label="Retiradas" k="withdrawn" align="right" />
+            <Th label="Elegidas" k="selected" align="right" />
+            <Th label="Total usadas" k="used" align="right" />
+            <Th label="% elegidas" k="pctSelected" align="right" />
+            <Th label="Primera" k="firstAt" />
+            <Th label="Última" k="lastAt" />
+            <Th label="Meses" k="activeMonths" align="right" />
+            <Th label="Pico mensual" k="peak" align="right" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -395,6 +617,7 @@ function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
               <TableCell className="text-sm">
                 <PlanCell plan={r.plan} />
               </TableCell>
+              <FactCells facts={factsFor(r.partnerId)} />
               <TableCell className="text-right font-medium tabular-nums">
                 {r.allTime === null ? (
                   <span className="text-muted-foreground">—</span>
@@ -433,6 +656,119 @@ function HistoryTable({ rows }: { rows: ReadonlyArray<PartnerHistoryRow> }) {
         </TableBody>
       </Table>
     </div>
+  )
+}
+
+// ── Orden ────────────────────────────────────────────────────────────────────
+
+const SORT_SEARCH_KEYS = { sort: 'proposalSort', dir: 'proposalDir' }
+
+/** Encabezado ordenable: texto A→Z al primer click; números y fechas, de mayor a menor. */
+function Th({ label, k, align, title }: { label: string; k: ProposalSortKey; align?: 'right'; title?: string }) {
+  const search = Route.useSearch()
+  return (
+    <SortHeader
+      label={label}
+      sortKey={k}
+      active={search.proposalSort === k}
+      dir={search.proposalDir}
+      to="/partners/propuestas"
+      align={align}
+      firstClick={TEXT_SORT_KEYS.has(k) ? 'asc' : 'desc'}
+      searchKeys={SORT_SEARCH_KEYS}
+      title={title}
+    />
+  )
+}
+
+type SortValue = number | string | null
+
+/** `undefined` = esa columna no es común a las dos tablas. */
+function commonSortValue(
+  r: PartnerUsageRow | PartnerHistoryRow,
+  k: ProposalSortKey,
+  f: PartnerFacts,
+): SortValue | undefined {
+  switch (k) {
+    case 'name':
+      return r.name
+    case 'plan':
+      return r.plan?.name ?? null
+    case 'zone':
+      return f.zone
+    case 'createdAt':
+      return f.createdAt
+    case 'lastContact':
+      return f.lastContactOn
+    case 'sent':
+      return r.sent
+    case 'withdrawn':
+      return r.withdrawn
+    case 'selected':
+      return r.selected
+    case 'used':
+      return r.used
+    case 'monthUsed':
+      return f.monthUsed
+    case 'historyUsed':
+      return f.historyUsed
+    default:
+      return undefined
+  }
+}
+
+function monthSortValue(r: PartnerUsageRow, k: ProposalSortKey, f: PartnerFacts): SortValue {
+  return commonSortValue(r, k, f) ?? null
+}
+
+function historySortValue(r: PartnerHistoryRow, k: ProposalSortKey, f: PartnerFacts): SortValue {
+  const common = commonSortValue(r, k, f)
+  if (common !== undefined) return common
+  switch (k) {
+    case 'allTime':
+      return r.allTime?.requests ?? null
+    case 'allTimeFirst':
+      return r.allTime?.firstOn || null
+    case 'pctSelected':
+      return r.pctSelected
+    case 'firstAt':
+      return r.firstAt
+    case 'lastAt':
+      return r.lastAt
+    case 'activeMonths':
+      return r.activeMonths
+    case 'peak':
+      return r.peak?.used ?? null
+    default:
+      return null
+  }
+}
+
+/** `''` del rango es "sin tope", nunca 0. */
+function toCount(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined
+  const n = Number(v)
+  return Number.isInteger(n) && n >= 0 ? n : undefined
+}
+
+/** Zona, alta y último contacto: lo que Tobías mira antes de llamar. */
+function FactCells({ facts }: { facts: PartnerFacts }) {
+  return (
+    <>
+      <TableCell className="max-w-48 truncate text-sm" title={facts.zone ?? undefined}>
+        {facts.zone ?? <span className="text-muted-foreground">—</span>}
+      </TableCell>
+      <TableCell className="text-sm tabular-nums">
+        {facts.createdAt ? shortDay(baDay(facts.createdAt)) : <span className="text-muted-foreground">—</span>}
+      </TableCell>
+      <TableCell className="text-sm tabular-nums">
+        {facts.lastContactOn ? (
+          shortDay(facts.lastContactOn)
+        ) : (
+          <span className="text-muted-foreground">sin contacto</span>
+        )}
+      </TableCell>
+    </>
   )
 }
 

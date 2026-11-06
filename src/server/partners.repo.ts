@@ -664,6 +664,7 @@ interface PartnerRow {
   tier: string
   latitude: string | number | null
   longitude: string | number | null
+  created_at: Date
 }
 
 /**
@@ -723,6 +724,7 @@ export async function listPartners(
               p.tier::text AS tier,
               p.latitude,
               p.longitude,
+              p.created_at,
               count(DISTINCT ps.service_id)::int AS service_count,
               count(DISTINCT sc.id)::int AS category_count,
               coalesce(
@@ -785,6 +787,7 @@ export async function listPartners(
     location:
       r.latitude === null || r.longitude === null ? null : { lat: Number(r.latitude), lng: Number(r.longitude) },
     publicSlug: slugs.get(r.id) ?? null,
+    createdAt: new Date(r.created_at).toISOString(),
   }))
 }
 

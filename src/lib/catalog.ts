@@ -49,6 +49,8 @@ export interface PartnerListItem {
    * Si se publica o no lo decide `publicProfile()` de `~/lib/partners`.
    */
   publicSlug: string | null
+  /** `partners.created_at` en ISO: la fecha de alta en el directorio. */
+  createdAt: string
 }
 
 export interface PartnerServicesView {
