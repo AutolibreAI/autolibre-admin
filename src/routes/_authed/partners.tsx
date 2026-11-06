@@ -34,6 +34,7 @@ const TABS: ReadonlyArray<Tab> = [
   { to: '/partners/propuestas', label: 'Propuestas' },
   { to: '/partners/estudio', label: 'Estudio' },
   { to: '/partners/sellos', label: 'Sellos' },
+  { to: '/partners/cabecera', label: 'Taller de cabecera' },
 ]
 
 function PartnersLayout() {
