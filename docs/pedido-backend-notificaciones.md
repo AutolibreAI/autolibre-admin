@@ -75,6 +75,11 @@ cabecera · la extensión sólo con confirmación de la persona.
   quote_request | null`) en una cabecera `notification_sends` (`id`, `sentAt`, `channel`,
   `title`, `body`, `kind` = `adhoc | rule | event`, `ruleId`, `audienceDefinition` jsonb,
   `targetAction`, `createdBy`). Hoy la acción se elige en pantalla y se pierde al recargar.
+  **Ampliado el 06/11/26:** el panel ya pide el «Objetivo» en el formulario del envío puntual, del
+  programado y de la automatización (mismo catálogo de tres acciones). Falta que
+  `POST /notifications/broadcast` acepte `targetAction` y lo guarde, y que las reglas lo lleven
+  para que **cada envío que disparan lo herede**. Al 06/11/26 `notification_sends` no existe en
+  producción ni en el backend; el panel lo guarda en un mock en memoria.
 - [ ] Opcional: `notifications.read_at` (hoy se sabe si la leyó, nunca cuándo) y los eventos de
   Brevo (aperturas y clics del mail).
 
