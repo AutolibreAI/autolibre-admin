@@ -5,20 +5,18 @@ import { publicProfile } from '~/lib/partners'
  * solicitud se aprobó (tarjeta de Trello del 06/11/26). El panel sólo lo
  * COMPLETA: el envío sigue siendo manual (copiar y pegar en WhatsApp).
  *
- * ⚠ El texto de abajo es un BORRADOR. El pedido decía "el template de
- * bienvenida que ya existe", y al 06/11/26 no aparece en ningún lado que este
- * repo pueda leer: ni en `src/`, ni en `docs/`, ni en las plantillas de
- * `ops.quote_message_template_version`, ni en el backend (`main`). Se dejó un
- * texto mínimo marcado como ejemplo en la pantalla; el real se pega ACÁ, en
- * `PARTNER_WELCOME_TEMPLATE`, con las dos variables tal cual, y se pasa
- * `PARTNER_WELCOME_IS_DRAFT` a `false`. No hace falta tocar nada más.
+ * El texto es el oficial, pasado por el equipo el 06/11/26, TAL CUAL: lo único
+ * que se cambió es su `[LINK]` por la variable `{link_perfil}`. Para cambiarlo
+ * se edita `PARTNER_WELCOME_TEMPLATE` y nada más.
  *
- * Variables (llaves simples, como en la tarjeta):
+ * Variables (llaves simples, como en la tarjeta). Una variable que el texto no
+ * usa no se exige ni se avisa:
  * - `{nombre_taller}`: el nombre del partner si ya está aprobado, si no el de
- *   la solicitud.
+ *   la solicitud. El texto oficial no la usa hoy.
  * - `{link_perfil}`: el perfil público, el MISMO que usa la ficha
  *   (`publicProfile()` de `~/lib/partners`). Es `/proveedores/<slug>`, NO
- *   `/p/<slug>`: `/p/` da 404 (verificado el 03/11/26).
+ *   `/p/<slug>`: `/p/` da 404 (verificado el 03/11/26). Obligatoria: el mensaje
+ *   existe para mandar el link.
  *
  * El slug lo crea el trigger `partner_profile_slug_on_insert` (backend, 0107)
  * AL INSERTARSE el partner, o sea al aprobar la solicitud. Antes de aprobar no
@@ -27,13 +25,23 @@ import { publicProfile } from '~/lib/partners'
  * literal**: lo que falta sale como aviso entre corchetes y el copiado queda
  * deshabilitado.
  */
-export const PARTNER_WELCOME_TEMPLATE =
-  'Hola {nombre_taller}! Te damos la bienvenida a AutoLibre. Ya está publicado tu perfil: {link_perfil}'
+export const PARTNER_WELCOME_TEMPLATE = `¡Hola! Bienvenido a AutoLibre 🙌
 
-/** `true` mientras `PARTNER_WELCOME_TEMPLATE` sea el borrador del panel y no el texto oficial. */
-export const PARTNER_WELCOME_IS_DRAFT = true
+Ya estás en nuestra red de proveedores. AutoLibre conecta dueños de autos con proveedores de confianza de su zona, y desde hoy te pueden encontrar.
+
+Este es tu perfil en nuestra web:
+👉 {link_perfil}
+
+Usalo como tu propia página: compartilo con tus clientes, sumalo a tu bio de Instagram y a tu ficha de Google Maps.
+
+Cualquier duda, escribime por acá. ¡Gracias por sumarte!`
+
+/** `true` mientras `PARTNER_WELCOME_TEMPLATE` sea un borrador y no el texto oficial. */
+export const PARTNER_WELCOME_IS_DRAFT = false
 
 export type WelcomeVariable = 'nombre_taller' | 'link_perfil'
+
+const uses = (v: WelcomeVariable) => PARTNER_WELCOME_TEMPLATE.includes(`{${v}}`)
 
 export interface WelcomeMessage {
   text: string
@@ -48,7 +56,9 @@ export function renderPartnerWelcome(input: {
   const missing: WelcomeMessage['missing'] = []
 
   const name = (input.partner?.name || input.businessName).trim()
-  if (!name) missing.push({ variable: 'nombre_taller', reason: 'la solicitud no tiene nombre' })
+  if (uses('nombre_taller') && !name) {
+    missing.push({ variable: 'nombre_taller', reason: 'la solicitud no tiene nombre' })
+  }
 
   let link: string | null = null
   if (!input.partner) {
@@ -70,10 +80,6 @@ export function renderPartnerWelcome(input: {
   return { text, missing }
 }
 
-// Guardrail en tiempo de módulo: si alguien pega el texto oficial y se come una
-// variable, que rompa al cargar y no en el primer mensaje que sale incompleto.
-for (const v of ['nombre_taller', 'link_perfil'] as const) {
-  if (!PARTNER_WELCOME_TEMPLATE.includes(`{${v}}`)) {
-    throw new Error(`PARTNER_WELCOME_TEMPLATE no tiene {${v}}`)
-  }
-}
+// Guardrail en tiempo de módulo: si alguien cambia el texto y se come el link,
+// que rompa al cargar y no en el primer mensaje que sale sin él.
+if (!uses('link_perfil')) throw new Error('PARTNER_WELCOME_TEMPLATE no tiene {link_perfil}')
