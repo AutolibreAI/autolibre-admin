@@ -32,13 +32,48 @@ import { z } from 'zod'
  * guardada en ningún lado.
  */
 
-export const EFFECT_ACTIONS = ['vehicle', 'document', 'quote_request'] as const
+/**
+ * Las acciones que se pueden poner de objetivo Y medir. Ampliado el 06/11/26
+ * (pedido: «carga de seguro, creación de pedido, etc.»). Cada una tiene su
+ * fuente real en `~/server/campaigns.repo` (`EFFECT_SOURCES` + las dos de
+ * pedidos): una acción que no se puede medir no entra a esta lista. Los
+ * predicados son los mismos de `CAMPAIGN_OUTCOMES` (`~/lib/campaigns`), así
+ * el mismo envío da el mismo número acá y en `/notificaciones/envios/:id`.
+ *
+ * Quedaron afuera, por no tener de dónde medirlas: «cargar patente» (la
+ * patente se carga con el vehículo, y eso ya es «Cargar vehículo») y
+ * «cargar kilometraje» (`vehicle_audit_logs` sólo guarda cambios desde el
+ * 13/09/26).
+ */
+export const EFFECT_ACTIONS = [
+  'vehicle',
+  'insurance',
+  'vtv',
+  'registration_card',
+  'license',
+  'document',
+  'quote_request',
+  'proposal_selected',
+  'scan',
+  'chat',
+  'maintenance',
+  'push_token',
+] as const
 export type EffectAction = (typeof EFFECT_ACTIONS)[number]
 
 export const EFFECT_ACTION_LABELS: Record<EffectAction, string> = {
   vehicle: 'Cargar vehículo',
-  document: 'Cargar documento',
+  insurance: 'Cargar seguro',
+  vtv: 'Cargar VTV',
+  registration_card: 'Cargar cédula',
+  license: 'Cargar licencia',
+  document: 'Cargar cualquier documento',
   quote_request: 'Crear pedido',
+  proposal_selected: 'Elegir una propuesta',
+  scan: 'Escanear el auto',
+  chat: 'Hablar con el asistente',
+  maintenance: 'Registrar un mantenimiento',
+  push_token: 'Registrar un dispositivo',
 }
 
 export const EFFECT_WINDOWS = [

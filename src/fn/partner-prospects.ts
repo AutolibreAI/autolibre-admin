@@ -15,6 +15,7 @@ import {
   createProspect,
   findPhoneMatches,
   importProspects,
+  listPartnerLastContacts,
   listProspectOrigins,
   listProspectOwners,
   listProspects,
@@ -150,4 +151,15 @@ export const addProspectOriginFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }): Promise<ProspectOrigin> => {
     await assertAvailable()
     return addProspectOrigin(data.label, context.user.id)
+  })
+
+/**
+ * El último contacto comercial por proveedor del directorio (sólo la fecha),
+ * para filtrar y ordenar Partners › Propuestas. Sin la 024, vacío.
+ */
+export const listPartnerLastContactsFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async () => {
+    const available = await partnerProspectsAvailable()
+    return { available, rows: available ? await listPartnerLastContacts() : [] }
   })

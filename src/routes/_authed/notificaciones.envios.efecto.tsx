@@ -1,4 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { getSendTargetMock, setSendTargetMock } from '~/mocks/notification-targets'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { getNotificationEffect, listNotificationCampaigns } from '~/fn/notifications'
@@ -37,8 +38,10 @@ import type { EffectAction, NotificationEffect } from '~/lib/notification-effect
  * `listNotificationCampaigns` y la conversión de `getNotificationEffect`
  * (`notificationEffect` en `~/server/campaigns.repo`), una consulta por fila y
  * por acción, al montarse la fila o cambiar la acción. Lo único que no se puede
- * es GUARDAR la acción objetivo de cada envío: se elige acá y se pierde al
- * recargar (`targetAction`, pedido al backend).
+ * es GUARDAR la acción objetivo de cada envío (`targetAction`, pedido al
+ * backend). Desde el 06/11/26 el lugar principal de carga es el formulario del
+ * envío («Objetivo»); acá se lee de ahí (`~/mocks/notification-targets`, en
+ * memoria) y se puede corregir. Sin objetivo cargado, se deduce del texto.
  *
  * `ssr: 'data-only'`: si una ventana ya cerró depende del reloj del
  * navegador; renderizarlo en el servidor daría un mismatch de hidratación.
@@ -75,7 +78,7 @@ function EffectPage() {
 
       <MockBanner
         items={[
-          'Todos los números son reales. Lo único que falta en el backend es GUARDAR la acción objetivo de cada envío: acá se elige por fila y se pierde al recargar.',
+          'Todos los números son reales. Lo único que falta en el backend es GUARDAR la acción objetivo de cada envío: se carga en el formulario del envío («Objetivo») o acá por fila, y se pierde al recargar.',
         ]}
       />
 
@@ -133,7 +136,14 @@ function EffectPage() {
 }
 
 function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
-  const [action, setAction] = useState<EffectAction>(() => guessAction(c))
+  const [saved] = useState(() => getSendTargetMock(c.broadcastId))
+  const [action, setActionState] = useState<EffectAction>(() => saved ?? guessAction(c))
+  const [fromSend, setFromSend] = useState(saved !== null)
+  const setAction = (next: EffectAction) => {
+    setActionState(next)
+    setSendTargetMock(c.broadcastId, next)
+    setFromSend(true)
+  }
   const [effect, setEffect] = useState<NotificationEffect | null>(null)
   const [error, setError] = useState(false)
   const now = useMemo(() => new Date(), [])
@@ -190,6 +200,9 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
             ))}
           </SelectContent>
         </Select>
+        <p className="mt-1 text-xs italic text-muted-foreground">
+          {fromSend ? 'Objetivo cargado (de ejemplo, en memoria)' : 'Deducido del texto'}
+        </p>
         {error ? <p className="mt-1 text-xs text-destructive">No pudimos calcularlo.</p> : null}
         {effect && !effect.available ? (
           <p className="mt-1 text-xs text-muted-foreground">Esta base no tiene pedidos.</p>
@@ -256,8 +269,16 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
  */
 function guessAction(c: CampaignListItem): EffectAction {
   const t = `${c.title} ${c.body}`.toLowerCase()
+  if (/seguro|p[oó]liza/.test(t)) return 'insurance'
+  if (/\bvtv\b/.test(t)) return 'vtv'
+  if (/c[eé]dula/.test(t)) return 'registration_card'
+  if (/licencia|registro de conducir/.test(t)) return 'license'
+  if (/documento/.test(t)) return 'document'
+  if (/propuesta/.test(t)) return 'proposal_selected'
+  if (/pedido|presupuesto|necesit/.test(t)) return 'quote_request'
+  if (/escane|esc[aá]ner/.test(t)) return 'scan'
+  if (/asistente|chat/.test(t)) return 'chat'
+  if (/mantenimiento|service\b/.test(t)) return 'maintenance'
   if (/veh[ií]culo|auto\b/.test(t)) return 'vehicle'
-  if (/seguro|vtv|c[eé]dula|licencia|documento|p[oó]liza/.test(t)) return 'document'
-  if (/pedido|presupuesto|propuesta|necesit/.test(t)) return 'quote_request'
   return 'vehicle'
 }

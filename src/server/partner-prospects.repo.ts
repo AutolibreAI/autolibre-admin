@@ -56,6 +56,25 @@ export async function partnerProspectsAvailable(): Promise<boolean> {
 
 // ── Lectura ────────────────────────────────────────────────────────────────
 
+/**
+ * El último contacto comercial de cada PROVEEDOR del directorio: el máximo
+ * `last_contact_on` de los contactos de Comercial vinculados a él
+ * (`partner_id`). Un proveedor sin contacto vinculado no está en el mapa.
+ * Sólo la fecha: ni la nota ni el teléfono del contacto viajan.
+ */
+export async function listPartnerLastContacts(): Promise<Array<{ partnerId: string; lastContactOn: string }>> {
+  if (!(await partnerProspectsAvailable())) return []
+  return (
+    await sql<{ partner_id: string; last_contact_on: string }>(
+      `select partner_id, to_char(max(last_contact_on), 'YYYY-MM-DD') as last_contact_on
+         from ops.partner_prospect
+        where partner_id is not null and last_contact_on is not null
+        group by partner_id`,
+    )
+  ).map((r) => ({ partnerId: r.partner_id, lastContactOn: r.last_contact_on }))
+}
+
+
 interface ProspectRow {
   id: string
   name: string
