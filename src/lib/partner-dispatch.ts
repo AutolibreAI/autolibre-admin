@@ -87,6 +87,12 @@ export const outreachRowSchema = z.object({
   respondedAt: z.string().nullable(),
   expiresAt: z.string().nullable(),
   messages: z.array(outreachMessageSchema),
+  /**
+   * El hilo de la bandeja de WhatsApp (`/whatsapp/:id`), agregado el
+   * 2026-11-06. `.optional()` porque un backend todavía sin desplegar no lo
+   * manda, y una fila sin él no tiene que tirar la tarjeta entera.
+   */
+  whatsappConversationId: z.string().nullable().optional(),
 })
 export const outreachListSchema = z.array(outreachRowSchema)
 export type OutreachRow = z.infer<typeof outreachRowSchema>

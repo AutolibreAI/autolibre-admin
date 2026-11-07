@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react'
-import { useRouter } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import { RefreshCw, Send } from 'lucide-react'
 import { approvePartnerDispatchFn } from '~/fn/partner-dispatch'
 import {
@@ -527,6 +527,16 @@ function OutreachBlock({ row }: { row: OutreachRow }) {
         ) : null}
         {row.failureReason ? (
           <span className="text-xs text-status-red">{failureReasonLabel(row.failureReason)}</span>
+        ) : null}
+        {row.whatsappConversationId ? (
+          // Al hilo por el UUID de la conversación: el número NUNCA va a la URL.
+          <Link
+            to="/whatsapp/$conversationId"
+            params={{ conversationId: row.whatsappConversationId }}
+            className="ml-auto text-xs text-brand hover:underline"
+          >
+            Abrir conversación
+          </Link>
         ) : null}
       </div>
       <p className="mt-1 flex flex-wrap gap-x-3 text-xs tabular-nums text-muted-foreground">

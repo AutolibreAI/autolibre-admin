@@ -19,6 +19,24 @@ import {
   type DispatchDraft,
   type OutreachRow,
 } from '~/lib/partner-dispatch'
+import {
+  WHATSAPP_INBOX_BAD_RESPONSE,
+  conversationChangesSchema,
+  conversationPageSchema,
+  messageChangesSchema,
+  partnerConversationsSchema,
+  readResultSchema,
+  sendResultSchema,
+  threadPageSchema,
+  whatsappInboxErrorMessage,
+  type ConversationChanges,
+  type ConversationPage,
+  type MessageChanges,
+  type PartnerConversations,
+  type ReadResult,
+  type SendResult,
+  type ThreadPage,
+} from '~/lib/whatsapp-inbox'
 
 /**
  * El único cliente HTTP del panel contra `autolibre-backend-hex`.
@@ -147,6 +165,9 @@ interface BackendErrorBody {
   reasons?: unknown
   partnerIds?: unknown
   freeSlots?: unknown
+  /** `details` de un 422 de la bandeja de WhatsApp: el estado actualizado de la conversación. */
+  sessionWindowExpiresAt?: unknown
+  replyState?: unknown
 }
 
 /**
@@ -163,7 +184,7 @@ interface BackendErrorBody {
 async function backendError(
   response: Response,
   what: string,
-  opts: { detailed?: boolean; proposal?: boolean; dispatch?: boolean } = {},
+  opts: { detailed?: boolean; proposal?: boolean; dispatch?: boolean; whatsapp?: boolean } = {},
 ): Promise<Error> {
   let body: BackendErrorBody | null = null
 
@@ -210,6 +231,25 @@ async function backendError(
         freeSlots: typeof body?.freeSlots === 'number' ? body.freeSlots : null,
         message: message ?? `${what} falló sin explicación`,
       })}`,
+    )
+  }
+
+  /**
+   * Modo `whatsapp` — opt-in, la bandeja de WhatsApp (2026-11-06). Mismo motivo
+   * que `dispatch`: el `code` decide la UI (OUTSIDE_SESSION_WINDOW,
+   * RECIPIENT_OPTED_OUT, CLIENT_MESSAGE_ID_CONFLICT, INVALID_CURSOR, 503 que se
+   * reintenta con el MISMO `clientMessageId`) y un 422 trae el estado nuevo de
+   * la conversación. Lo lee `parseWhatsAppInboxError`.
+   */
+  if (opts.whatsapp) {
+    return new Error(
+      whatsappInboxErrorMessage({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        message: message ?? `${what} falló sin explicación`,
+        sessionWindowExpiresAt: typeof body?.sessionWindowExpiresAt === 'string' ? body.sessionWindowExpiresAt : null,
+        replyState: typeof body?.replyState === 'string' ? body.replyState : null,
+      }),
     )
   }
 
@@ -1126,4 +1166,154 @@ export async function listQuoteRequestOutreach(
   const parsed = outreachListSchema.safeParse(body)
   if (!parsed.success) throw new Error(PARTNER_DISPATCH_BAD_RESPONSE)
   return parsed.data
+}
+
+
+// ── Bandeja de WhatsApp (2026-11-06) ────────────────────────────────────────
+
+/**
+ * La bandeja de WhatsApp del equipo: `/admin/whatsapp/conversations…`
+ * (`AdminGuard`). Séptima excepción a la decisión 1: lee Y escribe por HTTP,
+ * no hay SQL — los mensajes los manda el backend por la API de Meta.
+ * → `.claude/plans/whatsapp-inbox.md`
+ *
+ * Contrato congelado el 2026-11-06; mientras el backend no lo despliegue,
+ * `~/fn/whatsapp-inbox` usa el mock en desarrollo. Ojo: hay un rate limit
+ * GLOBAL de 60 req/min por IP y todos los admins salen por las IPs de Vercel —
+ * un 429 se trata como reintentable y el sondeo hace backoff. ⚠ PII: el número viaja en las respuestas; acá no se
+ * loguea nada, y ninguna URL de abajo lleva un número (sólo UUIDs y cursores).
+ */
+async function whatsappFetch(
+  path: string,
+  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; signal?: AbortSignal },
+  what: string,
+): Promise<{ status: number; body: unknown }> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  const timeout = AbortSignal.timeout(JSON_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: init.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      cache: 'no-store',
+      signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
+    })
+  } catch (cause) {
+    // Un timeout en un POST pudo haber mandado el mensaje: el cliente reintenta con el mismo id.
+    if (cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError')) throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, what, { whatsapp: true })
+  try {
+    return { status: response.status, body: await response.json() }
+  } catch {
+    throw new Error(WHATSAPP_INBOX_BAD_RESPONSE)
+  }
+}
+
+function parseOrThrow<T>(schema: { safeParse: (x: unknown) => { success: true; data: T } | { success: false } }, body: unknown): T {
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) throw new Error(WHATSAPP_INBOX_BAD_RESPONSE)
+  return parsed.data
+}
+
+const qs = (params: Record<string, string | number | undefined>) => {
+  const u = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) u.set(k, String(v))
+  const s = u.toString()
+  return s ? `?${s}` : ''
+}
+
+export async function listWhatsAppConversations(
+  input: { cursor?: string; limit?: number },
+  opts: { signal?: AbortSignal } = {},
+): Promise<ConversationPage> {
+  const { body } = await whatsappFetch(
+    `/admin/whatsapp/conversations${qs({ cursor: input.cursor, limit: input.limit })}`,
+    { method: 'GET', signal: opts.signal },
+    'La lista de conversaciones',
+  )
+  return parseOrThrow(conversationPageSchema, body)
+}
+
+export async function whatsappConversationChanges(
+  input: { after: string },
+  opts: { signal?: AbortSignal } = {},
+): Promise<ConversationChanges> {
+  const { body } = await whatsappFetch(
+    `/admin/whatsapp/conversations/changes${qs({ after: input.after })}`,
+    { method: 'GET', signal: opts.signal },
+    'Los cambios de conversaciones',
+  )
+  return parseOrThrow(conversationChangesSchema, body)
+}
+
+/** Las conversaciones de un partner (0..n: sucursales que comparten número). 404 = partner inexistente. */
+export async function getWhatsAppConversationsByPartner(
+  input: { partnerId: string },
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerConversations> {
+  const { body } = await whatsappFetch(
+    `/admin/whatsapp/conversations/by-partner/${input.partnerId}`,
+    { method: 'GET', signal: opts.signal },
+    'Las conversaciones del partner',
+  )
+  return parseOrThrow(partnerConversationsSchema, body)
+}
+
+export async function getWhatsAppThread(
+  input: { conversationId: string; cursor?: string },
+  opts: { signal?: AbortSignal } = {},
+): Promise<ThreadPage> {
+  const { body } = await whatsappFetch(
+    `/admin/whatsapp/conversations/${input.conversationId}/messages${qs({ cursor: input.cursor })}`,
+    { method: 'GET', signal: opts.signal },
+    'La conversación',
+  )
+  return parseOrThrow(threadPageSchema, body)
+}
+
+export async function whatsappMessageChanges(
+  input: { conversationId: string; after: string },
+  opts: { signal?: AbortSignal } = {},
+): Promise<MessageChanges> {
+  const { body } = await whatsappFetch(
+    `/admin/whatsapp/conversations/${input.conversationId}/messages/changes${qs({ after: input.after })}`,
+    { method: 'GET', signal: opts.signal },
+    'Los mensajes nuevos',
+  )
+  return parseOrThrow(messageChangesSchema, body)
+}
+
+/** 201 = primer envío; 200 = replay del mismo `clientMessageId` (ya se había mandado). */
+export async function sendWhatsAppMessage(input: {
+  conversationId: string
+  clientMessageId: string
+  text: string
+}): Promise<SendResult> {
+  const { status, body } = await whatsappFetch(
+    `/admin/whatsapp/conversations/${input.conversationId}/messages`,
+    // El campo del backend se llama `body`, no `text`.
+    { method: 'POST', body: { clientMessageId: input.clientMessageId, body: input.text } },
+    'El envío',
+  )
+  return { ...parseOrThrow(sendResultSchema, body), replayed: status === 200 }
+}
+
+/** Sólo avanza: un `readUpToMessageId` más viejo que la marca no la mueve. */
+export async function markWhatsAppConversationRead(input: {
+  conversationId: string
+  readUpToMessageId: string
+}): Promise<ReadResult> {
+  const { body } = await whatsappFetch(
+    `/admin/whatsapp/conversations/${input.conversationId}/read`,
+    { method: 'PUT', body: { readUpToMessageId: input.readUpToMessageId } },
+    'La marca de leído',
+  )
+  return parseOrThrow(readResultSchema, body)
 }

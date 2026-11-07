@@ -20,6 +20,7 @@ import {
   Inbox,
   LogOut,
   Megaphone,
+  MessagesSquare,
   Menu,
   MessageSquare,
   ScanLine,
@@ -216,6 +217,13 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * contador en la ficha del usuario. → `.claude/rules/feedback.md`
    */
   { to: "/feedback", label: "Feedback", icon: Megaphone },
+  /**
+   * `WhatsApp` va pegado a `Feedback`: las dos son "lo que nos escriben", y
+   * ésta además se contesta. Una conversación por número (talleres o no), con
+   * marca de leído compartida por el equipo. Por ahora contra un mock en
+   * desarrollo. → `.claude/plans/whatsapp-inbox.md`
+   */
+  { to: "/whatsapp", label: "WhatsApp", icon: MessagesSquare },
   /**
    * Las dos últimas son excepciones DECLARADAS a la regla de arriba: no espejan
    * un bounded context del backend porque el backend no tiene uno. Son operación
