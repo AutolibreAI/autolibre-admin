@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, ArrowLeft, Check, CheckCheck, Clock, HelpCircle, Paperclip } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, CheckCheck, HelpCircle, Paperclip } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getWhatsAppThreadFn, markWhatsAppReadFn, sendWhatsAppMessageFn, whatsappMessageChangesFn } from '~/fn/whatsapp-inbox'
 import { cn } from '~/lib/utils'
@@ -414,10 +414,11 @@ function StatusIcon({ status }: { status: string | null }) {
       <CheckCheck className={cn(cls, 'text-brand')} />
     ) : status === 'delivered' ? (
       <CheckCheck className={cls} />
-    ) : status === 'sent' ? (
+    ) : status === 'sent' || status === 'pending' ? (
+      // `pending` = el backend lo aceptó y lo está pasando a Meta. Se muestra
+      // ya con un tilde (optimista); el `title` dice el estado real, y si
+      // después falla, el sondeo lo cambia a ⚠.
       <Check className={cls} />
-    ) : status === 'pending' ? (
-      <Clock className={cls} />
     ) : status === 'failed' || status === 'undelivered' ? (
       <AlertTriangle className={cn(cls, 'text-status-red')} />
     ) : status === 'unknown' ? (
@@ -479,15 +480,16 @@ function PendingBubble({
         className={cn(
           'max-w-[75%] rounded-lg border px-3 py-2 text-sm',
           p.state === 'failed' ? 'border-status-red/40 bg-status-red-bg' : 'border-brand-muted bg-brand-soft',
-          p.state === 'sending' && 'opacity-70',
         )}
       >
         <p className="whitespace-pre-wrap break-words">{p.text}</p>
         <div className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
           {p.state === 'sending' ? (
-            <>
-              Enviando <Clock className="size-3.5" />
-            </>
+            // Optimista: el tilde aparece al apretar Enviar. Si el envío falla,
+            // la burbuja pasa a «no se pudo confirmar» / «falló» con su motivo.
+            <span className="inline-flex items-center" title="Enviando…" aria-label="Enviando">
+              <Check className="size-3.5" />
+            </span>
           ) : null}
         </div>
         {p.state !== 'sending' ? (

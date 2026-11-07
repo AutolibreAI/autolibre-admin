@@ -4,7 +4,13 @@ import {
   Outlet,
   createFileRoute,
   redirect,
+  useRouterState,
 } from "@tanstack/react-router";
+import {
+  useUnlockAudioOnInteraction,
+  useWhatsAppBackgroundPoll,
+  useWhatsAppUnread,
+} from "~/components/WhatsAppNotifier";
 import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
@@ -265,6 +271,7 @@ function Wordmark() {
  * En la sidebar de escritorio no hay nada que cerrar, así que no se pasa.
  */
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  const whatsappUnread = useWhatsAppUnread();
   return (
     <nav
       aria-label="Navegación principal"
@@ -288,9 +295,30 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
         >
           <Icon className="size-4 shrink-0" aria-hidden />
           {label}
+          {to === "/whatsapp" && whatsappUnread ? (
+            <UnreadDot count={whatsappUnread} className="ml-auto" />
+          ) : null}
         </Link>
       ))}
     </nav>
+  );
+}
+
+/**
+ * El puntito de «te escribieron» de WhatsApp: conversaciones sin leer, del
+ * mismo sondeo que la bandeja (`~/components/WhatsAppNotifier`). Verde de
+ * marca a propósito: es acento de navegación, no un estado de error.
+ */
+function UnreadDot({ count, className }: { count: number; className?: string }) {
+  const label = `${count} ${count === 1 ? "conversación" : "conversaciones"} de WhatsApp sin leer`;
+  return (
+    <span
+      className={`inline-flex min-w-5 items-center justify-center rounded-full bg-brand px-1.5 text-[11px] font-semibold leading-5 text-white tabular-nums ${className ?? ""}`}
+      title={label}
+      aria-label={label}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
   );
 }
 
@@ -317,6 +345,11 @@ function UserFooter({ name, email }: { name: string; email: string }) {
 function AppShell() {
   const { user } = Route.useRouteContext();
   const [menuOpen, setMenuOpen] = useState(false);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // En /whatsapp sondea la bandeja; afuera, este sondeo de fondo (nunca los dos).
+  useWhatsAppBackgroundPoll(!pathname.startsWith("/whatsapp"));
+  useUnlockAudioOnInteraction();
+  const whatsappUnread = useWhatsAppUnread();
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
@@ -351,10 +384,20 @@ function AppShell() {
             <Button
               variant="ghost"
               size="icon"
-              className="border border-border text-muted-foreground hover:text-foreground"
-              aria-label="Abrir navegación"
+              className="relative border border-border text-muted-foreground hover:text-foreground"
+              aria-label={
+                whatsappUnread
+                  ? "Abrir navegación (hay mensajes de WhatsApp sin leer)"
+                  : "Abrir navegación"
+              }
             >
               <Menu className="size-5" aria-hidden />
+              {whatsappUnread ? (
+                <span
+                  className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-sidebar bg-brand"
+                  aria-hidden
+                />
+              ) : null}
             </Button>
           </SheetTrigger>
           <SheetContent className="p-0">

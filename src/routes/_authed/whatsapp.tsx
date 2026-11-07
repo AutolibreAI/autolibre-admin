@@ -7,6 +7,9 @@ import { readableWhatsAppInboxError } from '~/lib/whatsapp-inbox'
 import { MockBanner } from '~/components/MockBanner'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ConversationList, WhatsAppInboxProvider } from '~/components/WhatsAppInbox'
+import { useWhatsAppSound } from '~/components/WhatsAppNotifier'
+import { Bell, BellOff } from 'lucide-react'
+import { Button } from '~/components/ui/button'
 
 /**
  * `/whatsapp` — la bandeja de WhatsApp del equipo: una conversación por
@@ -108,7 +111,12 @@ function WhatsAppLayout() {
                 ? `${formatInt(unreadConversations)} conversaciones sin leer`
                 : 'Todo leído'
             }
-            actions={<SsrTag>ssr: data-only</SsrTag>}
+            actions={
+              <div className="flex items-center gap-2">
+                <SoundToggle />
+                <SsrTag>ssr: data-only</SsrTag>
+              </div>
+            }
           />
           {source === 'mock' ? (
             <MockBanner
@@ -169,4 +177,16 @@ function InboxFrame({
 }) {
   const frame = useFillViewport([source, error])
   return <>{children(frame)}</>
+}
+
+/** Prender/apagar el sonido de mensaje nuevo. Por navegador (localStorage), no por cuenta. */
+function SoundToggle() {
+  const [on, setOn] = useWhatsAppSound()
+  const label = on ? 'Silenciar el aviso de mensaje nuevo' : 'Activar el sonido de mensaje nuevo'
+  return (
+    <Button variant="ghost" size="sm" onClick={() => setOn(!on)} title={label} aria-label={label} aria-pressed={on}>
+      {on ? <Bell className="size-4" aria-hidden /> : <BellOff className="size-4" aria-hidden />}
+      <span className="text-xs">{on ? 'Sonido' : 'Silenciado'}</span>
+    </Button>
+  )
 }

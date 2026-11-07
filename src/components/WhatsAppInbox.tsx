@@ -15,6 +15,7 @@ import {
   type WhatsAppConversation,
 } from '~/lib/whatsapp-inbox'
 import { Button } from '~/components/ui/button'
+import { noteWhatsAppConversations, reportWhatsAppUnread } from '~/components/WhatsAppNotifier'
 
 /**
  * La lista de la bandeja de WhatsApp y el estado que comparte con el hilo.
@@ -47,7 +48,12 @@ const POLL_MAX_BACKOFF_MS = 60_000
  * y hace un tick apenas vuelve. Ante error, backoff 2× hasta 60 s. Fase 2: el
  * «timbre» SSE va a llamar al mismo `run` (vía `poke`).
  */
-export function usePolling(run: (signal: AbortSignal) => Promise<void>, intervalMs: number, enabled = true) {
+export function usePolling(
+  run: (signal: AbortSignal) => Promise<void>,
+  intervalMs: number,
+  enabled = true,
+  { whileHidden = false }: { whileHidden?: boolean } = {},
+) {
   const runRef = useRef(run)
   runRef.current = run
   const pokeRef = useRef<() => void>(() => {})
@@ -64,7 +70,7 @@ export function usePolling(run: (signal: AbortSignal) => Promise<void>, interval
       timer = window.setTimeout(() => void loop(), ms)
     }
     const loop = async () => {
-      if (stopped || document.hidden || controller) return
+      if (stopped || (!whileHidden && document.hidden) || controller) return
       controller = new AbortController()
       try {
         await runRef.current(controller.signal)
@@ -90,7 +96,7 @@ export function usePolling(run: (signal: AbortSignal) => Promise<void>, interval
       document.removeEventListener('visibilitychange', onVisibility)
       pokeRef.current = () => {}
     }
-  }, [intervalMs, enabled])
+  }, [intervalMs, enabled, whileHidden])
 
   return useCallback(() => pokeRef.current(), [])
 }
@@ -160,6 +166,14 @@ export function WhatsAppInboxProvider({
   }, [])
   useEffect(() => setServerNow(initial.serverNow), [initial.serverNow, setServerNow])
 
+  // El puntito del menú y el sonido: la primera página sólo siembra lo visto.
+  useEffect(() => {
+    noteWhatsAppConversations(initial.items, { silent: true })
+  }, [initial])
+  useEffect(() => reportWhatsAppUnread(unreadConversations), [unreadConversations])
+  const openIdRef = useRef(openConversationId)
+  openIdRef.current = openConversationId
+
   const upsertMany = useCallback((rows: Array<WhatsAppConversation>) => {
     if (rows.length === 0) return
     setById((prev) => {
@@ -195,6 +209,7 @@ export function WhatsAppInboxProvider({
           const res = await whatsappConversationChangesFn({ data: { after: cursorRef.current }, signal })
           upsertMany(res.items)
           setUnread(res.unreadConversations)
+          noteWhatsAppConversations(res.items, { openConversationId: openIdRef.current })
           setServerNow(res.serverNow)
           if (res.items.length > 0) {
             setChangeSignal((prev) => {
