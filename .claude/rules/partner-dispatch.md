@@ -91,8 +91,19 @@ candidatos), y el aviso tiene que sobrevivir a `router.invalidate()` — misma l
 
 `ready` · **`needs_info`** · `rejected`. Ojo: el mensaje que acompañó el cambio del backend decía
 `not_ready`; el código (`partner-dispatch-draft-response.dto.ts`) dice `needs_info`, y manda el
-código. `needs_info` se pinta ámbar con pistas de qué arreglar en esta misma ficha («Editar datos»,
-«Corregir ubicación» / «Geocodificar», clasificar rubros); `rejected` (p. ej. `request_closed`) gris.
+código. `needs_info` se pinta ámbar con pistas de qué arreglar en esta misma ficha («Identificar
+vehículo», «Editar datos», «Corregir ubicación» / «Geocodificar», clasificar rubros); `rejected` (p. ej.
+`request_closed`) gris.
+
+**`missing_vehicle_catalog` se arregla con «Identificar vehículo»** (2026-11-09, tarjeta Vehículo,
+`QuotePlateIdentifier` + `~/lib/quote-plate`): `PUT /admin/quote-requests/:id/plate` guarda la patente
+y el backend resuelve `quote_requests.vehicle_catalog_id` con el proveedor de patentes. Sincrónico
+(hasta ~10 s, timeout propio de 30 s). Respuesta `resolved` / `searching` (reintentar con la misma
+patente en minutos) / `not_found` / `insufficient_data` (el modelo va a mano: **todavía no hay
+selector**, aunque el backend tiene `PUT …/vehicle-catalog`). Se ofrece sólo abierto y SIN modelo:
+el vehículo de un pedido no cambia (con modelo, 400 `INVALID_STATE_TRANSITION`). Ojo: el vehículo
+escrito de «Editar datos» (`ops.quote_request_vehicle_text`) NO es un modelo de catálogo, y
+`ops.update_quote_request` también escribe `plate` sin conocer esa regla.
 
 **Radio: 5 km**, no 10 — `quotes.md` del backend dice 10 y quedó viejo; el controller dice "a 5 km o
 menos".

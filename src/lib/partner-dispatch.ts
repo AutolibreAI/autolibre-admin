@@ -147,7 +147,7 @@ export const readinessReasonLabel = (r: string) => label(READINESS_REASON_LABELS
 
 /** Qué se puede arreglar desde esta misma ficha, para que el aviso diga cómo. */
 export const READINESS_REASON_HINTS: Record<string, string> = {
-  missing_vehicle_catalog: 'Vinculá un vehículo con catálogo o cargá el vehículo en «Editar datos».',
+  missing_vehicle_catalog: 'Cargá la patente y tocá «Identificar vehículo» (tarjeta Vehículo). «Editar datos» no alcanza: el vehículo escrito no es un modelo de catálogo.',
   missing_location: 'Cargá la ubicación con «Corregir ubicación» y, si no está ubicada, «Geocodificar» (tarjeta Pedido).',
   not_classified: 'Elegí los rubros en «Talleres candidatos» y guardá la clasificación.',
   empty_description: 'Completá la descripción en «Editar datos».',
