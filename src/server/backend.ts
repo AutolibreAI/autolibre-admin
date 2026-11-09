@@ -12,6 +12,12 @@ import { auth } from '@clerk/tanstack-react-start/server'
 import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
 import { QUOTE_LOCATION_ERROR, type QuoteLocation } from '~/lib/quote-location'
 import {
+  QUOTE_PLATE_ERROR,
+  QUOTE_PLATE_TIMEOUT_MS,
+  quotePlateResultSchema,
+  type QuotePlateResult,
+} from '~/lib/quote-plate'
+import {
   PARTNER_DISPATCH_BAD_RESPONSE,
   approvedDispatchSchema,
   dispatchDraftSchema,
@@ -185,7 +191,14 @@ interface BackendErrorBody {
 async function backendError(
   response: Response,
   what: string,
-  opts: { detailed?: boolean; proposal?: boolean; dispatch?: boolean; whatsapp?: boolean; quoteLocation?: boolean } = {},
+  opts: {
+    detailed?: boolean
+    proposal?: boolean
+    dispatch?: boolean
+    whatsapp?: boolean
+    quoteLocation?: boolean
+    quotePlate?: boolean
+  } = {},
 ): Promise<Error> {
   let body: BackendErrorBody | null = null
 
@@ -265,6 +278,24 @@ async function backendError(
   if (opts.quoteLocation) {
     return new Error(
       `${QUOTE_LOCATION_ERROR}:${JSON.stringify({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        message: message ?? `${what} falló sin explicación`,
+        cannotRoute: response.status === 404 && /^Cannot (PUT|POST|GET)\b/.test(message ?? ''),
+      })}`,
+    )
+  }
+
+  /**
+   * Modo `quotePlate` — opt-in, lo usa sólo «Identificar vehículo» de un pedido
+   * (2026-11-09). Mismo formato y mismo motivo que `quoteLocation`: el `code`
+   * decide la UI (`INVALID_STATE_TRANSITION` = cerrado o ya con catálogo) y el
+   * 404 «Cannot PUT» separa "backend sin desplegar" de "pedido inexistente".
+   * Lo lee `parseQuotePlateError` de `~/lib/quote-plate`.
+   */
+  if (opts.quotePlate) {
+    return new Error(
+      `${QUOTE_PLATE_ERROR}:${JSON.stringify({
         status: response.status,
         code: typeof body?.code === 'string' ? body.code : '',
         message: message ?? `${what} falló sin explicación`,
@@ -1417,4 +1448,65 @@ export async function requestQuoteRequestGeocode(quoteRequestId: string): Promis
     throw new Error(`BACKEND_UNREACHABLE:${base}`)
   }
   if (!response.ok) throw await backendError(response, 'La geocodificación del pedido', { quoteLocation: true })
+}
+
+// ── Identificar el vehículo de un pedido por la patente (2026-11-09) ────────
+
+/**
+ * Octava excepción a "el panel habla con Postgres": el grep dio positivo
+ * (`AdminQuoteRequestController` → `PUT /admin/quote-requests/:id/plate`,
+ * `AdminGuard`). El backend guarda la patente y consulta al proveedor de
+ * patentes para resolver el catálogo del vehículo; un `UPDATE` por SQL no
+ * consultaría a nadie. → `~/lib/quote-plate`
+ *
+ * Sincrónico: el proveedor puede tardar ~10 s, así que el timeout es el propio
+ * (`QUOTE_PLATE_TIMEOUT_MS`), nunca el de clasificar. Un timeout se traduce a la
+ * sentinela con `status: 0`: reintentar con la misma patente es seguro.
+ */
+export async function identifyQuoteRequestVehicleByPlate(
+  quoteRequestId: string,
+  plate: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<QuotePlateResult> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  const timeout = AbortSignal.timeout(QUOTE_PLATE_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/quote-requests/${encodeURIComponent(quoteRequestId)}/plate`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ plate }),
+      cache: 'no-store',
+      signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') {
+      throw new Error(
+        `${QUOTE_PLATE_ERROR}:${JSON.stringify({ status: 0, code: 'TIMEOUT', message: 'timeout', cannotRoute: false })}`,
+      )
+    }
+    if (cause instanceof Error && cause.name === 'AbortError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'Identificar el vehículo', { quotePlate: true })
+
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    body = null
+  }
+  const parsed = quotePlateResultSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new Error(
+      `${QUOTE_PLATE_ERROR}:${JSON.stringify({
+        status: response.status,
+        code: 'BAD_RESPONSE',
+        message: 'respuesta con una forma desconocida',
+        cannotRoute: false,
+      })}`,
+    )
+  }
+  return parsed.data
 }
