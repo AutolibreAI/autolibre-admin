@@ -25,6 +25,7 @@ import {
   type QuoteRequestsAvailability,
   type QuoteAiClassification,
   type QuoteTimingAndParts,
+  type QuoteRequestVehicleCatalog,
   type QuoteSortKey,
   type SetQuoteRequestRubrosInput,
   type UpdateQuoteRequestInput,
@@ -234,6 +235,31 @@ async function readTimingAndParts(id: string): Promise<QuoteTimingAndParts> {
     preferredDate: row?.preferred_date ?? null,
     partsSupply: row?.parts_supply ?? null,
   }
+}
+
+/**
+ * El catálogo DEL PEDIDO (backend 0136, `quote_requests.vehicle_catalog_id`).
+ * Guard propio, como la 0143: NO va en `READ_COLUMNS`, que apagaría toda
+ * `/leads/pedidos` en una base sin la 0136. Sólo lectura: lo escribe el backend
+ * (alta de la app o `PUT /admin/quote-requests/:id/plate`).
+ */
+async function readRequestVehicleCatalog(id: string): Promise<QuoteRequestVehicleCatalog> {
+  const guard = await sqlOne<{ ok: boolean }>(
+    `select exists (select 1 from information_schema.columns
+                    where table_schema = 'public' and table_name = 'quote_requests'
+                      and column_name = 'vehicle_catalog_id') as ok`,
+  )
+  if (guard?.ok !== true) return { available: false }
+
+  const row = await sqlOne<{ vehicle_catalog_id: string | null; label: string | null }>(
+    `select qr.vehicle_catalog_id,
+            nullif(concat_ws(' ', vc.brand, vc.model, vc.trim, vc.year::text), '') as label
+       from quote_requests qr
+       left join vehicle_catalogs vc on vc.id = qr.vehicle_catalog_id
+      where qr.id = $1`,
+    [id],
+  )
+  return { available: true, vehicleCatalogId: row?.vehicle_catalog_id ?? null, label: row?.label ?? null }
 }
 
 export async function quoteRequestsAvailability(
@@ -1035,6 +1061,7 @@ export async function findQuoteRequestDetail(
 
   const aiClassification = await readAiClassification(id)
   const timingAndParts = await readTimingAndParts(id)
+  const requestVehicleCatalog = await readRequestVehicleCatalog(id)
 
   return {
     ...mapListRow(r),
@@ -1060,6 +1087,7 @@ export async function findQuoteRequestDetail(
     editAvailable,
     aiClassification,
     timingAndParts,
+    requestVehicleCatalog,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.

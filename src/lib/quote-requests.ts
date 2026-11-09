@@ -853,7 +853,24 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
   aiClassification: QuoteAiClassification
   /** "¿Para cuándo?" y repuestos, lo que dijo la persona en la app (0143). */
   timingAndParts: QuoteTimingAndParts
+  /**
+   * El modelo de catálogo DEL PEDIDO (`quote_requests.vehicle_catalog_id`,
+   * backend 0136): lo que exige el despacho por WhatsApp
+   * (`missing_vehicle_catalog`). NO es el `catalogLabel` de arriba, que sale del
+   * vehículo vinculado. Lo completa el alta de la app o «Identificar vehículo».
+   */
+  requestVehicleCatalog: QuoteRequestVehicleCatalog
 }
+
+/**
+ * - `available: false` — la base no tiene la 0136: la ficha no ofrece
+ *   «Identificar vehículo».
+ * - `vehicleCatalogId: null` — el pedido todavía no tiene modelo (lo normal en
+ *   uno cargado a mano). Con modelo, el vehículo del pedido queda fijo.
+ */
+export type QuoteRequestVehicleCatalog =
+  | { available: false }
+  | { available: true; vehicleCatalogId: string | null; label: string | null }
 
 /**
  * "¿Para cuándo?" y "¿Y los repuestos?" (backend, migración 0143). Sólo
