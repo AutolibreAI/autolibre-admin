@@ -43,6 +43,7 @@ import { getPartnerDispatchFn } from '~/fn/partner-dispatch'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
 import { QuoteLocationSection } from '~/components/QuoteLocationSection'
+import { QuotePlateIdentifier } from '~/components/QuotePlateIdentifier'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { QuoteTemplates } from '~/components/QuoteTemplates'
@@ -329,6 +330,14 @@ function QuoteRequestScreen() {
               ) : (
                 <span className="text-sm text-muted-foreground">No la dio todavía</span>
               )}
+            </Field>
+            {/*
+              El modelo DEL PEDIDO (quote_requests.vehicle_catalog_id), que
+              exige el despacho. «Identificar vehículo» lo resuelve por la
+              patente en el backend; con modelo queda fijo.
+            */}
+            <Field label="Modelo del pedido">
+              <QuotePlateIdentifier key={d.id} detail={d} />
             </Field>
             {/*
               El vehículo ESCRITO (migración 018): lo que contó la persona
