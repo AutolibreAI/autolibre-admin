@@ -58,8 +58,9 @@ nombre completo en el `title`.
   `CASE`; sin match → Mecánica). No usa `ops.quote_request_rubro` (lo que
   clasifica el operador): el spec manda inferir, y los criterios de aceptación
   salen de ahí. Es la primera mejora de la sección 7 del spec.
-- **Pedido tipeado → centro de localidad** (`LUGARES`, 21 lugares). No usa la
-  coordenada geocodificada de la 021 por el mismo motivo. Un pedido tipeado de
+- **Pedido tipeado → centro de localidad** (`LUGARES`, 21 lugares). No usa
+  ningún punto geocodificado (ni `geocoded_*` del backend, 0140, ni el viejo de la 021)
+  por el mismo motivo, y la localidad es la CRUDA del listado. Un pedido tipeado de
   una localidad que no está en la lista queda "sin ubicación".
 - **GPS redondeado a 3 decimales** antes de calcular nada.
 - **Cuatro partners sin coordenadas se ubican por texto** (`ZONE_BY_TEXT`:

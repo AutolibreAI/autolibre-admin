@@ -1024,7 +1024,9 @@ export async function findQuoteRequestDetail(
       )?.vehicle_text ?? null)
     : null
 
-  const geocodedLocation = await readQuoteGeocode(id, {
+  // Geocode del backend (0140) + el punto viejo de la 021 como fallback
+  // transicional de lectura. → `~/server/quote-geocode.repo`
+  const geocodeRead = await readQuoteGeocode(id, {
     source: r.location_source,
     address: r.location_address,
     locality: r.location_locality,
@@ -1036,7 +1038,7 @@ export async function findQuoteRequestDetail(
 
   return {
     ...mapListRow(r),
-    geocodedLocation,
+    geocode: geocodeRead.geocode,
     updatedAt: toIso(r.updated_at) ?? '',
     vehicleOwnerId: r.vehicle_owner_id,
     vehicleOwnerEmail: r.vehicle_owner_email,
@@ -1048,12 +1050,13 @@ export async function findQuoteRequestDetail(
     locationAddress: r.location_address,
     locationLatitude: toNum(r.location_latitude),
     locationLongitude: toNum(r.location_longitude),
-    locationLocality: r.location_locality,
+    // Regla de lectura del backend: lo cargado gana, si no lo que devolvió el geocode.
+    locationLocality: r.location_locality ?? geocodeRead.geocodedLocality,
     catalogShortLabel: r.catalog_short_label,
     rubroCategorySlugs: rubros.map((row) => row.category_slug),
     vehicleText,
     locationSource: r.location_source,
-    locationProvince: r.location_province,
+    locationProvince: r.location_province ?? geocodeRead.geocodedProvince,
     editAvailable,
     aiClassification,
     timingAndParts,
@@ -1289,18 +1292,43 @@ export async function createQuoteRequest(
 // ── Escritura: editar los datos de un pedido (migración 018) ────────────────
 
 /**
- * Contacto, patente, vehículo escrito, descripción, monto declarado y
- * ubicación tipeada, vía `ops.update_quote_request` (018). Reemplazo
- * COMPLETO: `''` y `null` viajan como NULL y el SP borra ese campo.
+ * ¿Está aplicada la 028 (`ops.update_quote_request` SIN parámetros de
+ * ubicación)? Se pregunta por la FIRMA exacta con `to_regprocedure`, no por
+ * una tabla: la 028 no crea ninguna, sólo reemplaza la función.
+ */
+export async function quoteEditWithoutLocationAvailable(): Promise<boolean> {
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regprocedure('ops.update_quote_request(uuid,uuid,text,text,text,text,text,text,numeric,text)') is not null as ok`,
+  )
+  return row?.ok === true
+}
+
+/**
+ * Contacto, patente, vehículo escrito, descripción y monto declarado, vía
+ * `ops.update_quote_request`. Reemplazo COMPLETO: `''` y `null` viajan como
+ * NULL y el SP borra ese campo.
  *
- * El backend no tiene un camino admin para editar un pedido (último `grep`:
- * 2026-09-15, `leads.md`), y el vehículo escrito ni siquiera tiene columna en
- * `quote_requests` — vive en `ops`. Por eso es un SP y no HTTP. Si un
- * `UPDATE quote_requests` aparece suelto en este archivo, está mal: el SP
- * lockea la fila y escribe `ops.action_log` en la misma sentencia.
+ * LA UBICACIÓN NO VIAJA. Desde el 2026-11-09 se corrige por
+ * `PUT /admin/quote-requests/:id/location` («Corregir ubicación»), y ése es su
+ * ÚNICO camino de escritura. Mandar "la ubicación actual" por el SP no
+ * alcanzaba: el formulario la lee al abrirse, y si alguien la corrigió (por
+ * HTTP o desde la app) antes del Guardar, el SP la pisaba con la vieja.
  *
- * SQL copiado LITERAL en `018_ops_editar_pedido.test.sql` (`PREPARE
- * p018_update`). Si se toca uno, se toca el otro.
+ * Dos firmas, según la base:
+ *
+ * - **Con la 028** (la que importa): la firma no tiene ubicación y el SP no
+ *   toca ninguna columna `location_*`. SQL copiado LITERAL en
+ *   `028_ops_editar_pedido_sin_ubicacion.test.sql` (`PREPARE p028_update`).
+ * - **Sin la 028** (una base que todavía no migró): la firma de la 018 EXIGE
+ *   la ubicación. Se manda la que está en la fila, leída en la MISMA sentencia
+ *   (subconsulta), no la que leyó el formulario. La ventana de carrera queda en
+ *   microsegundos en vez de "lo que tardó el operador en guardar"; no es cero,
+ *   y por eso la 028 existe. Con GPS la 018 exige que no cambie: la subconsulta
+ *   le da exactamente eso.
+ *
+ * El backend no tiene camino admin para el resto de estos campos, y el
+ * vehículo escrito ni siquiera tiene columna en `quote_requests`. Si un
+ * `UPDATE quote_requests` aparece suelto en este archivo, está mal.
  */
 export async function updateQuoteRequest(
   input: UpdateQuoteRequestInput,
@@ -1309,38 +1337,53 @@ export async function updateQuoteRequest(
 ): Promise<QuoteRequestWriteResult> {
   void opts.signal
 
-  const row = await sqlOne<SpRow>(
-    `SELECT ops.update_quote_request(
-       p_quote_request_id  => $1,
-       p_actor_id          => $2,
-       p_contact_phone     => $3,
-       p_description       => $4,
-       p_contact_name      => $5,
-       p_contact_email     => $6,
-       p_plate             => $7,
-       p_vehicle_text      => $8,
-       p_declared_amount   => $9,
-       p_location_address  => $10,
-       p_location_locality => $11,
-       p_location_province => $12,
-       p_note              => $13
-     ) AS q`,
-    [
-      input.quoteRequestId,
-      actorId,
-      input.contactPhone,
-      input.description,
-      blankToNull(input.contactName),
-      blankToNull(input.contactEmail),
-      blankToNull(input.plate),
-      blankToNull(input.vehicleText),
-      input.declaredAmount,
-      blankToNull(input.locationAddress),
-      blankToNull(input.locationLocality),
-      blankToNull(input.locationProvince),
-      null,
-    ],
-  )
+  const params = [
+    input.quoteRequestId,
+    actorId,
+    input.contactPhone,
+    input.description,
+    blankToNull(input.contactName),
+    blankToNull(input.contactEmail),
+    blankToNull(input.plate),
+    blankToNull(input.vehicleText),
+    input.declaredAmount,
+    null,
+  ]
+
+  const row = (await quoteEditWithoutLocationAvailable())
+    ? await sqlOne<SpRow>(
+        `SELECT ops.update_quote_request(
+    p_quote_request_id => $1,
+    p_actor_id         => $2,
+    p_contact_phone    => $3,
+    p_description      => $4,
+    p_contact_name     => $5,
+    p_contact_email    => $6,
+    p_plate            => $7,
+    p_vehicle_text     => $8,
+    p_declared_amount  => $9,
+    p_note             => $10
+  ) AS q`,
+        params,
+      )
+    : await sqlOne<SpRow>(
+        `SELECT ops.update_quote_request(
+           p_quote_request_id  => $1::uuid,
+           p_actor_id          => $2,
+           p_contact_phone     => $3,
+           p_description       => $4,
+           p_contact_name      => $5,
+           p_contact_email     => $6,
+           p_plate             => $7,
+           p_vehicle_text      => $8,
+           p_declared_amount   => $9,
+           p_location_address  => (SELECT location_address  FROM quote_requests WHERE id = $1::uuid),
+           p_location_locality => (SELECT location_locality FROM quote_requests WHERE id = $1::uuid),
+           p_location_province => (SELECT location_province FROM quote_requests WHERE id = $1::uuid),
+           p_note              => $10
+         ) AS q`,
+        params,
+      )
   return toWriteResult(row?.q, input.quoteRequestId)
 }
 

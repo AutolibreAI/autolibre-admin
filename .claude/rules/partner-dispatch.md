@@ -92,7 +92,7 @@ candidatos), y el aviso tiene que sobrevivir a `router.invalidate()` — misma l
 `ready` · **`needs_info`** · `rejected`. Ojo: el mensaje que acompañó el cambio del backend decía
 `not_ready`; el código (`partner-dispatch-draft-response.dto.ts`) dice `needs_info`, y manda el
 código. `needs_info` se pinta ámbar con pistas de qué arreglar en esta misma ficha («Editar datos»,
-«Ubicar en el mapa», clasificar rubros); `rejected` (p. ej. `request_closed`) gris.
+«Corregir ubicación» / «Geocodificar», clasificar rubros); `rejected` (p. ej. `request_closed`) gris.
 
 **Radio: 5 km**, no 10 — `quotes.md` del backend dice 10 y quedó viejo; el controller dice "a 5 km o
 menos".

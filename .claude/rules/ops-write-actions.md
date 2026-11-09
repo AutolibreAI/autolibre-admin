@@ -1313,6 +1313,16 @@ de Ley 25.326 y un log que crece solo es un lugar más que limpiar ante una supr
 NULL borran la fila; el mismo `query` y el mismo punto no loguean. El geocoder corre en el panel,
 nunca en SQL.
 
+> **Desde el 2026-11-09 la 021 es SÓLO LECTURA y transicional.** Geocodifica el backend (0140,
+> `quote_requests.geocoded_*`); el panel no escribe más `ops.quote_request_geocode` (se borraron
+> `src/server/geocode.ts`, `refreshQuoteRequestGeocode`, `geocodeQuietly` y
+> `geocodeQuoteRequestFn`). La tabla y `ops.set_quote_request_geocode` NO se dropean todavía:
+> `readQuoteGeocode` la lee como fallback (estado `legacy`) cuando el backend no tiene
+> `geocoded_at` para esa fila. **Criterio de salida**: hecho el backfill de producción de los
+> pedidos tipeados ABIERTOS (80 tipeados, 0 geocodificados al 2026-11-09), se saca la lectura y una
+> migración nueva dropea tabla y SP. La suite de la 021 sigue probando el SP; su `PREPARE p021_set`
+> ya no es copia de ningún SQL del repo.
+
 # Migración 022 — presupuestos por ítems
 
 Alcance: `migrations/022_ops_items_de_presupuesto.sql` y su `.test.sql`,
@@ -1336,3 +1346,47 @@ adentro de una transacción `now()` es constante, así que el log no se puede or
 `created_at` — se busca por contenido. **Regla para las próximas suites: nunca `ORDER BY
 created_at` sobre `ops.action_log` adentro del `BEGIN … ROLLBACK`.**
 
+
+---
+
+# Migración 028 — editar un pedido SIN tocar la ubicación
+
+Alcance: `migrations/028_ops_editar_pedido_sin_ubicacion.sql` y su `.test.sql`,
+`updateQuoteRequest` + `quoteEditWithoutLocationAvailable` de
+`src/server/quote-requests.repo.ts`, `updateQuoteRequestSchema` de
+`src/lib/quote-requests.ts`, `src/components/QuoteRequestEditor.tsx`.
+
+`ops.update_quote_request` pierde `p_location_address/locality/province` y el
+`UPDATE` no nombra ninguna columna `location_*`. Motivo: desde el 2026-11-09 la
+ubicación se corrige por `PUT /admin/quote-requests/:id/location` (el `grep` dio
+positivo, `leads.md` "Corregir la ubicación"), y tiene que tener UN solo camino
+de escritura. Mandarla "sin cambios" por el SP pisaba cualquier corrección hecha
+entre que se abrió el formulario y se guardó (HTTP desde la ficha, o la persona
+desde la app).
+
+- **DROP con la firma EXACTA de la 018** (13 args) + CREATE (trampa de la 009).
+  `LOCATION_FROM_DEVICE`, `LOCATION_ADDRESS_REQUIRED` y `LOCATION_ADDRESS_TOO_LONG`
+  salen de esta función; las dos últimas siguen en `ops.create_quote_request`
+  (019), que **no se toca**: el backend no tiene alta admin.
+- El resto es idéntico a la 018 (los 8 guardrails, `_redact_quote_request`, sin
+  cambios no loguea) y la suite lo re-verifica entero.
+- **Disponibilidad por FIRMA, no por tabla**: la 028 no crea tablas, así que
+  `quoteEditWithoutLocationAvailable()` pregunta
+  `to_regprocedure('ops.update_quote_request(uuid,uuid,text,text,text,text,text,text,numeric,text)')`.
+  Sin la 028 el repo llama a la firma de la 018 y le pasa la ubicación con
+  subconsultas a la MISMA fila en la misma sentencia (no la del formulario): la
+  carrera baja a microsegundos, no desaparece. El editor funciona igual en las
+  dos bases.
+- Las pruebas de edición de la 018 se **mudaron** a la suite de la 028 (en una
+  base con la 028 apuntaban a una firma que no existe); la de la 018 quedó con
+  el alta. Mismo movimiento que 008 → 009 y 013 → 016.
+
+**Cómo se probó**: PGlite (Postgres 17 en WASM) con `quote_requests`, enums y
+CHECK de ubicación copiados de DEV (`autolibre_ai_hex`, read-only, 2026-11-09) y
+las funciones de `ops` que usa (`assert_actor`, `log_action`, los helpers de la
+011 y la 018) extraídas con `pg_get_functiondef` de DEV. Rojo sin la 028 (aborta
+en el caso 06: la firma nueva no existe), **41/41** con ella. Incluye el caso de
+la carrera (una corrección de ubicación hecha en el medio no se pisa) y la
+integración con el SQL exacto del repo (`PREPARE` sin tipos). **No corrida en
+DEV ni aplicada en ninguna base**: la aplica el `vercel-build` del próximo deploy
+de `main`.

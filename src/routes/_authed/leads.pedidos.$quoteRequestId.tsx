@@ -42,6 +42,7 @@ import { PartnerDispatch } from '~/components/PartnerDispatch'
 import { getPartnerDispatchFn } from '~/fn/partner-dispatch'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
+import { QuoteLocationSection } from '~/components/QuoteLocationSection'
 import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { QuoteTemplates } from '~/components/QuoteTemplates'
@@ -68,8 +69,9 @@ import type { ReactNode } from 'react'
  * tiene sentido sin un pedido puntual al que referirse. → `~/lib/quote-templates`.
  *
  * `<QuoteRequestEditor/>` (migración 018) edita contacto, patente, vehículo
- * escrito, descripción, monto y zona tipeada: el pedido casi nunca llega
- * completo, y la persona suelta los datos de a poco.
+ * escrito, descripción y monto: el pedido casi nunca llega completo, y la
+ * persona suelta los datos de a poco. La ubicación NO (desde la 028): la
+ * corrige `<QuoteRequestLocationEditor/>` por HTTP al backend.
  *
  * Desde `.claude/plans/partners-derivacion.md` (Fase 2) también monta
  * `<PartnerCandidates/>`: dado el rubro del pedido (clasificado vía
@@ -168,7 +170,8 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         ? await listPartnerCandidatesFn({
             data: {
               categorySlugs: effectiveCategorySlugs,
-              // GPS, o la dirección tipeada geocodificada (021): el mismo punto que el mapa.
+              // GPS, geocode del backend o el punto viejo del panel (021, sólo
+              // lectura): `quoteMapLocation`, el mismo punto que el mapa.
               lat: quoteMapLocation(result.detail)?.lat ?? null,
               lng: quoteMapLocation(result.detail)?.lng ?? null,
             },
@@ -420,6 +423,13 @@ function QuoteRequestScreen() {
               ) : (
                 <span className="text-sm text-muted-foreground">Sin cargar</span>
               )}
+              {/*
+                Estado del geocode del backend + «Geocodificar» + «Corregir
+                ubicación» (PUT al backend, el ÚNICO camino de escritura de la
+                ubicación). Montado siempre, también cerrado: el error de "se
+                cerró mientras tanto" vive adentro y no se tiene que desmontar.
+              */}
+              <QuoteLocationSection key={d.id} detail={d} />
             </Field>
             <Field label="Monto declarado">
               {d.declaredAmount === null ? (

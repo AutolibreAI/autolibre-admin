@@ -3,7 +3,6 @@ import { Link, useRouter } from '@tanstack/react-router'
 import { Check, List, Map as MapIcon, MapPin, MessageCircle, Save, Send, Sparkles } from 'lucide-react'
 import {
   addQuoteRequestInternalNoteFn,
-  geocodeQuoteRequestFn,
   setQuoteRequestRubrosFn,
 } from '~/fn/quote-requests'
 import {
@@ -17,7 +16,6 @@ import {
   quoteMapLocation,
   quotePublicCode,
   readableQuoteRequestError,
-  type QuoteGeocodeOutcome,
   type QuoteRequestDetail,
 } from '~/lib/quote-requests'
 import { renderQuoteTemplate, whatsAppMessageUrl, type QuoteMessageTemplate } from '~/lib/quote-templates'
@@ -129,7 +127,7 @@ interface PartnerCandidatesProps {
   detail: QuoteRequestDetail
   /** Las plantillas vigentes (semilla o editadas) — de acá sale `cotizacion_red`. */
   templates: Array<QuoteMessageTemplate>
-  /** El pedido tiene un punto en el mapa: GPS (`device`) o dirección tipeada geocodificada (021). */
+  /** El pedido tiene un punto en el mapa: GPS, geocode del backend o el punto viejo del panel (`quoteMapLocation`). */
   pedidoHasLocation: boolean
   catalog: Array<ServiceFamily>
   /** Las zonas que hoy declaran los partners, para el selector de zona. */
@@ -224,8 +222,8 @@ export function PartnerCandidates({
     })
     .sort(order === 'distance' || selectedCategorySlugs.length < 2 ? byDistance : byCoverage)
 
-  // GPS si lo hay; si no, la dirección tipeada geocodificada (021). El MISMO
-  // punto con el que el loader pidió los candidatos por distancia.
+  // GPS; si no, el geocode del backend; si no, el punto viejo del panel (021,
+  // sólo lectura). El MISMO punto con el que el loader pidió los candidatos.
   const pedidoPoint = quoteMapLocation(detail)
   const pedidoLocation = pedidoPoint ? { lat: pedidoPoint.lat, lng: pedidoPoint.lng } : null
   const fromTypedAddress = pedidoPoint !== null && detail.locationLatitude === null
@@ -382,10 +380,13 @@ export function PartnerCandidates({
             ) : null}
 
             {!pedidoHasLocation ? (
-              <LocateFromAddress
-                quoteRequestId={quoteRequestId}
-                hasAddress={(detail.locationAddress ?? '').trim() !== ''}
-              />
+              <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
+                {detail.geocode.status === 'no_location'
+                  ? 'Este pedido no tiene ubicación: no hay distancia que calcular. Cargala con «Corregir ubicación», en la tarjeta Pedido.'
+                  : detail.geocode.status === 'not_found'
+                    ? 'No se pudo ubicar la dirección del pedido: corregila con «Corregir ubicación», en la tarjeta Pedido.'
+                    : 'La dirección del pedido todavía no está ubicada en el mapa: mirá «Geocodificar» en la tarjeta Pedido.'}
+              </p>
             ) : visibleCandidates.length > 0 && locatedShare < MIN_LOCATED_SHARE ? (
               <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
                 Sólo {located} de {visibleCandidates.length} candidatos tienen ubicación cargada — el
@@ -399,10 +400,9 @@ export function PartnerCandidates({
 
             {fromTypedAddress ? (
               <p className="text-xs text-muted-foreground">
-                La ubicación del pedido sale de la dirección tipeada (geocodificada)
-                {pedidoPoint?.approximate
-                  ? ': no se encontró la altura exacta, así que es un punto de la calle o de la localidad — las distancias son aproximadas.'
-                  : ', no del GPS del teléfono.'}
+                {pedidoPoint?.source === 'legacy'
+                  ? 'La ubicación del pedido es la aproximada del panel (anterior al geocodificador del backend): las distancias son aproximadas.'
+                  : 'La ubicación del pedido sale de la dirección tipeada, geocodificada por el backend — no del GPS del teléfono.'}
               </p>
             ) : null}
 
@@ -636,53 +636,6 @@ function CandidateRow({
           {error}
         </p>
       ) : null}
-    </div>
-  )
-}
-
-/**
- * Sin punto en el mapa. Si el pedido tiene dirección tipeada, se puede
- * geocodificar (021): pasa solo al crear o editar, y este botón cubre los
- * pedidos cargados antes y el caso en que el geocoder no respondió.
- */
-function LocateFromAddress({ quoteRequestId, hasAddress }: { quoteRequestId: string; hasAddress: boolean }) {
-  const router = useRouter()
-  const [busy, setBusy] = useState(false)
-  const [outcome, setOutcome] = useState<QuoteGeocodeOutcome | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  async function locate() {
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await geocodeQuoteRequestFn({ data: { quoteRequestId } })
-      setOutcome(res.outcome)
-      await router.invalidate()
-    } catch (cause) {
-      setError(readableQuoteRequestError(cause))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const message = !hasAddress
-    ? 'Este pedido no tiene coordenadas ni dirección — no hay distancia que calcular. Cargá la dirección con «Editar datos» y se ubica sola en el mapa.'
-    : outcome === 'no_result'
-      ? 'No se encontró esa dirección. Revisala (calle, altura y localidad) con «Editar datos» y volvé a intentar.'
-      : outcome === 'unavailable'
-        ? 'Falta aplicar la migración 021 en esta base: no hay dónde guardar la ubicación.'
-        : 'Este pedido no tiene coordenadas: la dirección se tipeó, no vino del GPS del teléfono. Se puede ubicar en el mapa a partir de la dirección.'
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
-      <span className="min-w-0 flex-1">{message}</span>
-      {hasAddress && outcome !== 'unavailable' ? (
-        <Button type="button" size="sm" variant="outline" className="h-7 gap-1.5" disabled={busy} onClick={locate}>
-          <MapPin className="size-3.5" aria-hidden />
-          {busy ? 'Ubicando…' : 'Ubicar en el mapa'}
-        </Button>
-      ) : null}
-      {error ? <span className="w-full text-destructive">{error}</span> : null}
     </div>
   )
 }

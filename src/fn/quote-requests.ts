@@ -30,12 +30,10 @@ import {
   setQuoteRequestRubros,
   updateQuoteRequest,
 } from '~/server/quote-requests.repo'
-import { classifyQuoteRequest } from '~/server/backend'
-import { refreshQuoteRequestGeocode } from '~/server/quote-geocode.repo'
+import { classifyQuoteRequest, requestQuoteRequestGeocode } from '~/server/backend'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type {
-  QuoteGeocodeOutcome,
   QuoteRequestDetailResult,
   QuoteRequestRubros,
   QuoteRequestSeries,
@@ -207,20 +205,25 @@ async function assertQuoteEditAvailable(signal: AbortSignal | undefined): Promis
 export const createQuoteRequestFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .validator(createQuoteRequestSchema)
-  .handler(async ({ data, context }): Promise<{ id: string; publicNumber: number }> => {
-    const signal = requestSignal()
-    await assertQuoteRequestsAvailable(signal)
-    await assertQuoteEditAvailable(signal)
-    const created = await createQuoteRequest(data, context.user.id, { signal })
-    await geocodeQuietly(created.id, context.user.id)
-    await classifyQuietly(created.id)
-    return created
-  })
+  .handler(
+    async ({ data, context }): Promise<{ id: string; publicNumber: number; geocodeRequested: boolean | null }> => {
+      const signal = requestSignal()
+      await assertQuoteRequestsAvailable(signal)
+      await assertQuoteEditAvailable(signal)
+      const created = await createQuoteRequest(data, context.user.id, { signal })
+      // Con zona tipeada, el backend la geocodifica sólo si se lo pedimos: el
+      // alta por SQL no pasa por su caso de uso. Sin zona no hay nada que pedir.
+      const geocodeRequested = (data.locationAddress ?? '').trim() === '' ? null : await requestGeocodeQuietly(created.id)
+      await classifyQuietly(created.id)
+      return { ...created, geocodeRequested }
+    },
+  )
 
 /**
- * Editar los datos de un pedido ya creado (migración 018): contacto, patente,
- * vehículo escrito, descripción, monto y ubicación tipeada. Mismos dos guards
- * que el alta.
+ * Editar los datos de un pedido ya creado (migración 018, sin ubicación desde
+ * la 028): contacto, patente, vehículo escrito, descripción y monto. La
+ * ubicación va por `changeQuoteRequestLocationFn` (HTTP). Mismos dos guards que
+ * el alta.
  */
 export const updateQuoteRequestFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
@@ -229,36 +232,29 @@ export const updateQuoteRequestFn = createServerFn({ method: 'POST' })
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
     await assertQuoteEditAvailable(signal)
-    const result = await updateQuoteRequest(data, context.user.id, { signal })
-    await geocodeQuietly(data.quoteRequestId, context.user.id)
-    return result
+    return updateQuoteRequest(data, context.user.id, { signal })
   })
 
 /**
- * El pin de un pedido con dirección tipeada (021). Después de crear o editar
- * se geocodifica solo; esto es el botón «Ubicar en el mapa» de la ficha, para
- * los pedidos que se cargaron antes de la 021 o cuando el geocoder no
- * respondió. `force` rehace el geocode aunque la dirección no haya cambiado.
+ * Pedirle al backend que geocodifique un pedido recién cargado a mano
+ * (`POST /admin/quote-requests/:id/geocode`, 0140). Es un extra: el pedido ya
+ * quedó escrito, así que un fallo acá NO convierte el alta en error — devuelve
+ * `false` y el compositor avisa que se use «Geocodificar» en la ficha. Se
+ * ESPERA (no se suelta la promesa) por el mismo motivo que `classifyQuietly`.
+ *
+ * El panel ya no tiene geocoder propio: `src/server/geocode.ts`,
+ * `geocodeQuietly` y `geocodeQuoteRequestFn` («Ubicar en el mapa») se
+ * borraron el 2026-11-09. → `.claude/rules/leads.md`, "Geocodificación".
  */
-export const geocodeQuoteRequestFn = createServerFn({ method: 'POST' })
-  .middleware([adminMiddleware])
-  .validator(quoteRequestIdSchema)
-  .handler(async ({ data, context }): Promise<{ outcome: QuoteGeocodeOutcome }> => {
-    const signal = requestSignal()
-    await assertQuoteRequestsAvailable(signal)
-    return { outcome: await refreshQuoteRequestGeocode(data.quoteRequestId, context.user.id, { force: true }) }
-  })
-
-/**
- * Geocodificar después de guardar es un extra: el pedido ya quedó escrito. Un
- * geocoder caído o un SP que falla no puede convertir un guardado exitoso en
- * un error — el pedido queda sin pin y la ficha ofrece reintentar.
- */
-async function geocodeQuietly(quoteRequestId: string, actorId: string): Promise<void> {
+async function requestGeocodeQuietly(quoteRequestId: string): Promise<boolean> {
   try {
-    await refreshQuoteRequestGeocode(quoteRequestId, actorId)
-  } catch {
-    // sin pin; «Ubicar en el mapa» en la ficha
+    await requestQuoteRequestGeocode(quoteRequestId)
+    return true
+  } catch (error) {
+    console.warn(
+      `quote request ${quoteRequestId}: geocode not requested — ${error instanceof Error ? error.message : String(error)}`,
+    )
+    return false
   }
 }
 

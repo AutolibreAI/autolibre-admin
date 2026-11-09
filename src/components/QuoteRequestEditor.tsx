@@ -15,8 +15,8 @@ import { cn } from '~/lib/utils'
 import type { ReactNode } from 'react'
 
 /**
- * Editar los datos de un pedido ya creado — contacto, vehículo, qué necesita y
- * zona — vía `ops.update_quote_request` (migración 018).
+ * Editar los datos de un pedido ya creado — contacto, vehículo y qué necesita —
+ * vía `ops.update_quote_request` (migración 018; sin ubicación desde la 028).
  *
  * Existe porque el pedido casi nunca llega completo: por WhatsApp la persona
  * escribe "necesito un service" y el auto, la patente y dónde está los va
@@ -31,9 +31,11 @@ import type { ReactNode } from 'react'
  *
  * ── Lo que NO se edita, y el formulario lo dice ─────────────────────────────
  *
- * - La ubicación que vino del GPS del teléfono: pisarla borraría las
- *   coordenadas (el único dato de cercanía para ordenar talleres). Se muestra
- *   y viaja tal cual; el SP rechaza un cambio con `LOCATION_FROM_DEVICE`.
+ * - La ubicación, ni la tipeada ni la del GPS (desde el 2026-11-09). Se corrige
+ *   con «Corregir ubicación» (`QuoteRequestLocationEditor`, HTTP al backend),
+ *   su ÚNICO camino de escritura. Mandarla acá "tal cual estaba" pisaría una
+ *   corrección hecha mientras este formulario estaba abierto. Se muestra de
+ *   sólo lectura.
  * - `raw_submission`: lo que mandó la persona queda intacto al pie de la
  *   ficha, así que corregir la descripción no pierde el original.
  * - Canal, cuenta, vehículo vinculado y estado: ver `updateQuoteRequestSchema`.
@@ -49,15 +51,11 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
   const [vehicleText, setVehicleText] = useState('')
   const [description, setDescription] = useState('')
   const [declaredAmount, setDeclaredAmount] = useState('')
-  const [locationAddress, setLocationAddress] = useState('')
-  const [locationLocality, setLocationLocality] = useState('')
-  const [locationProvince, setLocationProvince] = useState('')
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
 
-  const fromDevice = detail.locationSource === 'device'
   // chk_quote_requests_user_has_plate: con cuenta, la base exige patente.
   const plateRequired = detail.userId !== null
 
@@ -69,9 +67,6 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
     setVehicleText(detail.vehicleText ?? '')
     setDescription(detail.description)
     setDeclaredAmount(detail.declaredAmount === null ? '' : String(detail.declaredAmount))
-    setLocationAddress(detail.locationAddress ?? '')
-    setLocationLocality(detail.locationLocality ?? '')
-    setLocationProvince(detail.locationProvince ?? '')
     setError(null)
   }
 
@@ -106,10 +101,6 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
           plate,
           vehicleText,
           declaredAmount: amount,
-          // Con GPS viaja lo que ya está: el SP exige que no cambie.
-          locationAddress: fromDevice ? (detail.locationAddress ?? '') : locationAddress,
-          locationLocality: fromDevice ? (detail.locationLocality ?? '') : locationLocality,
-          locationProvince: fromDevice ? (detail.locationProvince ?? '') : locationProvince,
         },
       })
       await router.invalidate()
@@ -233,52 +224,23 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
             </Group>
 
             <Group title="Zona">
-              {fromDevice ? (
-                <div className="flex gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-sm">
-                  <MapPin className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                  <div className="min-w-0">
-                    <div>{detail.locationAddress ?? '—'}</div>
-                    <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                      Vino del GPS del teléfono y no se edita: cambiarla borraría las coordenadas con las que se ordenan
-                      los talleres por cercanía.
+              <div className="flex gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-sm">
+                <MapPin className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                <div className="min-w-0">
+                  <div>{detail.locationAddress ?? <span className="text-muted-foreground">Sin cargar</span>}</div>
+                  {detail.locationAddress ? (
+                    <div className="text-xs text-muted-foreground">
+                      {[detail.locationLocality, detail.locationProvince].filter(Boolean).join(', ') || 'sin localidad'}
+                      {' · '}
+                      {detail.locationSource === 'device' ? 'GPS del teléfono' : 'tipeada'}
                     </div>
+                  ) : null}
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    No se edita acá: se corrige con «Corregir ubicación», en la tarjeta Pedido de la ficha. Así una
+                    corrección hecha mientras tanto (desde la ficha o desde la app) no se pisa al guardar estos datos.
                   </div>
                 </div>
-              ) : (
-                <>
-                  <TextField
-                    id="qre-address"
-                    label="Dirección o zona"
-                    optional
-                    value={locationAddress}
-                    onChange={setLocationAddress}
-                    disabled={busy}
-                    maxLength={300}
-                    placeholder="Av. Cabildo 2000, Belgrano"
-                    hint="Hace falta si cargás localidad o provincia. La ven las plantillas para la persona."
-                  />
-                  <div className="grid grid-cols-2 gap-3">
-                    <TextField
-                      id="qre-locality"
-                      label="Localidad"
-                      optional
-                      value={locationLocality}
-                      onChange={setLocationLocality}
-                      disabled={busy}
-                      placeholder="Tigre"
-                      hint="La que viaja en el pedido de cotización al taller."
-                    />
-                    <TextField
-                      id="qre-province"
-                      label="Provincia"
-                      optional
-                      value={locationProvince}
-                      onChange={setLocationProvince}
-                      disabled={busy}
-                    />
-                  </div>
-                </>
-              )}
+              </div>
             </Group>
 
             {error ? (

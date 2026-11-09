@@ -625,9 +625,10 @@ export type CreateQuoteRequestInput = z.infer<typeof createQuoteRequestSchema>
  * formulario de `set_partner_contact`: lo que se ve en pantalla es lo que
  * queda guardado.
  *
- * La ubicación viaja siempre, también cuando vino del GPS del teléfono: en ese
- * caso el formulario la manda tal cual está y el SP exige que no cambie
- * (`LOCATION_FROM_DEVICE`). → cabecera de la migración 018.
+ * La ubicación NO está acá (desde el 2026-11-09): se corrige por HTTP con
+ * «Corregir ubicación» (`~/lib/quote-location`), su único camino de escritura.
+ * Mandarla "tal cual estaba" pisaba una corrección hecha mientras el
+ * formulario estaba abierto. → migración 028.
  *
  * No hay `channel`, `userId`, `vehicleId` ni estado: el canal es un hecho, la
  * cuenta la pone la app, el vínculo al vehículo es otra feature y el estado lo
@@ -642,9 +643,6 @@ export const updateQuoteRequestSchema = z.object({
   plate: plateField,
   vehicleText: vehicleTextField,
   declaredAmount: z.number().min(0).max(9_999_999_999.99).nullable(),
-  locationAddress: z.string().trim().max(300, 'La dirección tiene hasta 300 caracteres.'),
-  locationLocality: z.string().trim().max(200),
-  locationProvince: z.string().trim().max(200),
 })
 export type UpdateQuoteRequestInput = z.infer<typeof updateQuoteRequestSchema>
 
@@ -838,13 +836,16 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    */
   editAvailable: boolean
   /**
-   * La coordenada APROXIMADA de un pedido con ubicación tipeada: el panel
-   * geocodificó la dirección y la guardó en `ops.quote_request_geocode`
-   * (migración 021). `null` con GPS (`device`), sin dirección, sin resultado,
-   * sin la 021, o si la dirección cambió después del último geocode. NO es el
-   * GPS de la persona — por eso no va en `locationLatitude`.
+   * Dónde quedó la geocodificación de una ubicación tipeada: la del BACKEND
+   * (`quote_requests.geocoded_*`, 0140) y, como fallback transicional de sólo
+   * lectura, el punto viejo del panel (`ops.quote_request_geocode`, 021). NO es
+   * el GPS de la persona — por eso no va en `locationLatitude`. El punto del
+   * mapa sale de `quoteMapLocation()`, nunca de acá directo.
+   *
+   * Ojo: `locationLocality` / `locationProvince` de este detalle YA siguen la
+   * regla de lectura del backend (`location_* ?? geocoded_*`).
    */
-  geocodedLocation: QuoteGeocodedLocation | null
+  geocode: QuoteGeocode
   /**
    * Lo que el clasificador de IA del backend (0124) sugirió para este pedido.
    * Es una SUGERENCIA: el panel nunca escribe `quote_request_services`.
@@ -904,40 +905,62 @@ export interface QuoteAiService {
 /** Por debajo de esto la sugerencia se marca como dudosa (scores sin calibrar, 2026-10-27). */
 export const AI_SERVICE_LOW_SCORE = 0.5
 
-/** Punto geocodificado de una dirección tipeada. `precise` = calle y altura; si no, centroide. */
-export interface QuoteGeocodedLocation {
-  lat: number
-  lng: number
-  precise: boolean
+/**
+ * El estado de la ubicación de un pedido, derivado (no es una columna):
+ *
+ * | Estado | Cuándo |
+ * |---|---|
+ * | `device` | GPS del teléfono: no se geocodifica nada |
+ * | `located` | tipeada, `geocoded_at` + lat/lng: el backend la ubicó (Google) |
+ * | `not_found` | tipeada, `geocoded_at` sin lat/lng: Google dio ZERO_RESULTS. DEFINITIVO: no se reintenta solo, se corrige la dirección |
+ * | `pending` | tipeada, `geocoded_at` NULL: en cola O nunca encolada (la base no las distingue). Un error de Google tampoco escribe nada |
+ * | `legacy` | como `pending`, pero hay un punto viejo del panel (021) para ESTA dirección |
+ * | `no_location` | sin ubicación |
+ */
+export const QUOTE_GEOCODE_STATUSES = ['device', 'located', 'not_found', 'pending', 'legacy', 'no_location'] as const
+export type QuoteGeocodeStatus = (typeof QUOTE_GEOCODE_STATUSES)[number]
+
+export interface QuoteGeocode {
+  status: QuoteGeocodeStatus
+  /** ¿Existen las columnas `geocoded_*` (0140) en esta base? Sin ellas, una tipeada siempre es `pending`/`legacy`. */
+  backendColumns: boolean
+  /** `geocoded_at` (ISO). Cambia cuando el backend termina un geocode: es lo que mira el sondeo de la ficha. */
+  geocodedAt: string | null
+  /** El punto del backend. `null` salvo en `located`. */
+  point: { lat: number; lng: number } | null
+  /**
+   * El punto viejo del panel (021), SÓLO si el backend no tiene `geocoded_at`
+   * para esta fila y la `query` guardada sigue correspondiendo a la dirección
+   * actual. Lectura transicional: el panel ya no lo escribe.
+   */
+  legacyPoint: { lat: number; lng: number; precise: boolean } | null
 }
 
-/** Qué pasó al geocodificar la dirección de un pedido (021). */
-export type QuoteGeocodeOutcome =
-  | 'located'
-  | 'approximate'
-  | 'unchanged'
-  | 'no_result'
-  | 'no_address'
-  | 'device'
-  | 'unavailable'
+/** De dónde salió el punto del mapa. */
+export type QuoteMapPointSource = 'gps' | 'backend' | 'legacy'
 
 /**
- * El punto del pedido para el mapa y la distancia a cada taller: el GPS si lo
- * hay, si no la dirección tipeada geocodificada. Una sola definición: el
- * loader (candidatos por distancia) y el mapa tienen que usar el MISMO punto.
+ * El punto del pedido para el mapa y la distancia a cada taller. Una sola
+ * definición: el loader (candidatos por distancia), el mapa y la ficha tienen
+ * que usar el MISMO punto. Orden, el mismo que la regla de lectura del backend
+ * más el fallback transicional:
+ *
+ *   1. GPS del teléfono (`location_latitude/longitude`);
+ *   2. el geocode del backend (`geocoded_latitude/longitude`);
+ *   3. el punto viejo del panel (021), sólo en `legacy` — siempre aproximado;
+ *   4. nada.
  */
 export function quoteMapLocation(
-  detail: Pick<QuoteRequestDetail, 'locationLatitude' | 'locationLongitude' | 'geocodedLocation'>,
-): { lat: number; lng: number; approximate: boolean } | null {
+  detail: Pick<QuoteRequestDetail, 'locationLatitude' | 'locationLongitude' | 'geocode'>,
+): { lat: number; lng: number; approximate: boolean; source: QuoteMapPointSource } | null {
   if (detail.locationLatitude !== null && detail.locationLongitude !== null) {
-    return { lat: detail.locationLatitude, lng: detail.locationLongitude, approximate: false }
+    return { lat: detail.locationLatitude, lng: detail.locationLongitude, approximate: false, source: 'gps' }
   }
-  if (detail.geocodedLocation) {
-    return {
-      lat: detail.geocodedLocation.lat,
-      lng: detail.geocodedLocation.lng,
-      approximate: !detail.geocodedLocation.precise,
-    }
+  if (detail.geocode.point) {
+    return { lat: detail.geocode.point.lat, lng: detail.geocode.point.lng, approximate: false, source: 'backend' }
+  }
+  if (detail.geocode.status === 'legacy' && detail.geocode.legacyPoint) {
+    return { lat: detail.geocode.legacyPoint.lat, lng: detail.geocode.legacyPoint.lng, approximate: true, source: 'legacy' }
   }
   return null
 }

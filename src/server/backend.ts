@@ -10,6 +10,7 @@ import '@tanstack/react-start/server-only'
 
 import { auth } from '@clerk/tanstack-react-start/server'
 import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
+import { QUOTE_LOCATION_ERROR, type QuoteLocation } from '~/lib/quote-location'
 import {
   PARTNER_DISPATCH_BAD_RESPONSE,
   approvedDispatchSchema,
@@ -184,7 +185,7 @@ interface BackendErrorBody {
 async function backendError(
   response: Response,
   what: string,
-  opts: { detailed?: boolean; proposal?: boolean; dispatch?: boolean; whatsapp?: boolean } = {},
+  opts: { detailed?: boolean; proposal?: boolean; dispatch?: boolean; whatsapp?: boolean; quoteLocation?: boolean } = {},
 ): Promise<Error> {
   let body: BackendErrorBody | null = null
 
@@ -250,6 +251,25 @@ async function backendError(
         sessionWindowExpiresAt: typeof body?.sessionWindowExpiresAt === 'string' ? body.sessionWindowExpiresAt : null,
         replyState: typeof body?.replyState === 'string' ? body.replyState : null,
       }),
+    )
+  }
+
+  /**
+   * Modo `quoteLocation` — opt-in, lo usa sólo «Corregir ubicación» de un
+   * pedido (2026-11-09). Antes del corte genérico de 401/403 por el mismo
+   * motivo que `dispatch`: el `code` decide la UI (`INVALID_STATE_TRANSITION`
+   * = pedido cerrado), y el 404 tiene dos lecturas — pedido inexistente vs.
+   * «Cannot PUT» (backend sin el endpoint desplegado) — que `cannotRoute`
+   * separa. Lo lee `parseQuoteLocationError` de `~/lib/quote-location`.
+   */
+  if (opts.quoteLocation) {
+    return new Error(
+      `${QUOTE_LOCATION_ERROR}:${JSON.stringify({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        message: message ?? `${what} falló sin explicación`,
+        cannotRoute: response.status === 404 && /^Cannot (PUT|POST|GET)\b/.test(message ?? ''),
+      })}`,
     )
   }
 
@@ -1316,4 +1336,85 @@ export async function markWhatsAppConversationRead(input: {
     'La marca de leído',
   )
   return parseOrThrow(readResultSchema, body)
+}
+
+// ── Corregir la ubicación de un pedido (2026-11-09) ─────────────────────────
+
+/**
+ * Séptima excepción a "el panel habla con Postgres": el grep dio positivo
+ * (`AdminQuoteRequestController` → `PUT /admin/quote-requests/:id/location`,
+ * `AdminGuard`). Es el mismo caso de uso que usa la persona desde la app; con
+ * `typed` además limpia `geocoded_*` y re-encola el geocode del backend. Un
+ * `UPDATE` por SQL se saltearía todo eso. → `.claude/rules/leads.md`
+ *
+ * 204 sin cuerpo (también si no cambió nada): no se lee JSON. Un timeout se
+ * traduce a la sentinela con `status: 0` — el PUT pudo haberse guardado, y la
+ * UI ofrece reenviar EXACTAMENTE el mismo cuerpo (idempotente del lado del
+ * backend: re-encola el geocode sin duplicar).
+ */
+export async function changeQuoteRequestLocation(
+  quoteRequestId: string,
+  location: QuoteLocation,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  const timeout = AbortSignal.timeout(JSON_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/quote-requests/${encodeURIComponent(quoteRequestId)}/location`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ location }),
+      cache: 'no-store',
+      signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') {
+      throw new Error(
+        `${QUOTE_LOCATION_ERROR}:${JSON.stringify({ status: 0, code: 'TIMEOUT', message: 'timeout', cannotRoute: false })}`,
+      )
+    }
+    if (cause instanceof Error && cause.name === 'AbortError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'Corregir la ubicación', { quoteLocation: true })
+}
+
+/**
+ * Pedirle al backend que geocodifique un pedido con ubicación tipeada —
+ * `POST /admin/quote-requests/:id/geocode` (`AdminGuard`, 0140). Lo usa SÓLO el
+ * alta a mano: `ops.create_quote_request` inserta por SQL y nunca pasa por el
+ * caso de uso que encola el geocode, así que sin esto ese pedido no se ubica
+ * nunca. 202 = encolado; también 202 sin encolar si es `device`, ya está
+ * geocodificado o no tiene ubicación (idempotente). Cerrado = 400
+ * `INVALID_STATE_TRANSITION`.
+ *
+ * Ojo: el jobId es FIJO por pedido, y BullMQ ignora en silencio un job igual
+ * completado en la última hora. Por eso «Geocodificar» de la ficha NO usa esto:
+ * reenvía el PUT de ubicación con el cuerpo idéntico (jobId con timestamp).
+ *
+ * Timeout corto, como `classifyQuoteRequest`: corre después de un alta que ya
+ * quedó escrita.
+ */
+export async function requestQuoteRequestGeocode(quoteRequestId: string): Promise<void> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/quote-requests/${encodeURIComponent(quoteRequestId)}/geocode`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') {
+      throw new Error(
+        `${QUOTE_LOCATION_ERROR}:${JSON.stringify({ status: 0, code: 'TIMEOUT', message: 'timeout', cannotRoute: false })}`,
+      )
+    }
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'La geocodificación del pedido', { quoteLocation: true })
 }

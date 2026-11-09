@@ -1287,16 +1287,21 @@ Migración 018 (`ops-write-actions.md`). Tres cambios:
   → "tu auto" (`vehiclePhrase`); para el taller, catálogo → escrito →
   corchete. Sin patente, `{{patente}}` sale como corchete a completar.
 - **«Editar datos»** en el header de la ficha: contacto, patente, vehículo
-  escrito, descripción, monto declarado y zona. Reemplazo completo — vaciar un
+  escrito, descripción y monto declarado. Reemplazo completo — vaciar un
   opcional lo borra. Se siembra con la ficha al abrir.
 
 Lo que NO edita, y el formulario lo dice:
 
-- **La zona que vino del GPS del teléfono** (`location_source = 'device'`, 28 de
-  33 pedidos al 2026-09-27): cambiarla obligaría a borrar las coordenadas con
-  las que `PartnerCandidates` ordena por cercanía. Se muestra de sólo lectura.
-  Los pedidos sin zona (WhatsApp) o con zona tipeada sí se editan, y una zona
-  tipeada exige dirección (la localidad sola no alcanza: CHECK del backend).
+- **La ubicación, ninguna — corregido el 2026-11-09.** Hasta acá editaba la
+  zona tipeada (y mandaba la del GPS "tal cual" para que el SP la rechazara si
+  cambiaba). Desde la migración 028 la ubicación tiene UN solo camino de
+  escritura: «Corregir ubicación» (abajo). Mandarla "sin cambios" por el SP no
+  alcanzaba: el formulario la lee al abrirse, y una corrección hecha entre el
+  abrir y el Guardar (por HTTP, o la persona desde la app) quedaba pisada con
+  la vieja. El editor la muestra de sólo lectura y apunta al botón. En una base
+  sin la 028, `updateQuoteRequest` usa la firma de la 018 mandando la ubicación
+  leída en la MISMA sentencia (subconsulta), no la del formulario: la carrera
+  baja a microsegundos, no a cero — por eso la 028.
 - **`raw_submission`**: lo que mandó la persona queda intacto al pie de la
   ficha. Corregir la descripción de un pedido de la app no pierde el original.
 - **Canal, cuenta, vehículo vinculado y estado.** El canal es un hecho (o una
@@ -1416,7 +1421,102 @@ tope de 4.5MB a una respuesta streameada. El zip es `~/server/zip.ts`, modo
 STORE sin dependencia (un JPEG no se comprime más), validado con `zipfile` de
 Python (`tmp/probe-zip.mjs`). Nombre: `AL-1068-<nombre original>`.
 
-### El pin de un pedido con dirección tipeada (021) — desde el 2026-10-06
+### Corregir la ubicación (`<QuoteRequestLocationEditor/>`) — desde el 2026-11-09
+
+Alcance: `src/lib/quote-location.ts`, `src/fn/quote-location.ts`,
+`changeQuoteRequestLocation` + el modo `{ quoteLocation: true }` de `backendError`
+en `src/server/backend.ts`, `src/components/QuoteRequestLocationEditor.tsx` (en el
+campo «Zona» de la tarjeta Pedido de la ficha). Séptima vez que el `grep` dio
+positivo: `PUT /admin/quote-requests/:id/location` (`AdminGuard`,
+`ChangeQuoteRequestLocationDto`), el MISMO caso de uso que usa la persona desde la
+app — last write wins entre los dos. **Es el único camino de escritura de la
+ubicación**; si aparece un `UPDATE … location_*` en este repo, está mal.
+
+- **Contrato**: `{ location: { source: 'typed', address } }` (sólo `address`,
+  ≤ 300, no en blanco) o `{ source: 'device', latitude, longitude,
+  accuracyMeters?, address?, locality?, province? }` (rangos, no (0,0), 300/120).
+  Campos de más = 400: el zod es `.strict()` y espeja el DTO; un opcional en
+  blanco NO viaja (nunca `''`). No hay "borrar": sólo reemplazar.
+- **Sólo con el pedido abierto** (`QUOTE_LOCATION_EDITABLE_STATUSES`). Cerrado,
+  el componente dice por qué en vez del botón.
+- **Coordenadas**: coma o punto decimal (`-34,6037`), y un par pegado de Google
+  Maps (`-34.6037, -58.3816`). Con coma decimal el separador tiene que ser `;`
+  o espacio, o cada número con su parte decimal; lo ambiguo da `null` y se pide
+  tipear lat y lng por separado (`parseCoordinatePair`).
+- **Confirmación** con exactamente lo que viaja (el JSON) y lo que NO se rehace:
+  los WhatsApp a talleres (`partner_outreach`) y las propuestas quedan como
+  estaban. Con `typed` el backend limpia `geocoded_*` y re-geocodifica en
+  segundo plano: el mapa dice «geocodificando…» unos segundos.
+- **Errores** (`readableQuoteLocationError`, sentinela
+  `QUOTE_LOCATION_ERROR:<json>` leída ANTES del aplanado de 401/403):
+  400 `INVALID_STATE_TRANSITION` = cerrado (también "se cerró mientras tanto"):
+  se relee la ficha, reintentar no sirve · 400 sin code = el mensaje del
+  backend, citado · 404 «Cannot PUT» = backend sin el endpoint (no desplegado) ·
+  404 = el pedido no existe · 409 = cambió dos veces, reintentar · **5xx o
+  timeout = PUEDE haberse guardado** (falló encolar el geocode).
+- **«Reintentar» reenvía el payload guardado (`pending`), idéntico**, nunca
+  rearmado desde el formulario: el backend re-encola sin duplicar. Volver al
+  formulario descarta el reintento. `inFlight` (ref) contra el doble click.
+- **El componente se monta SIEMPRE** (también cerrado): un `closed` relee la
+  ficha, y el mensaje que explica por qué no se guardó no puede desmontarse con
+  el botón. Misma lección que `QuoteRequestActions`.
+- Después de un 204 con `typed` avisa a `QuoteLocationSection` (`onTypedSaved`), que
+  arranca el sondeo de la geocodificación (abajo). Misma dirección y ya
+  geocodificada = el backend no re-encola, y no se sondea.
+
+### Geocodificación: la hace el BACKEND — desde el 2026-11-09
+
+Alcance: `src/server/quote-geocode.repo.ts` (sólo lectura), `QuoteGeocode` /
+`QUOTE_GEOCODE_STATUSES` / `quoteMapLocation` de `~/lib/quote-requests`,
+`src/components/QuoteLocationSection.tsx`, `requestQuoteRequestGeocode` de
+`src/server/backend.ts`, `createQuoteRequestFn` y `QuoteRequestComposer`.
+
+El backend (0140) geocodifica las ubicaciones TIPEADAS a
+`quote_requests.geocoded_{at,latitude,longitude,locality,province}` (CHECK
+`chk_quote_requests_geocoded_only_typed`). Lo encolan el alta pública/app, el PUT de
+ubicación y `POST /admin/quote-requests/:id/geocode`. **El panel ya no tiene geocoder**:
+`src/server/geocode.ts`, `geocodeQuietly`, `geocodeQuoteRequestFn` y «Ubicar en el mapa» se
+borraron, y nada escribe `ops.quote_request_geocode`.
+
+- **Lectura con guard PROPIO** (las 5 columnas en `information_schema`), NO en
+  `READ_COLUMNS`: mismo motivo que la 0124/0143 — sumarlas apagaría la pantalla en una
+  base sin la 0140.
+- **Estado derivado** (`QuoteGeocodeStatus`): `device` · `located` (`geocoded_at` + lat/lng)
+  · `not_found` (`geocoded_at` sin lat/lng = ZERO_RESULTS, DEFINITIVO: se corrige la
+  dirección) · `pending` (`geocoded_at` NULL: en cola o nunca encolado, la base no los
+  distingue; un error de Google tampoco escribe) · `legacy` (como `pending`, con un pin
+  viejo de la 021 vigente para ESTA dirección) · `no_location`.
+- **`quoteMapLocation`**: GPS → `geocoded_*` del backend → pin de la 021 SÓLO en `legacy`
+  (siempre "aproximado") → nada. Devuelve `source` (`gps`/`backend`/`legacy`). Lo usan el
+  loader (candidatos por distancia), el mapa y `PartnerCandidates`: un solo punto.
+- **Localidad/provincia** del detalle siguen la regla del backend:
+  `location_* ?? geocoded_*` (plantillas `{{zona}}`/`{{localidad}}`, la tarjeta). El listado y
+  `/partners/cobertura` siguen con la cruda (no leen `geocoded_*`; el mapa de cobertura usa
+  `LUGARES` por spec).
+- **«Cargar pedido» con zona tipeada** llama a `POST …/geocode` después del alta: el SP inserta
+  por SQL y el backend nunca lo encolaría solo. Un fallo NO convierte el alta en error:
+  `geocodeRequested: false` y el compositor dice "creado, pero no se pudo pedir la
+  geocodificación; usá «Geocodificar» en la ficha".
+- **«Geocodificar»** (ficha, sólo abiertos, en `pending`/`legacy`) NO usa `POST …/geocode`:
+  su jobId es fijo y BullMQ ignora un job igual completado en la última hora. Manda el PUT de
+  ubicación con el cuerpo `typed` IDÉNTICO (no escribe nada, re-encola con jobId con timestamp),
+  con el server function y los errores de «Corregir ubicación». Re-geocodificar algo que ya
+  tiene `geocoded_at` no se puede salvo cambiando la dirección.
+- **Sondeo**: sólo cuando el panel acaba de encolar (204 de «Geocodificar» o de «Corregir
+  ubicación» con `typed`). «Geocodificando…» y `router.invalidate()` cada 5 s hasta que
+  `geocoded_at` cambie respecto de antes, o 60 s; después: «Todavía no se ubicó: puede ser que
+  el backend no tenga la clave de Google; reintentá más tarde». Efecto de browser, se limpia al
+  desmontar (como `/conocimiento`).
+- Al 2026-11-09 producción tiene 80 tipeados y 0 con `geocoded_at`: los pines que se ven hoy
+  son `legacy`.
+
+### El pin de un pedido con dirección tipeada (021) — desde el 2026-10-06, REEMPLAZADO el 2026-11-09
+
+> **Reemplazado por la geocodificación del backend (arriba).** Lo de abajo describe el geocoder
+> propio del panel, que ya no existe. Queda la LECTURA de `ops.quote_request_geocode` como
+> fallback transicional (`legacy`), con el mismo chequeo de vigencia por `query`. Criterio de
+> salida: hecho el backfill de producción de los tipeados abiertos, se borra esa lectura y una
+> migración nueva dropea la tabla y el SP.
 
 Síntoma: un pedido cargado a mano, o al que el operador le escribió la dirección, no tenía pin en el
 mapa de candidatos ni distancia a ningún taller. No era un bug de pintado: `location_source = 'typed'`

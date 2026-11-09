@@ -158,9 +158,11 @@ export function inferPedidoRubro(description: string): CoverageRubro {
  * primero. Se busca en localidad + dirección; si esas no tienen ni una letra,
  * en la descripción.
  *
- * No se usa el punto geocodificado de la 021 (`ops.quote_request_geocode`) a
- * propósito: los criterios de aceptación del spec salen de esta tabla, y mezclar
- * las dos fuentes daría otros números que el dashboard de referencia.
+ * No se usa ningún punto geocodificado —ni el del backend (`geocoded_*`, 0140)
+ * ni el viejo del panel (021)— a propósito: los criterios de aceptación del
+ * spec salen de esta tabla, y mezclar fuentes daría otros números que el
+ * dashboard de referencia. La localidad que se mira es la CRUDA del listado
+ * (`location_locality`), no la que completa el geocode.
  */
 const LUGARES: Array<{ pat: RegExp; nombre: string; lat: number; lng: number }> = [
   { pat: /benavidez/, nombre: 'Benavidez', lat: -34.413, lng: -58.686 },

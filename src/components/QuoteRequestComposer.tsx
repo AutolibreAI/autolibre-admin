@@ -79,6 +79,8 @@ export function QuoteRequestComposer() {
   const [pickingUser, setPickingUser] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Vive afuera del panel: el pedido ya se creó y el panel se cerró.
+  const [geocodeWarning, setGeocodeWarning] = useState<string | null>(null)
 
   const inFlight = useRef(false)
 
@@ -116,6 +118,7 @@ export function QuoteRequestComposer() {
     inFlight.current = true
     setBusy(true)
     setError(null)
+    setGeocodeWarning(null)
 
     try {
       const amount = declaredAmount.trim() === '' ? undefined : Number(declaredAmount)
@@ -149,6 +152,13 @@ export function QuoteRequestComposer() {
       // igual. `inFlight` sigue trabado hasta el `finally`, y para entonces el
       // panel ya no está.
       handleOpenChange(false)
+      // Con zona tipeada, el backend la geocodifica sólo si el panel se lo pide
+      // (POST …/geocode). Si ese pedido falló, el alta igual quedó: se avisa.
+      if (created.geocodeRequested === false) {
+        setGeocodeWarning(
+          `AL-${created.publicNumber} creado, pero no se pudo pedir la geocodificación; usá «Geocodificar» en la ficha.`,
+        )
+      }
       void router.invalidate()
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : String(cause)
@@ -160,6 +170,12 @@ export function QuoteRequestComposer() {
   }
 
   return (
+    <div className="flex flex-col items-end gap-1">
+    {geocodeWarning ? (
+      <p role="status" className="max-w-xs text-right text-xs leading-relaxed text-status-yellow">
+        {geocodeWarning}
+      </p>
+    ) : null}
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetTrigger asChild>
         <Button size="sm" className="gap-1.5">
@@ -467,5 +483,6 @@ export function QuoteRequestComposer() {
         </form>
       </SheetContent>
     </Sheet>
+    </div>
   )
 }
