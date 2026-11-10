@@ -1333,6 +1333,23 @@ Sin vehículo vinculado, la lista y el tablero muestran el **vehículo escrito**
 El filtro «todos, menos duplicados» es el chip «Todos» de Estado: los cerrados
 como `duplicate` sólo entran con «Incluir duplicados / prueba».
 
+### Filtro «Propuestas» (slider de 0 a 5) — desde el 2026-11-10
+
+`quoteMaxProposals` (0..5, `QUOTE_MAX_PROPOSALS_FILTER`): pedidos con N
+propuestas ACTIVAS **o menos** — el mismo número que la columna «Propuestas»
+(`response_count`, sin las retiradas). `0` = sin propuestas; ausente = sin
+filtro («Todas»). Es `<=` y no `<` a propósito: con `<`, la punta 0 del slider
+no traería nada. Aplica a la lista y al tablero (mismo loader).
+
+- Va en el `where` de AFUERA (`response_count` es un alias del SELECT interno).
+- **Sólo con 0120–0122**: sin ellas `response_count` es NULL para todos y el
+  filtro vaciaría la lista. El repo lo ignora y la pantalla no muestra el
+  slider (`proposalsAvailable` viaja en el resultado de `listQuoteRequestsFn`).
+- El slider escribe la URL 300 ms después del último movimiento: cada cambio
+  de URL relanza el loader.
+- Cuadre (producción, 2026-11-10): 82 con 0 · 13 con 1 · 24 con 2 · 23 con 3
+  = 142 pedidos reales; el slider en 0 da 82 y en 2 da 119.
+
 ### Cambios del 2026-10-03
 
 - **Contacto y cuenta, una sola columna.** La cuenta de AutoLibre es un renglón

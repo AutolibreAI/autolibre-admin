@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { Camera, Columns3, List } from 'lucide-react'
 import {
+  QUOTE_MAX_PROPOSALS_FILTER,
   QUOTE_REQUEST_CHANNELS,
   QUOTE_REQUEST_OUTCOMES,
   QUOTE_REQUEST_STATUSES,
@@ -116,7 +118,7 @@ function Pedidos() {
     )
   }
 
-  const { rows, summary } = result
+  const { rows, summary, proposalsAvailable } = result
 
   // `resetScroll: false`: tocar un chip no tiene por qué mandarte al tope — mismo
   // arreglo que `partners.cobertura.tsx`.
@@ -130,7 +132,8 @@ function Pedidos() {
     search.quoteChannel !== 'all' ||
     search.quoteOutcome !== 'all' ||
     search.quoteUncontacted ||
-    search.quoteShowDuplicates
+    search.quoteShowDuplicates ||
+    (proposalsAvailable && search.quoteMaxProposals !== undefined)
 
   return (
     <>
@@ -255,6 +258,18 @@ function Pedidos() {
             Sin contactar &gt; {QUOTE_UNCONTACTED_AFTER_HOURS} h
           </Chip>
         </FilterGroup>
+
+        {/*
+          Sin 0120–0122 del backend no se sabe cuántas propuestas tiene cada
+          pedido (la columna sale «—»): el slider no se ofrece, y el servidor
+          ignora el parámetro si llega por URL.
+        */}
+        {proposalsAvailable ? (
+          <ProposalsFilter
+            value={search.quoteMaxProposals}
+            onChange={(quoteMaxProposals) => setSearch({ quoteMaxProposals })}
+          />
+        ) : null}
 
         {/*
           Los cerrados como `duplicate` son duplicados de verdad Y pedidos de
@@ -543,5 +558,77 @@ function QuoteRow({ row }: { row: QuoteRequestListItem }) {
         {row.noteCount === 0 ? <Muted>0</Muted> : formatInt(row.noteCount)}
       </TableCell>
     </TableRow>
+  )
+}
+
+const proposalsFilterLabel = (n: number) => (n === 0 ? 'Sin propuestas' : n === 1 ? '1 o menos' : `${n} o menos`)
+
+/**
+ * Filtro «Propuestas»: pedidos con N propuestas ACTIVAS o menos, N de 0 a 5
+ * (`quoteMaxProposals`). Cuenta lo mismo que la columna «Propuestas»: las que
+ * ve la persona en la app, sin las retiradas.
+ *
+ * El slider vive en estado local mientras se arrastra y recién escribe la URL
+ * 300 ms después de soltarlo: cada cambio de URL relanza el loader, y arrastrar
+ * de 5 a 0 dispararía cinco consultas. «Todas» (o la X del grupo) saca el filtro.
+ */
+function ProposalsFilter({
+  value,
+  onChange,
+}: {
+  value: number | undefined
+  onChange: (next: number | undefined) => void
+}) {
+  const [draft, setDraft] = useState<number>(value ?? QUOTE_MAX_PROPOSALS_FILTER)
+  const timer = useRef<number | undefined>(undefined)
+
+  // La URL manda: un link pegado, «Todas» o el botón atrás resincronizan el slider.
+  useEffect(() => setDraft(value ?? QUOTE_MAX_PROPOSALS_FILTER), [value])
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  const active = value !== undefined
+  const touched = active || draft !== QUOTE_MAX_PROPOSALS_FILTER
+  const steps = Array.from({ length: QUOTE_MAX_PROPOSALS_FILTER + 1 }, (_, i) => i)
+
+  const move = (n: number) => {
+    setDraft(n)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => onChange(n), 300)
+  }
+  const clear = () => {
+    window.clearTimeout(timer.current)
+    setDraft(QUOTE_MAX_PROPOSALS_FILTER)
+    onChange(undefined)
+  }
+
+  return (
+    <FilterGroup label="Propuestas" onClear={active ? clear : undefined}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Chip active={!active} onClick={clear}>
+          Todas
+        </Chip>
+        <div className="w-44">
+          <input
+            type="range"
+            min={0}
+            max={QUOTE_MAX_PROPOSALS_FILTER}
+            step={1}
+            value={draft}
+            onChange={(e) => move(Number(e.currentTarget.value))}
+            aria-label="Pedidos con esta cantidad de propuestas o menos"
+            aria-valuetext={touched ? proposalsFilterLabel(draft) : 'Todas'}
+            className={cn('block w-full cursor-pointer accent-action', !touched && 'opacity-50')}
+          />
+          <div aria-hidden className="mt-0.5 flex justify-between px-0.5 text-[10px] tabular-nums text-muted-foreground">
+            {steps.map((n) => (
+              <span key={n}>{n}</span>
+            ))}
+          </div>
+        </div>
+        <span className={cn('min-w-28 text-sm tabular-nums', touched ? 'font-medium text-foreground' : 'text-muted-foreground')}>
+          {touched ? proposalsFilterLabel(draft) : 'Todas'}
+        </span>
+      </div>
+    </FilterGroup>
   )
 }

@@ -32,6 +32,7 @@ import {
 } from '~/server/quote-requests.repo'
 import { classifyQuoteRequest, requestQuoteRequestGeocode } from '~/server/backend'
 import { requestSignal } from '~/server/request'
+import { quoteProposalsAvailability } from '~/server/quote-proposals.repo'
 import { adminMiddleware } from './middleware'
 import type {
   QuoteRequestDetailResult,
@@ -72,11 +73,12 @@ export const listQuoteRequestsFn = createServerFn({ method: 'GET' })
     const availability = await quoteRequestsAvailability({ signal })
     if (!availability.available) return { availability }
 
-    const [rows, summary] = await Promise.all([
+    const [rows, summary, proposalsAvailable] = await Promise.all([
       listQuoteRequests(data, { signal }),
       quoteRequestStatusSummary({ signal }),
+      quoteProposalsAvailability({ signal }),
     ])
-    return { availability, rows, summary }
+    return { availability, rows, summary, proposalsAvailable }
   })
 
 /**

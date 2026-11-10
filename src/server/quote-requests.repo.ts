@@ -584,7 +584,15 @@ export async function listQuoteRequests(
 
   if (!search.quoteShowDuplicates) where.push(NOT_DUPLICATE_PREDICATE)
 
-  const extra = await listExtraColumns()
+  const { columns: extra, proposalsAvailable } = await listExtraColumns()
+
+  // Propuestas activas: `response_count` es un alias del SELECT interno, así que
+  // va en el where de AFUERA. Sin 0120–0122 la columna es NULL para todos y el
+  // filtro vaciaría la lista: se ignora (la pantalla esconde el slider).
+  if (search.quoteMaxProposals !== undefined && proposalsAvailable) {
+    params.push(search.quoteMaxProposals)
+    where.push(`response_count <= $${params.length}`)
+  }
 
   const rows = await sql<ListRow>(
     `
@@ -617,7 +625,7 @@ export async function listQuoteRequests(
  * producción la tabla existe vieja, sin `withdrawn_at`, y un `to_regclass` solo
  * diría "disponible".
  */
-async function listExtraColumns(): Promise<string> {
+async function listExtraColumns(): Promise<{ columns: string; proposalsAvailable: boolean }> {
   const [row, proposalsAvailable] = await Promise.all([
     sqlOne<{ has_text: boolean; has_files: boolean }>(
       `select to_regclass('ops.quote_request_vehicle_text') is not null as has_text,
@@ -637,12 +645,15 @@ async function listExtraColumns(): Promise<string> {
   const photoCount = row?.has_files
     ? `(select count(*)::int from quote_request_files qf where qf.quote_request_id = qr.id)`
     : `null::int`
-  return `,
+  return {
+    proposalsAvailable,
+    columns: `,
   ${photoCount} as photo_count,
   qr.location_address,
   qr.location_locality,
   ${vehicleText} as vehicle_text,
-  ${responseCount} as response_count`
+  ${responseCount} as response_count`,
+  }
 }
 
 // ── Resumen ─────────────────────────────────────────────────────────────────

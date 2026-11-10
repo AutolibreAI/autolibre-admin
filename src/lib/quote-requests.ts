@@ -300,6 +300,13 @@ export type QuoteSortKey = (typeof QUOTE_SORT_KEYS)[number]
 export const QUOTE_VIEWS = ['lista', 'tablero'] as const
 export type QuoteView = (typeof QUOTE_VIEWS)[number]
 
+/**
+ * Tope del slider «Propuestas» de `/leads/pedidos`. Un pedido tiene como mucho 3
+ * propuestas ACTIVAS a la vez (el backend asigna los lugares 1..3), así que 5 ya
+ * abarca todo; el pedido de producto (2026-11-10) fue un slider de 0 a 5.
+ */
+export const QUOTE_MAX_PROPOSALS_FILTER = 5
+
 export const quoteRequestSearchSchema = z.object({
   quoteView: z.enum(QUOTE_VIEWS).catch('lista').default('lista'),
   /** Código `AL-n`, patente, teléfono, email, nombre, descripción o email de la cuenta. */
@@ -315,6 +322,14 @@ export const quoteRequestSearchSchema = z.object({
    * que el operador tiene que poder encontrar, pero no pedidos reales.
    */
   quoteShowDuplicates: z.coerce.boolean().catch(false).default(false),
+  /**
+   * Pedidos con N propuestas ACTIVAS o menos (las que ve la persona en la app;
+   * las retiradas no cuentan). Ausente = sin filtro; `0` = sin propuestas. Un
+   * valor fuera de 0..5 en la URL se descarta (sin filtro), no rompe la pantalla.
+   * Sólo aplica con 0120–0122 del backend: sin ellas no se sabe cuántas hay, y
+   * el servidor lo ignora en vez de vaciar la lista.
+   */
+  quoteMaxProposals: z.coerce.number().int().min(0).max(QUOTE_MAX_PROPOSALS_FILTER).optional().catch(undefined),
   /**
    * `createdAt desc` por default: el más nuevo primero — pedido explícito del
    * 2026-09-15, así que lo que acaba de entrar es lo primero que se ve al
@@ -988,6 +1003,8 @@ export type QuoteRequestsListResult =
       availability: { available: true }
       rows: Array<QuoteRequestListItem>
       summary: QuoteRequestStatusSummary
+      /** 0120–0122 aplicadas: sin eso no hay conteo de propuestas ni slider. */
+      proposalsAvailable: boolean
     }
 
 export type QuoteRequestDetailResult =
