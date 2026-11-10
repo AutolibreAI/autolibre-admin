@@ -648,6 +648,10 @@ export interface CantMeasureItem {
  * criterio que la medición de tokens de IA (`ai-costs.md`) y los clicks de
  * WhatsApp a partners (`leads.md`).
  *
+ * "Cuántas veces abre la app cada persona, y qué días" SALIÓ el 2026-11-10:
+ * lo mide PostHog, en la pestaña Métricas › Uso y retención (DAU, WAU,
+ * retención, stickiness), sin tabla propia.
+ *
  * "Pedidos con/sin presupuesto y tiempo de entrega" SALIÓ de esta lista el
  * 2026-09-23: la sección Pedidos de acá abajo lo mide, aunque aproximado (el
  * "tiempo de entrega" es hasta `answered_at`, no hasta el envío real por
@@ -668,11 +672,6 @@ export const CANT_MEASURE_YET: ReadonlyArray<CantMeasureItem> = [
     question: 'Pedidos y búsqueda de proveedores desde el chat',
     why: '`assistant_proposal_type` tiene un solo valor: `maintenance`.',
     needs: 'Un valor nuevo en el enum del backend.',
-  },
-  {
-    question: 'Cuántas veces abre la app cada persona, y qué días',
-    why: 'Ninguna tabla registra una apertura. El refresh del token push (`expo_push_tokens.updated_at`) se acerca, pero guarda sólo la última por teléfono: el gráfico «Usuarios activos» es exacto para hoy y un piso para los días viejos.',
-    needs: 'Que la app informe cada apertura y el backend la guarde append-only (por ejemplo, `app_opens(user_id, opened_at, platform, app_version)`).',
   },
 ]
 

@@ -1,5 +1,10 @@
 # Pedido al backend: usuarios activos por aperturas de la app (2026-11-03)
 
+> **Sin efecto desde el 2026-11-10.** Las aperturas se miden con PostHog y se ven en Métricas ›
+> «Uso y retención» (tablero embebido, sin tabla propia). La sección de ejemplo «Aperturas de la
+> app» se sacó del panel. Lo de abajo queda como registro; sólo volvería a hacer falta para cruzar
+> aperturas con datos de Postgres.
+
 De: panel de administración (`autolibre-admin`). Para: Ramiro (backend hex) y quien tenga la app
 mobile.
 

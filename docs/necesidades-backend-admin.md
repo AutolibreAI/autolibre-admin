@@ -10,7 +10,7 @@ Trello, con el título exacto de la tarjeta.
 > `pedido-backend-estudio-proveedores.md` (incluye la migración de presupuestos) ·
 > `pedido-backend-cierre-y-disputas.md` · `pedido-backend-sellos.md` ·
 > `pedido-backend-plan-proveedor.md` · `pedido-backend-aperturas.md` ·
-> `pedido-backend-cambios-normativos.md` · `pedido-backend-rol-comercial.md` (nuevo: el panel no
+> `pedido-backend-cambios-normativos.md` · `pedido-backend-posthog.md` (nuevo 10/11: los tres eventos para PostHog) · `pedido-backend-rol-comercial.md` (nuevo: el panel no
 > tiene un rol restringido) · `pedido-backend-cobertura.md` (sin cambios, sigue vigente).
 > Donde este archivo y esos difieran, mandan esos: son posteriores.
 >
@@ -220,7 +220,16 @@ existentes a un partner, ya auditado), `getServiceCatalog`.
 
 ## Medir usuarios activos reales (aperturas de la app)
 
-**Estado del front:** Hecho contra mock (la nota sobre la métrica actual es real; la sección de
+**Estado del front:** **Resuelta el 2026-11-10 con PostHog**, sin tabla propia: la pestaña
+Métricas › «Uso y retención» (`/metricas/uso`) embebe el tablero «Mobile — Uso y retención» (DAU y
+WAU por apertura, retención, stickiness). «Activo» ahí es «abrió la app ese día», y la pestaña lo
+distingue del gráfico «Usuarios activos» de Resumen (acciones guardadas). Lo de abajo es el
+pedido original: `app_opens`, los endpoints y la decisión quedan sin efecto salvo que se quiera
+cruzar aperturas con datos de Postgres. La sección de ejemplo «Aperturas de la app» se sacó de
+Resumen el mismo día (era el mismo contenido que la pestaña, con datos inventados), junto con
+`src/lib/app-opens.ts` y `src/mocks/app-opens.ts`.
+
+**Estado anterior:** Hecho contra mock (la nota sobre la métrica actual es real; la sección de
 aperturas es de ejemplo).
 
 **Qué hiciste:** En `/metricas`, arriba del gráfico de activos, un aviso ámbar: "Esto no son
@@ -757,6 +766,72 @@ qué):
 
 ---
 
+## PostHog: evento de pago confirmado del plan de proveedor (`plan_payment_succeeded`)
+
+**Estado del front:** No arrancado (no hay nada que mostrar en el panel: es un evento a PostHog).
+
+**Qué hiciste:** Nada en código. Se registra el pedido el 2026-11-10, junto con los tableros de
+PostHog embebidos en Métricas (`/metricas/demanda`). → `pedido-backend-posthog.md`
+
+**Necesidades de backend:**
+
+- [ ] **evento** — `plan_payment_succeeded`, enviado a PostHog desde el **webhook de cobro**
+  (cuando el proveedor de pagos confirma el pago, no cuando se redirige al checkout), con
+  `provider_id` (el id del partner), `plan` (`plus` | `plus_max`), `amount` y `currency`.
+  `distinct_id` = el mismo que usa la app para la cuenta de esa persona (el `users.id`), para que
+  quede en la misma persona que el resto del embudo. **Bloquea el front: no** (bloquea el último
+  paso del embudo de planes pagos del tablero «Demanda y monetización», que hoy termina en el
+  redirect al checkout).
+
+**Dependencias:** "Admin: conteo mensual de propuestas por proveedor + tope por plan" (el plan).
+
+**Preguntas abiertas:** ¿Se manda también el fallido / reembolsado, o sólo el confirmado?
+
+---
+
+## PostHog: evento de propuesta enviada desde el servidor (`proposal_sent`)
+
+**Estado del front:** No arrancado (evento a PostHog, sin pantalla en el panel).
+
+**Qué hiciste:** Nada en código. Registrado el 2026-11-10. → `pedido-backend-posthog.md`
+
+**Necesidades de backend:**
+
+- [ ] **evento** — `proposal_sent`, emitido por el **servidor** cuando una propuesta queda
+  publicada para la persona (el envío de `POST /admin/quote-requests/:id/proposal-sends`, y el
+  camino del proveedor cuando exista), con `provider_id`, `quote_request_id`, `channel` (`app` |
+  `whatsapp` | `web`, el canal del pedido) y `minutes_to_response` (minutos entre la creación del
+  pedido y el envío). Hoy el lado del proveedor no deja rastro en PostHog. **Bloquea el front: no.**
+
+**Dependencias:** "Panel admin: estudio de proveedores…" (tiempos de respuesta por proveedor).
+
+**Preguntas abiertas:** `distinct_id` del evento: ¿el usuario dueño del pedido (para unirlo a su
+embudo) o el del proveedor? Sugerencia: el del dueño del pedido, con `provider_id` como propiedad.
+
+---
+
+## PostHog: incluir el id del envío en el contenido de cada push (`notification_sends`)
+
+**Estado del front:** No arrancado (lo usa la app mobile, no el panel).
+
+**Qué hiciste:** Nada en código. Registrado el 2026-11-10. → `pedido-backend-posthog.md`
+
+**Necesidades de backend:**
+
+- [ ] **tabla o columna** — en el `data` de cada push que manda el backend, sumar el id de la fila
+  de `notification_sends` que lo originó (`notificationSendId`), además del id de la notificación.
+  La app lo reporta en el evento nuevo `push_opened` (`notification_id`) al tocar el aviso.
+  **Bloquea el front: no** (bloquea cruzar aperturas de PostHog con la pantalla de efecto de
+  notificaciones).
+
+**Dependencias:** "Configurar notificaciones desde el admin…" (registro de envíos,
+`notification_sends`) y "Panel admin: medir el efecto de cada notificación…".
+
+**Preguntas abiertas:** Para los avisos automáticos que no salen de `notification_sends`
+(vencimientos), ¿alcanza con el id de `notifications`?
+
+---
+
 ## 1. Tabla resumen
 
 | Tarjeta | Necesidad | Tipo | Bloquea front | Prioridad sugerida |
@@ -805,6 +880,9 @@ qué):
 | Configurar notificaciones | `targetAction` en el envío puntual y en las reglas (ampliado 06/11) | tabla o columna | no (mock) | **P0** |
 | Taller de cabecera | crear y deshabilitar códigos de referido desde el admin | endpoint de escritura | no | P2 |
 | Métricas › Pedidos | propuestas por pedido y red vs. afuera desde `quote_request_proposals` | endpoint de lectura | no (cartel) | P2 |
+| PostHog: pago confirmado | `plan_payment_succeeded` desde el webhook de cobro | evento | no | P1 |
+| PostHog: propuesta enviada | `proposal_sent` desde el servidor | evento | no | P2 |
+| PostHog: id del envío en el push | `notificationSendId` en el `data` del push | tabla o columna | no | P1 |
 
 ## 2. Solapamientos
 

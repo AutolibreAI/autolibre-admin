@@ -1,6 +1,7 @@
 # Métricas (`/metricas`, antes `/graficos`)
 
-Alcance: `src/routes/_authed/metricas.tsx`, `src/components/PulseCards.tsx`,
+Alcance: `src/routes/_authed/metricas.index.tsx` (la pestaña Resumen; desde el 2026-11-10
+`metricas.tsx` es el layout de pestañas, ver "Tableros de PostHog" al final), `src/components/PulseCards.tsx`,
 `src/components/GrowthChart.tsx`, `src/lib/ops.ts` (`ADOPTION_FEATURES`,
 `UsageAdoption`, `VehicleDebtAdoption`, `ScanRecurrence`, `ProposalStats`,
 `UnsolvedTasks`, `CANT_MEASURE_YET`, `METRICS_TZ`,
@@ -508,3 +509,54 @@ vehículo, recurrencia de escaneo, qué produce el chat, tareas sin solución, l
 y vehículos por usuario. `VehicleLocationSection` ya no trae título propio: lo pone el desplegable.
 
 Un bloque nuevo de tabla va adentro de «Más métricas» como `MetricBlock`, no como sección suelta.
+
+## Tableros de PostHog — desde el 2026-11-10
+
+`/metricas` pasó a ser un layout de pestañas (`metricas.tsx`, mismo patrón que `/conocimiento`):
+**Resumen** es la pantalla de siempre (`metricas.index.tsx`, la URL no cambió) y le siguen cinco
+pestañas con un tablero de PostHog embebido cada una: `metricas.uso.tsx` · `metricas.activacion.tsx`
+· `metricas.pedidos.tsx` · `metricas.diagnostico.tsx` · `metricas.demanda.tsx`. Alcance:
+`src/lib/posthog-dashboards.ts`, `src/server/posthog-embeds.ts`, `src/fn/posthog-embeds.ts`,
+`src/components/PosthogEmbed.tsx`.
+
+- **La URL para embeber es un link PÚBLICO** (quien la tenga ve el tablero sin login). Vive en
+  variables del SERVIDOR, `POSTHOG_EMBED_USO` / `_ACTIVACION` / `_PEDIDOS` / `_DIAGNOSTICO` /
+  `_DEMANDA`, **sin prefijo `VITE_`**: con `VITE_` Vite la escribe en el JavaScript del cliente, que
+  se sirve sin login. La entrega `getPosthogEmbedFn` con `adminMiddleware`, y se lee en cada llamada
+  (no en scope de módulo, mismo criterio que `db.ts`). Chequeo después de tocar esto: ningún código
+  de tablero en `.output/public` (el texto `posthog.com/embedded` sí aparece: es el aviso).
+- **Sin URL, o con una que no es `https://us.posthog.com/embedded|shared/<código>`**, la pestaña
+  dice «Falta configurar este tablero» y nombra la variable; nunca un iframe roto. Las demás
+  pestañas no dependen de eso.
+- **Cada tablero es una ruta**, así el iframe se carga recién al abrir su pestaña. `ssr:
+  'data-only'`: un iframe en el HTML del servidor puede cargar antes de hidratar y su `onLoad` no
+  llegaría nunca (el cartel de carga quedaría fijo).
+- **Sin doble scroll:** el iframe es de otro dominio y no se puede medir. Toma el alto que queda de
+  la ventana debajo de él (descontando lo que la página tenga abajo), así sólo scrollea el tablero.
+  `minHeight` (360) es el piso para ventanas bajas.
+- **«Abrir en PostHog»** va al tablero DENTRO de PostHog (`/project/607170/dashboard/<id>`), que
+  pide login de PostHog: ese link sí va en el código.
+- **«Activo» en Uso y retención es por APERTURA** (PostHog) y el gráfico «Usuarios activos» de
+  Resumen es por ACCIONES guardadas en Postgres (`activeUsersSeries`). Son dos definiciones: la
+  pestaña lo dice arriba del tablero y no se suman ni se comparan.
+- Los tableros los arma el equipo en PostHog y ya excluyen las cuentas internas; el panel no los
+  crea ni los toca. Relevado el 2026-11-10: los cinco `/embedded/` responden 200, sin
+  `X-Frame-Options` ni `frame-ancestors`, y lo que publican no tiene emails, teléfonos ni patentes
+  (sólo agregados).
+- Los pedidos al backend que completan estos tableros: `docs/pedido-backend-posthog.md`.
+
+### Qué se sacó de Resumen por repetido, y qué NO
+
+El 2026-11-10 se compararon los 33 gráficos de los cinco tableros contra Resumen. Se sacó lo que
+PostHog ya muestra:
+
+- **«Aperturas de la app»** (`AppOpensSection`, `~/lib/app-opens`, `~/mocks/app-opens`): DAU / WAU /
+  MAU, stickiness, retención y aperturas con valor, contra datos de ejemplo. Es Uso y retención.
+- **La fila «Cuántas veces abre la app cada persona»** de `CANT_MEASURE_YET`: ya se mide.
+
+Se queda, aunque se parezca a un gráfico de PostHog, porque sale de la base y PostHog no lo tiene
+igual: las altas por período (PostHog cuenta INSTALACIONES, y la instalación no queda unida a la
+cuenta), «Usuarios activos» por acciones (otra definición, se aclara en los dos lados), las altas
+con vehículo en el mismo proceso (PostHog tiene la conversión del embudo, no el corte de 10 min
+por período), Pedidos (el lado del operador) y todo «Más métricas». Si se saca algo más, que sea
+con el mismo criterio: repetido = la misma pregunta con la misma definición.
