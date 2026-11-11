@@ -1390,3 +1390,43 @@ la carrera (una corrección de ubicación hecha en el medio no se pisa) y la
 integración con el SQL exacto del repo (`PREPARE` sin tipos). **No corrida en
 DEV ni aplicada en ninguna base**: la aplica el `vercel-build` del próximo deploy
 de `main`.
+
+---
+
+# Migración 029 — modalidad de atención y mensaje de WhatsApp del partner
+
+Alcance: `migrations/029_ops_partner_modalidad_y_mensaje.sql` y su `.test.sql`,
+`setPartnerModality` + el `whatsappMessage` de `setPartnerContact` en
+`src/server/partners.repo.ts`, `setPartnerModalityFn` en `src/fn/partners.ts`,
+`PARTNER_MODALITIES` / `setPartnerModalitySchema` en `src/lib/catalog.ts`, y
+`ModalityCard` + el campo nuevo de `ContactCard` en `src/components/PartnerFicha.tsx`.
+
+Relevado el 2026-11-11 contra `public.partners`: lo único editable que le faltaba a la ficha era
+`modality` y `whatsapp_message`. El `grep` al backend (4a1f216) dio negativo para los dos: los
+únicos `.update(partners)` son el logo, el consentimiento de WhatsApp y la aprobación.
+
+- **`ops.set_partner_modality`, SP propio** (no adentro del perfil): cambia a qué pedidos se lo
+  ofrece y cómo lo ve la gente. Texto libre en la base; el SP sólo recorta, `''` borra y topa en 60
+  (`MODALITY_TOO_LONG`). La LISTA la impone el formulario: `PARTNER_MODALITIES` = los cuatro valores
+  que ya hay ('Taller fijo', 'A domicilio', 'Mixto', 'A distancia'), los mismos que leen
+  `isRemoteModality` y el mapa de cobertura. **No inventes una forma nueva** ('ambas', 'en_local'):
+  esas dos pantallas dejarían de reconocerla. Guardar sin cambios no loguea.
+- **`ops.set_partner_contact` suma `p_whatsapp_message`**: DROP con la firma exacta de la 007 +
+  CREATE (trampa de la 009), el parámetro al final con DEFAULT NULL = "no tocar". Tope 1000
+  (`WHATSAPP_MESSAGE_TOO_LONG`), el mismo del editor de la solicitud.
+- **Sin la 029** la ficha no ofrece los dos campos (`canEditModalityAndMessage`, por
+  `to_regprocedure` en la lectura) y el repo NO nombra `p_whatsapp_message`: nombrarlo en una base
+  sin la 029 rompería el guardado de contacto entero.
+- `whatsapp_message` y `whatsapp_opted_out_at` se leen por `to_jsonb(p) ->> …`, no por columna:
+  una base sin esas columnas del backend da NULL en vez de tirar la ficha.
+- **Lo que no se edita, a propósito**: `whatsapp_opt_in_at` / `whatsapp_opted_out_at` (consentimiento,
+  lo escribe el backend con la palabra BAJA; la ficha muestra la baja en ámbar), `source`,
+  `application_id`, `legacy_sheet_row_id`, `created_at` (de dónde vino la fila) y `updated_at`.
+- ⚠ **El perfil público del backend no entiende 'Mixto'**: `DrizzlePartnerProfileReader` sólo
+  reconoce `'ambas'` (→ local y domicilio) y `'a domicilio'`; 'Mixto' con dirección sale como "en
+  local". Es del backend (un `case` más ahí), no se arregla escribiendo otro valor desde acá.
+
+**Cómo se probó**: PGlite con `users`/`partners` copiados de producción, el trigger de
+`updated_at` y la 007. Rojo sin la 029 (aborta: la función no existe), **27/27** con ella, incluida
+la integración con el SQL exacto del repo por `PREPARE` sin tipos. No corrida en DEV ni aplicada en
+ninguna base: la aplica el `vercel-build` del próximo deploy de `main`.

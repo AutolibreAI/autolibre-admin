@@ -17,6 +17,7 @@ import {
   setPartnerLinksFn,
   setPartnerLocationFn,
   setPartnerLogoFn,
+  setPartnerModalityFn,
   setPartnerProfileFn,
   setPartnerStatusFn,
 } from '~/fn/partners'
@@ -29,12 +30,15 @@ import {
   DESCRIPTION_IDEAL_LENGTH,
   DESCRIPTION_MAX_LENGTH,
   PARTNER_LINK_LABELS,
+  PARTNER_MODALITIES,
+  PARTNER_MODALITY_LABELS,
   PARTNER_STATUSES,
   PARTNER_STATUS_LABELS,
   PARTNER_TIER_LABELS,
   PARTNER_TIERS,
   SINGLE_LINK_KINDS,
   isMapsUrl,
+  type PartnerModality,
   type PartnerServicesView,
   type PartnerStatus,
   type PartnerTier,
@@ -47,6 +51,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
 import { cn } from '~/lib/utils'
+import { formatDate } from '~/lib/format'
 import type { PartnerPlansResult } from '~/lib/partner-plans'
 
 type Partner = PartnerServicesView['partner']
@@ -92,6 +97,7 @@ export function PartnerFicha({ partner, plans }: { partner: Partner; plans: Part
       <PartnerPlanCard partnerId={partner.id} tier={partner.tier} result={plans} />
       <LogoCard partner={partner} />
       <LocationCard partner={partner} />
+      <ModalityCard partner={partner} />
       <ContactCard partner={partner} />
       <LinksCard partner={partner} />
     </div>
@@ -134,6 +140,12 @@ function readableError(cause: unknown): string {
       ? `Tipo de link desconocido: ${kinds}. Recargá la pantalla.`
       : 'Uno de los links tiene un tipo que la base no conoce. Recargá la pantalla.'
   }
+  // ── Migración 029 ──
+  if (raw.includes('MODALITY_TOO_LONG')) return 'La modalidad es una etiqueta corta; elegí una de la lista.'
+  if (raw.includes('WHATSAPP_MESSAGE_TOO_LONG'))
+    return 'El mensaje de WhatsApp admite hasta 1000 caracteres.'
+  if (raw.includes('set_partner_modality') && raw.includes('does not exist'))
+    return 'Falta aplicar la migración 029 en esta base.'
   if (raw.includes('ACTOR_NOT_FOUND') || raw.includes('ACTOR_REQUIRED'))
     return 'Tu sesión no corresponde a un usuario de AutoLibre. Volvé a iniciar sesión.'
   if (raw === 'FORBIDDEN') return 'Tu rol no tiene permiso para esta acción.'
@@ -551,6 +563,94 @@ function LocationCard({ partner }: { partner: Partner }) {
   )
 }
 
+// ── Modalidad ────────────────────────────────────────────────────────────────
+
+/**
+ * Si atiende en su local, a domicilio, las dos, o a distancia — migración 029.
+ *
+ * Elige de `PARTNER_MODALITIES` (los valores que ya hay en la base y que leen
+ * los candidatos de un pedido y el mapa de cobertura), más «Sin dato». Un valor
+ * que la lista no conoce se muestra crudo y no se pisa hasta que alguien elija
+ * otro y guarde.
+ */
+function ModalityCard({ partner }: { partner: Partner }) {
+  const { busy, error, saved, run } = useAction()
+  const current = partner.modality?.trim() ?? ''
+  const known = PARTNER_MODALITIES.includes(current as PartnerModality)
+  const [modality, setModality] = useState<PartnerModality | '' | null>(
+    current === '' ? '' : known ? (current as PartnerModality) : null,
+  )
+
+  const options: Array<{ value: PartnerModality | ''; label: string }> = [
+    ...PARTNER_MODALITIES.map((m) => ({ value: m, label: PARTNER_MODALITY_LABELS[m] })),
+    { value: '', label: 'Sin dato' },
+  ]
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Cómo atiende</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!partner.canEditModalityAndMessage ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Hoy: <span className="text-foreground">{current || 'sin dato'}</span>. Para editarlo
+            falta aplicar la migración 029 en esta base.
+          </p>
+        ) : (
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (modality === null) return
+              void run(() =>
+                setPartnerModalityFn({ data: { partnerId: partner.id, modality } }),
+              )
+            }}
+          >
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Modalidad de atención">
+              {options.map((o) => (
+                <button
+                  key={o.value || 'none'}
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={modality === o.value}
+                  onClick={() => setModality(o.value)}
+                  className={cn(
+                    'rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-50',
+                    modality === o.value
+                      ? 'border-transparent bg-primary text-primary-foreground'
+                      : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground',
+                  )}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+
+            {!known && current !== '' ? (
+              <p className="text-xs leading-relaxed text-status-yellow">
+                Tiene cargado «{current}», que no es ninguno de estos. Queda así hasta que elijas
+                uno y guardes.
+              </p>
+            ) : null}
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              «A domicilio» y «A distancia» se le ofrecen a un pedido sin importar la distancia
+              (van en un bloque aparte de los candidatos).
+            </p>
+
+            <Button type="submit" size="sm" disabled={busy || modality === null} className="gap-1.5">
+              <Save className="size-3.5" aria-hidden />
+              {busy ? 'Guardando…' : 'Guardar modalidad'}
+            </Button>
+          </form>
+        )}
+        <Feedback error={error} saved={saved} />
+      </CardContent>
+    </Card>
+  )
+}
+
 // ── Contacto ─────────────────────────────────────────────────────────────────
 
 function ContactCard({ partner }: { partner: Partner }) {
@@ -562,6 +662,9 @@ function ContactCard({ partner }: { partner: Partner }) {
     hours: partner.hours ?? '',
     address: partner.address ?? '',
   })
+  // Migración 029. Va aparte del resto del form porque sólo viaja si la base la
+  // tiene: sin ella, el repo no nombra el parámetro y el mensaje no se toca.
+  const [whatsappMessage, setWhatsappMessage] = useState(partner.whatsappMessage ?? '')
 
   const reachable =
     form.whatsapp.trim() !== '' || form.email.trim() !== '' || form.redirectLink.trim() !== ''
@@ -600,7 +703,15 @@ function ContactCard({ partner }: { partner: Partner }) {
           className="space-y-2"
           onSubmit={(e) => {
             e.preventDefault()
-            void run(() => setPartnerContactFn({ data: { partnerId: partner.id, ...form } }))
+            void run(() =>
+              setPartnerContactFn({
+                data: {
+                  partnerId: partner.id,
+                  ...form,
+                  ...(partner.canEditModalityAndMessage ? { whatsappMessage } : {}),
+                },
+              }),
+            )
           }}
         >
           {(
@@ -626,6 +737,48 @@ function ContactCard({ partner }: { partner: Partner }) {
               />
             </div>
           ))}
+
+          {partner.canEditModalityAndMessage ? (
+            <div className="space-y-1">
+              <label htmlFor="whatsappMessage" className="block text-xs text-muted-foreground">
+                Mensaje de WhatsApp
+              </label>
+              <Textarea
+                id="whatsappMessage"
+                value={whatsappMessage}
+                onChange={(e) => {
+                  // El valor se lee ANTES del setter: ver el comentario de `set`.
+                  const value = e.currentTarget.value
+                  setWhatsappMessage(value)
+                }}
+                maxLength={1000}
+                rows={3}
+                placeholder="Hola, te escribo desde AutoLibre…"
+                className="text-xs"
+              />
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                El texto que le aparece escrito a la persona cuando toca «escribir por WhatsApp» en
+                la app o en el perfil.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Para editar el mensaje de WhatsApp falta aplicar la migración 029 en esta base.
+            </p>
+          )}
+
+          {/*
+            Sólo lectura: es CONSENTIMIENTO. Lo escribe el backend cuando el
+            taller responde BAJA, y lo saca de los WhatsApp que manda AutoLibre
+            (despacho de pedidos). Un admin no da de alta ni de baja por él.
+          */}
+          {partner.whatsappOptedOutAt ? (
+            <p className="text-xs leading-relaxed text-status-yellow">
+              Se dio de baja de los WhatsApp de AutoLibre el{' '}
+              {formatDate(partner.whatsappOptedOutAt)}: no le llegan pedidos por despacho. Esto lo
+              cambia sólo el taller.
+            </p>
+          ) : null}
 
           <Button type="submit" size="sm" disabled={busy} className="gap-1.5">
             <Save className="size-3.5" aria-hidden />

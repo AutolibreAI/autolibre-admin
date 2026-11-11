@@ -1047,6 +1047,10 @@ export async function getPartnerServices(
     name_collisions: number | string
     logo_url: string | null
     application_logo_url: string | null
+    modality: string | null
+    whatsapp_message: string | null
+    whatsapp_opted_out_at: string | null
+    ficha_029: boolean
   }>(
     /**
      * Los links vienen por SUBCONSULTA, no por `LEFT JOIN` + `group by`.
@@ -1069,6 +1073,15 @@ export async function getPartnerServices(
             p.whatsapp, p.email, p.redirect_link, p.hours, p.address,
             p.latitude, p.longitude,
             p.logo_url, a.raw_submission->>'logoUrl' AS application_logo_url,
+            p.modality,
+            -- Por to_jsonb y no por columna: el mensaje y la baja de WhatsApp
+            -- son columnas más nuevas del backend, y en una base que no las
+            -- tenga esto da NULL en vez de tirar la ficha entera.
+            to_jsonb(p) ->> 'whatsapp_message' AS whatsapp_message,
+            to_jsonb(p) ->> 'whatsapp_opted_out_at' AS whatsapp_opted_out_at,
+            -- Migración 029: sin ella la ficha no ofrece modalidad ni mensaje.
+            to_regprocedure('ops.set_partner_modality(uuid,uuid,text,text)') IS NOT NULL
+              AS ficha_029,
             (SELECT coalesce(
                       jsonb_agg(jsonb_build_object('kind', l.kind::text, 'url', l.url)
                                 ORDER BY l.kind::text, l.url),
@@ -1183,6 +1196,10 @@ export async function getPartnerServices(
       publicSlug: slugs.get(partner.id) ?? null,
       logoUrl: applicationLogoUrl(partner.logo_url),
       applicationLogoUrl: applicationLogoUrl(partner.application_logo_url),
+      modality: partner.modality,
+      whatsappMessage: partner.whatsapp_message,
+      whatsappOptedOutAt: partner.whatsapp_opted_out_at,
+      canEditModalityAndMessage: partner.ficha_029 === true,
     },
     families,
     assignedServiceIds: assigned.map((a) => a.service_id),
@@ -1365,11 +1382,30 @@ export async function setPartnerContact(
     redirectLink: string
     hours: string
     address: string
+    /** Migración 029. Ausente = no tocar (y la llamada no nombra el parámetro). */
+    whatsappMessage?: string
   },
   actorId: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<PartnerWriteResult> {
   void opts.signal
+
+  const params: Array<string | null> = [
+    input.partnerId,
+    actorId,
+    input.whatsapp,
+    input.email,
+    input.redirectLink,
+    input.hours,
+    input.address,
+  ]
+  // Sólo se nombra `p_whatsapp_message` si viene: una base sin la 029 no
+  // conoce el parámetro, y nombrarlo ahí sería "function does not exist" para
+  // el guardado de contacto entero, no sólo para el mensaje.
+  const message =
+    input.whatsappMessage === undefined
+      ? ''
+      : `,\n       p_whatsapp_message => $${params.push(input.whatsappMessage)}`
 
   const row = await sqlOne<{ p: PartnerJson }>(
     `SELECT ops.set_partner_contact(
@@ -1379,17 +1415,37 @@ export async function setPartnerContact(
        p_email         => $4,
        p_redirect_link => $5,
        p_hours         => $6,
-       p_address       => $7
+       p_address       => $7${message}
      ) AS p`,
-    [
-      input.partnerId,
-      actorId,
-      input.whatsapp,
-      input.email,
-      input.redirectLink,
-      input.hours,
-      input.address,
-    ],
+    params,
+  )
+  if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
+  return toWriteResult(row.p)
+}
+
+// ── Migración 029: modalidad de atención ─────────────────────────────────────
+
+/**
+ * Si atiende en su local, a domicilio, las dos, o a distancia. `''` borra.
+ *
+ * SP propio y no adentro del perfil: cambia a qué pedidos se lo ofrece (los
+ * remotos van aparte en `PartnerCandidates`) y cómo lo ve la gente en su perfil
+ * público. Guardar sin cambios no deja entrada en `ops.action_log`.
+ */
+export async function setPartnerModality(
+  input: { partnerId: string; modality: string },
+  actorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PartnerWriteResult> {
+  void opts.signal
+
+  const row = await sqlOne<{ p: PartnerJson }>(
+    `SELECT ops.set_partner_modality(
+       p_partner_id => $1,
+       p_actor_id   => $2,
+       p_modality   => $3
+     ) AS p`,
+    [input.partnerId, actorId, input.modality],
   )
   if (!row) throw new Error(`PARTNER_NOT_FOUND:${input.partnerId}`)
   return toWriteResult(row.p)

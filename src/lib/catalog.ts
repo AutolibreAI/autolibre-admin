@@ -124,6 +124,24 @@ export interface PartnerServicesView {
      * ve hoy, y quitar el logo cargado lo vuelve a mostrar.
      */
     applicationLogoUrl: string | null
+    /**
+     * `partners.modality`: texto libre. Los valores que existen en la base son
+     * los de `PARTNER_MODALITIES`; uno distinto se muestra crudo.
+     */
+    modality: string | null
+    /** El texto que se precarga al tocar "escribir por WhatsApp" (`partners.whatsapp_message`). */
+    whatsappMessage: string | null
+    /**
+     * Cuándo el taller se dio de baja de los WhatsApp de AutoLibre (palabra
+     * BAJA, lo escribe el backend). Sólo lectura: es consentimiento.
+     */
+    whatsappOptedOutAt: string | null
+    /**
+     * Si la base tiene la migración 029 (`ops.set_partner_modality` y el
+     * mensaje en `ops.set_partner_contact`). Sin ella, la ficha no ofrece esos
+     * dos campos en vez de fallar al guardar.
+     */
+    canEditModalityAndMessage: boolean
   }
   /** El catálogo completo, para poder agregar cualquier rubro. */
   families: Array<ServiceFamily>
@@ -318,6 +336,39 @@ export const setPartnerContactSchema = z.object({
   redirectLink: z.string().trim().max(500).default(''),
   hours: z.string().trim().max(200).default(''),
   address: z.string().trim().max(300).default(''),
+  /**
+   * Migración 029. Opcional a propósito: AUSENTE = "no tocar" (una base sin la
+   * 029 no conoce el parámetro, y el repo no lo manda); `''` = borrarlo.
+   */
+  whatsappMessage: z.string().trim().max(1000).optional(),
+})
+
+// ── Modalidad de atención (migración 029) ────────────────────────────────────
+
+/**
+ * `partners.modality` es texto libre, pero los valores que hay en la base son
+ * estos cuatro (relevado el 2026-11-11: 'Taller fijo' 17, 'Mixto' 9,
+ * 'A distancia' 4, 'A domicilio' 3, el resto NULL). Los leen tal cual
+ * `isRemoteModality` (candidatos de un pedido) y el mapa de cobertura, así que
+ * el formulario elige de esta lista y no inventa una forma nueva.
+ *
+ * El SP no cierra la lista (valida representabilidad); la impone el único
+ * lugar desde donde se escribe, igual que el idioma de los manuales.
+ */
+export const PARTNER_MODALITIES = ['Taller fijo', 'A domicilio', 'Mixto', 'A distancia'] as const
+export type PartnerModality = (typeof PARTNER_MODALITIES)[number]
+
+export const PARTNER_MODALITY_LABELS: Record<PartnerModality, string> = {
+  'Taller fijo': 'En su local',
+  'A domicilio': 'A domicilio',
+  Mixto: 'En su local y a domicilio',
+  'A distancia': 'A distancia (remoto)',
+}
+
+export const setPartnerModalitySchema = z.object({
+  partnerId: z.uuid(),
+  /** `''` borra la modalidad ("sin dato"). */
+  modality: z.union([z.enum(PARTNER_MODALITIES), z.literal('')]),
 })
 
 // ── Acciones sobre la ficha (migración 008) ──────────────────────────────────

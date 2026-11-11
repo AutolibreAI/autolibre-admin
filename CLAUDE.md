@@ -237,7 +237,7 @@ pantalla no va todavía.
 | `/partners` | — | Layout de 2 pestañas. Redirige a `/partners/listado`. → `.claude/rules/partners-coverage.md` |
 | `/partners/listado` | `true` | El listado del directorio, con los rubros (categorías) y servicios de cada uno, ordenable y filtrable por esas columnas. Antes era `/partners`. Desde el 2026-10-03, vista «Mapa» (`partnerView`) con los mismos filtros — el mismo `PartnerMap` que los candidatos de un pedido |
 | `/partners/cobertura` | `'data-only'` | **La consulta que nadie corría**: dónde hay pedidos y no hay partners cerca, por rubro. Desde el 2026-10-22 es un MAPA (partidos del AMBA + comunas de CABA, `public/geo/zonas_amba.geojson`) que cruza los pedidos reales con los partners: un pedido está cubierto con 3+ partners de su rubro a ≤ R km, y cada zona tiene prioridad (Salir ya · Reforzar · Demanda latente · Cubierta). Vista secundaria «Tabla por rubro» (zona × los 10 rubros del spec, `partners / pedidos`). Reemplazó a la matriz texto-de-zona × 16 categorías. **v1 sin endpoint propio**: el GPS se pide pedido por pedido desde el navegador; lo que falta está en `docs/pedido-backend-cobertura.md` → `.claude/rules/coverage-map.md` |
-| `/partners/$partnerId` | — | La ficha: carga manual de rubros (consultas 7–8 del runbook) + editor de estado, coordenadas, contacto, perfil y links. Desde el 2026-09-23, al lado del editor de rubros hay una tarjeta de sólo lectura con lo que el taller declaró al registrarse (rubros, "otros", marcas, combustibles) y el link a su solicitud — "vino de la planilla" cuando no hay `applicationId` |
+| `/partners/$partnerId` | — | La ficha: carga manual de rubros (consultas 7–8 del runbook) + editor de estado, coordenadas, contacto, perfil y links. Desde el 2026-11-11 también **modalidad** (en local / a domicilio / mixto / a distancia, `ops.set_partner_modality`) y **mensaje de WhatsApp** (en Contacto), migración 029 → `ops-write-actions.md`. Desde el 2026-09-23, al lado del editor de rubros hay una tarjeta de sólo lectura con lo que el taller declaró al registrarse (rubros, "otros", marcas, combustibles) y el link a su solicitud — "vino de la planilla" cuando no hay `applicationId` |
 | `/leads` | — | Layout de pestañas de las líneas de captación. Redirige a `/leads/pedidos` (default desde el 2026-09-15; Talleres pasó a ser la última pestaña). → `.claude/rules/leads.md` |
 | `/leads/talleres` | `true` | El `UPDATE leads SET status = …` que el propio backend designó en `lead-status.vo.ts` |
 | `/leads/seguros` | `true` | El `select … from insurances where expiration_date < now() + interval '30 days'` que hoy nadie corre — la cola de pólizas por vencer para ofrecer alternativas |
@@ -570,6 +570,9 @@ Reglas que salen de esto y no son negociables:
    **Al 2026-10-29 la 024 (seguimiento comercial, `ops.partner_prospect`) dio 79/79 en una réplica
    PGlite — NO corrida en DEV ni aplicada en ninguna base.** La aplica el `vercel-build` del próximo
    deploy de `main`; sin ella `/comercial` muestra "falta aplicar la migración 024".
+   **Al 2026-11-11 la 029 (modalidad y mensaje de WhatsApp del partner) dio 27/27 en una réplica
+   PGlite — NO aplicada en ninguna base.** Sin ella la ficha muestra los dos campos de sólo lectura
+   con el aviso; la aplica el `vercel-build` del próximo deploy de `main`.
    **Corregido el 2026-11-02: en producción están aplicadas de la 001 a la 024**, todas
    (`ops.schema_migrations`, `doadmin`, puerto 25060). Todos los "NO aplicada" de arriba (010 a 024)
    quedaron viejos para producción; para DEV no se relevó. Lo mismo con

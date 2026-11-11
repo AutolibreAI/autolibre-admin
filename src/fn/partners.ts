@@ -13,6 +13,7 @@ import {
   setPartnerContactSchema,
   setPartnerLinksSchema,
   setPartnerLocationSchema,
+  setPartnerModalitySchema,
   setPartnerProfileSchema,
   setPartnerStatusSchema,
 } from '~/lib/catalog'
@@ -33,6 +34,7 @@ import {
   setPartnerContact,
   setPartnerLinks,
   setPartnerLocation,
+  setPartnerModality,
   setPartnerProfile,
   setPartnerStatus,
   unstickApplication,
@@ -234,6 +236,15 @@ export const setPartnerContactFn = createServerFn({ method: 'POST' })
   .validator(setPartnerContactSchema)
   .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
     setPartnerContact(data, context.user.id, { signal: requestSignal() }),
+  )
+
+// ── Migración 029: modalidad de atención ─────────────────────────────────────
+
+export const setPartnerModalityFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPartnerModalitySchema)
+  .handler(async ({ data, context }): Promise<PartnerWriteResult> =>
+    setPartnerModality(data, context.user.id, { signal: requestSignal() }),
   )
 
 // ── Migración 008: perfil y links ────────────────────────────────────────────
