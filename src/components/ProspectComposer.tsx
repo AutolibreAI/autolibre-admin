@@ -8,7 +8,8 @@ import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '~/components/ui/sheet'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '~/components/ui/select'
-import type { PhoneMatches, ProspectFacets, ProspectOrigin } from '~/lib/partner-prospects'
+import { FrontPicker } from '~/components/ProspectFields'
+import type { PhoneMatches, ProspectFacets, ProspectFront, ProspectOrigin } from '~/lib/partner-prospects'
 
 const FIELD_LABEL = 'block text-xs font-medium uppercase tracking-wider text-muted-foreground'
 const NO_OWNER = '__none__'
@@ -149,6 +150,8 @@ export function ProspectComposer({ facets, currentUserId }: { facets: ProspectFa
   const [originSlug, setOriginSlug] = useState('')
   const [categorySlugs, setCategorySlugs] = useState<Array<string>>([])
   const [ownerId, setOwnerId] = useState<string | null>(currentUserId)
+  const [front, setFront] = useState<ProspectFront | null>(null)
+  const [frontQuote, setFrontQuote] = useState<{ id: string; code: string } | null>(null)
   const [matches, setMatches] = useState<PhoneMatches | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -185,6 +188,8 @@ export function ProspectComposer({ facets, currentUserId }: { facets: ProspectFa
     setOriginSlug('')
     setCategorySlugs([])
     setOwnerId(currentUserId)
+    setFront(null)
+    setFrontQuote(null)
     setMatches(null)
     setError(null)
   }
@@ -196,7 +201,17 @@ export function ProspectComposer({ facets, currentUserId }: { facets: ProspectFa
     setError(null)
     try {
       await createProspectFn({
-        data: { name: name.trim(), phone, locality, shortNote, originSlug, categorySlugs, ownerId },
+        data: {
+          name: name.trim(),
+          phone,
+          locality,
+          shortNote,
+          originSlug,
+          categorySlugs,
+          ownerId,
+          front,
+          frontQuoteRequestId: front === 'por-pedido' ? (frontQuote?.id ?? null) : null,
+        },
       })
       setOpen(false)
       reset()
@@ -274,6 +289,17 @@ export function ProspectComposer({ facets, currentUserId }: { facets: ProspectFa
               <Input id="pc-loc" className="shadow-none" value={locality} maxLength={200} onChange={(e) => setLocality(e.target.value)} />
             </div>
             <div className="space-y-1">
+              <span className={FIELD_LABEL}>Frente</span>
+              <FrontPicker
+                value={front}
+                quoteCode={frontQuote?.code ?? null}
+                onChange={(f, quote) => {
+                  setFront(f)
+                  setFrontQuote(quote)
+                }}
+              />
+            </div>
+            <div className="space-y-1">
               <label htmlFor="pc-origin" className={FIELD_LABEL}>Origen *</label>
               <OriginPicker
                 id="pc-origin"
@@ -300,7 +326,7 @@ export function ProspectComposer({ facets, currentUserId }: { facets: ProspectFa
               />
             </div>
             <div className="space-y-1">
-              <label htmlFor="pc-owner" className={FIELD_LABEL}>Comercial</label>
+              <label htmlFor="pc-owner" className={FIELD_LABEL}>Conseguido por</label>
               <OwnerPicker id="pc-owner" facets={facets} value={ownerId} onChange={setOwnerId} />
             </div>
             <div className="space-y-1">

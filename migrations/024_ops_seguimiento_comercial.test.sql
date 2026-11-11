@@ -23,11 +23,11 @@ SELECT gen_random_uuid() AS actor_id,
 
 INSERT INTO users (id, email, role, auth_provider, external_auth_id)
 SELECT actor_id, 'test-024-' || actor_id || '@example.invalid', 'admin'::user_role,
-       'clerk', 'test-024-' || actor_id
+       'clerk'::auth_provider, 'test-024-' || actor_id
   FROM t_fix
 UNION ALL
 SELECT owner_id, 'test-024-' || owner_id || '@example.invalid', 'admin'::user_role,
-       'clerk', 'test-024-' || owner_id
+       'clerk'::auth_provider, 'test-024-' || owner_id
   FROM t_fix;
 
 INSERT INTO partners (id, name, coverage_zone, status)
@@ -133,8 +133,10 @@ BEGIN
   PERFORM pg_temp.check('20 alta: nombre trimeado', v_r->>'name' = 'Gomería El Rulo', v_r->>'name');
   PERFORM pg_temp.check('21 alta: teléfono crudo + normalizado',
     v_r->>'phone' = '11 2512-0472' AND v_r->>'phone_digits' = '5491125120472', v_r::text);
+  -- 'to_contact' desde la 030 (el estado inicial se renombró): la suite corre
+  -- igual en una base con la 024 sola y en una con la 030.
   PERFORM pg_temp.check('22 alta: defaults pending / undecided',
-    v_r->>'status' = 'pending' AND v_r->>'plan' = 'undecided', v_r::text);
+    v_r->>'status' IN ('pending', 'to_contact') AND v_r->>'plan' = 'undecided', v_r::text);
   PERFORM pg_temp.check('23 alta: rubros sin duplicados ni vacíos, ordenados',
     v_r->'category_slugs' = jsonb_build_array(least(f.cat_a, f.cat_b), greatest(f.cat_a, f.cat_b)),
     v_r->>'category_slugs');
@@ -381,9 +383,9 @@ BEGIN
   PERFORM pg_temp.check('80 integración: alta', v_r->>'name' = 'Integración', v_r::text);
 
   EXECUTE format('CREATE TEMP TABLE t_i2 ON COMMIT DROP AS EXECUTE t024_update(%L, %L, %L)',
-                 v_r->>'id', f.actor_id, '{"status":"thinking"}');
+                 v_r->>'id', f.actor_id, '{"status":"interested"}');
   SELECT r INTO v_r FROM t_i2;
-  PERFORM pg_temp.check('81 integración: parche', v_r->>'status' = 'thinking', v_r::text);
+  PERFORM pg_temp.check('81 integración: parche', v_r->>'status' = 'interested', v_r::text);
 
   EXECUTE format('CREATE TEMP TABLE t_i3 ON COMMIT DROP AS EXECUTE t024_import(%L, %L)',
                  f.actor_id, '[{"name":"Integración import","origin_slug":"otro"}]');

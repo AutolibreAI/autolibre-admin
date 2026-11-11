@@ -5,6 +5,7 @@ import { ProspectCard, ProspectSummaryTiles } from '~/components/ProspectCards'
 import { ProspectComposer } from '~/components/ProspectComposer'
 import { ProspectImporter } from '~/components/ProspectImporter'
 import { ProspectsUnavailable } from '~/components/ProspectsUnavailable'
+import { AgencyCard } from '~/components/ChasisAgencies'
 import { formatInt } from '~/lib/format'
 
 /**
@@ -12,7 +13,8 @@ import { formatInt } from '~/lib/format'
  * contactos que siguen abiertos, del más viejo al de hoy.
  *
  * Reemplaza el "¿a quién tenía que llamar?" que hoy se contesta recorriendo
- * el tablero de Ruta 2 a ojo, fila por fila, mirando la fecha.
+ * el tablero de Ruta 2 a ojo, fila por fila, mirando la fecha. Desde la 031
+ * suma, abajo, las agencias de API Chasis vencidas o de hoy.
  *
  * SSR completo: "vencido hace N días" lo calcula Postgres contra hoy en Buenos
  * Aires (`followUpInDays`), así que el servidor y el navegador pintan lo mismo.
@@ -28,7 +30,7 @@ function TodayView() {
   const { user } = Route.useRouteContext()
   const router = useRouter()
 
-  if (!data.available) return <ProspectsUnavailable />
+  if (!data.available) return <ProspectsUnavailable missing={data.missing} />
 
   const overdue = data.rows.filter((r) => (r.followUpInDays ?? 0) < 0).length
   const today = data.rows.length - overdue
@@ -69,6 +71,19 @@ function TodayView() {
           ))}
         </div>
       )}
+
+      {data.agencies && data.agencies.length > 0 ? (
+        <section aria-labelledby="hoy-agencies" className="mt-8">
+          <h2 id="hoy-agencies" className="mb-2 font-heading text-sm font-semibold">
+            Agencias de API Chasis ({formatInt(data.agencies.length)})
+          </h2>
+          <div className="space-y-3">
+            {data.agencies.map((a) => (
+              <AgencyCard key={a.id} agency={a} facets={{ owners: data.facets.owners, localities: [] }} />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </>
   )
 }

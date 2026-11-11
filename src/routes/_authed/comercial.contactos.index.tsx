@@ -1,10 +1,13 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import {
+  PROSPECT_FRONTS,
+  PROSPECT_FRONT_LABELS,
   PROSPECT_STATUSES,
   PROSPECT_STATUS_LABELS,
   prospectSearchSchema,
   type ProspectSearch,
 } from '~/lib/partner-prospects'
+import { MultiSelect } from '~/components/MultiSelect'
 import { listProspectsFn } from '~/fn/partner-prospects'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
@@ -23,13 +26,17 @@ const ALL = '__all__'
  * Contactos (`/comercial/contactos`) — todos los proveedores que contacta el
  * equipo comercial, de cualquier origen.
  *
+ * Es `comercial.contactos.index.tsx` y no `comercial.contactos.tsx`: con el
+ * listado en el segundo, la ficha (`$prospectId`) quedaría anidada en un
+ * `<Outlet/>` que la lista no tiene (`scan-sessions.md`).
+ *
  * Reemplaza el tablero suelto de Ruta 2 (una planilla para un solo origen) y
  * el "¿cuántos llevamos?" que hoy se cuenta a mano.
  *
  * SSR completo: el listado corta en 300 y las fechas relativas vienen de
  * Postgres. Los filtros son search params calificados `prospect*`.
  */
-export const Route = createFileRoute('/_authed/comercial/contactos')({
+export const Route = createFileRoute('/_authed/comercial/contactos/')({
   validateSearch: prospectSearchSchema,
   loaderDeps: ({ search }) => search,
   loader: ({ deps }) => listProspectsFn({ data: deps }),
@@ -47,14 +54,17 @@ function ContactsView() {
   const setSearch = (next: Partial<ProspectSearch>) =>
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
-  if (!data.available) return <ProspectsUnavailable />
+  if (!data.available) return <ProspectsUnavailable missing={data.missing} />
 
   const filtered =
     Boolean(search.q) ||
     Boolean(search.prospectStatus) ||
     Boolean(search.prospectOrigin) ||
     Boolean(search.prospectRubro) ||
-    Boolean(search.prospectOwner)
+    Boolean(search.prospectOwner) ||
+    Boolean(search.prospectFront) ||
+    search.prospectZones.length > 0 ||
+    search.prospectVerified
 
   return (
     <>
@@ -103,6 +113,18 @@ function ContactsView() {
             </Select>
           </div>
 
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Zona</span>
+            <MultiSelect
+              label="Zona"
+              options={data.facets.localities.map((l) => ({ value: l, label: l }))}
+              selected={search.prospectZones}
+              onChange={(next) => setSearch({ prospectZones: next })}
+              placeholder="Todas"
+              className="w-56"
+            />
+          </div>
+
           {filtered ? (
             <Button
               size="sm"
@@ -115,6 +137,9 @@ function ContactsView() {
                   prospectOrigin: undefined,
                   prospectRubro: undefined,
                   prospectOwner: undefined,
+                  prospectFront: undefined,
+                  prospectZones: [],
+                  prospectVerified: false,
                 })
               }
             >
@@ -139,6 +164,33 @@ function ContactsView() {
         </FilterGroup>
 
         <FilterGroup
+          label="Frente"
+          onClear={search.prospectFront ? () => setSearch({ prospectFront: undefined }) : undefined}
+        >
+          {PROSPECT_FRONTS.map((f) => (
+            <Chip
+              key={f}
+              active={search.prospectFront === f}
+              onClick={() => setSearch({ prospectFront: search.prospectFront === f ? undefined : f })}
+            >
+              {PROSPECT_FRONT_LABELS[f]}
+            </Chip>
+          ))}
+          <Chip
+            active={search.prospectFront === 'none'}
+            onClick={() => setSearch({ prospectFront: search.prospectFront === 'none' ? undefined : 'none' })}
+          >
+            Sin frente
+          </Chip>
+          <Chip
+            active={search.prospectVerified}
+            onClick={() => setSearch({ prospectVerified: !search.prospectVerified })}
+          >
+            Sólo verificados
+          </Chip>
+        </FilterGroup>
+
+        <FilterGroup
           label="Origen"
           onClear={search.prospectOrigin ? () => setSearch({ prospectOrigin: undefined }) : undefined}
         >
@@ -154,7 +206,7 @@ function ContactsView() {
         </FilterGroup>
 
         <FilterGroup
-          label="Comercial"
+          label="Conseguido por"
           onClear={search.prospectOwner ? () => setSearch({ prospectOwner: undefined }) : undefined}
         >
           {data.facets.owners.map((o) => (
@@ -191,7 +243,7 @@ function ContactsView() {
           ))}
           {data.matched > data.rows.length ? (
             <p className="text-sm text-muted-foreground">
-              Se muestran {formatInt(data.rows.length)} de {formatInt(data.matched)}. Filtrá por origen, estado o
+              Se muestran {formatInt(data.rows.length)} de {formatInt(data.matched)}. Filtrá por frente, zona, estado o
               rubro para ver el resto.
             </p>
           ) : null}

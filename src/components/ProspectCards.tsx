@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Check, ChevronDown, Link2, LoaderCircle, MessageCircle, Search, TriangleAlert, Unlink } from 'lucide-react'
 import {
+  PREFERRED_CHANNELS,
+  PREFERRED_CHANNEL_LABELS,
   PROSPECT_PLANS,
   PROSPECT_PLAN_LABELS,
   PROSPECT_STATUSES,
   PROSPECT_STATUS_CLASSES,
   PROSPECT_STATUS_LABELS,
+  REGISTERED_PROSPECT_STATUSES,
+  VERIFY_CHECKS,
   prospectWhatsAppUrl,
   readableProspectError,
 } from '~/lib/partner-prospects'
@@ -16,6 +20,8 @@ import {
   updateProspectFn,
 } from '~/fn/partner-prospects'
 import { MultiSelect } from '~/components/MultiSelect'
+import { FIELD_LABEL, FrontBadge, FrontPicker, Segmented, ToggleCheck, VerifiedBadge, YesNo } from '~/components/ProspectFields'
+import { InteractionComposer } from '~/components/ProspectInteractions'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -31,6 +37,8 @@ import type {
   ProspectSummary,
 } from '~/lib/partner-prospects'
 
+export { ProspectStatusBadge } from '~/components/ProspectFields'
+
 /**
  * Las piezas de la pantalla de seguimiento comercial (`/comercial`).
  * → `.claude/rules/partner-prospects.md`
@@ -39,22 +47,6 @@ import type {
 /** Radix Select no admite `''` como valor de un ítem. */
 const NO_OWNER = '__none__'
 
-const FIELD_LABEL = 'block text-xs font-medium uppercase tracking-wider text-muted-foreground'
-
-// ── Estado ────────────────────────────────────────────────────────────────
-
-export function ProspectStatusBadge({ status }: { status: ProspectStatus }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium',
-        PROSPECT_STATUS_CLASSES[status],
-      )}
-    >
-      {PROSPECT_STATUS_LABELS[status]}
-    </span>
-  )
-}
 
 // ── Contadores ────────────────────────────────────────────────────────────
 
@@ -67,14 +59,20 @@ export function ProspectSummaryTiles({ summary }: { summary: ProspectSummary }) 
     {
       label: 'Contactados',
       value: `${formatInt(summary.contacted)} de ${formatInt(summary.total)}`,
-      hint: 'todo lo que salió de Pendiente',
+      hint: 'todo lo que salió de Por contactar',
     },
     { label: 'Interesados', value: formatInt(summary.interested), tone: 'text-status-violet' },
-    { label: 'Registrados', value: formatInt(summary.registered), tone: 'text-status-green' },
-    { label: 'No les interesa', value: formatInt(summary.notInterested), tone: 'text-status-red' },
+    {
+      label: 'Registrados',
+      value: formatInt(summary.registered),
+      hint: 'con primer pedido y trabajo confirmado',
+      tone: 'text-status-green',
+    },
+    { label: 'Verificados', value: formatInt(summary.verified), hint: 'los 4 checks', tone: 'text-status-green' },
+    { label: 'Descartados', value: formatInt(summary.discarded), tone: 'text-status-red' },
   ]
   return (
-    <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       {tiles.map((t) => (
         <div key={t.label} className="rounded-lg border border-border bg-card px-4 py-3">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t.label}</p>
@@ -116,7 +114,7 @@ type SaveState = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { k
  * Los guardados se encolan en orden: si el segundo saliera antes que el
  * primero, la fila quedaría con el valor viejo del primer campo.
  */
-function useProspectAutosave(initial: PartnerProspect, onSaved: (patch: ProspectPatch) => void) {
+export function useProspectAutosave(initial: PartnerProspect, onSaved: (patch: ProspectPatch) => void) {
   const [prospect, setProspect] = useState(initial)
   const [state, setState] = useState<SaveState>({ kind: 'idle' })
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -151,10 +149,15 @@ function useProspectAutosave(initial: PartnerProspect, onSaved: (patch: Prospect
     })
   }
 
-  return { prospect, state, save }
+  /** Una fila que llegó por otro camino (una charla guardada): se toma tal cual. */
+  function accept(next: PartnerProspect) {
+    if (pending.current === 0) setProspect(next)
+  }
+
+  return { prospect, state, save, accept }
 }
 
-function SaveIndicator({ state }: { state: SaveState }) {
+export function SaveIndicator({ state }: { state: SaveState }) {
   if (state.kind === 'idle') return null
   if (state.kind === 'saving')
     return (
@@ -181,7 +184,7 @@ function SaveIndicator({ state }: { state: SaveState }) {
  * trimeado) sólo si no se siguió tipeando: si no, una respuesta vieja pisaría
  * lo que se está escribiendo.
  */
-function AutosaveText({
+export function AutosaveText({
   id,
   value,
   onCommit,
@@ -253,7 +256,7 @@ export function ProspectCard({
   /** Un cambio que mueve la fila de lugar o de contador (estado, próximo seguimiento). */
   onListChanged: () => void
 }) {
-  const { prospect: p, state, save } = useProspectAutosave(initial, (patch) => {
+  const { prospect: p, state, save, accept } = useProspectAutosave(initial, (patch) => {
     if (patch.status !== undefined || patch.nextFollowUpOn !== undefined) onListChanged()
   })
   const [editingFicha, setEditingFicha] = useState(false)
@@ -265,23 +268,28 @@ export function ProspectCard({
     (slug) => facets.categories.find((c) => c.slug === slug)?.name ?? slug,
   )
   const idp = `pp-${p.id}`
-  const showLink = p.status === 'registered' || p.partnerId !== null || linking
-
-  function setStatus(next: ProspectStatus) {
-    save({ status: next })
-    if (next === 'registered' && p.partnerId === null) setLinking(true)
-  }
+  const showLink = REGISTERED_PROSPECT_STATUSES.includes(p.status) || p.partnerId !== null || linking
 
   return (
     <article className="rounded-lg border border-border bg-card p-4" aria-labelledby={`${idp}-name`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <h3 id={`${idp}-name`} className="font-heading text-base font-semibold leading-tight">
-            {p.name}
+            <Link
+              to="/comercial/contactos/$prospectId"
+              params={{ prospectId: p.id }}
+              className="underline-offset-2 hover:underline"
+            >
+              {p.name}
+            </Link>
           </h3>
-          <p className="text-sm text-muted-foreground">
-            {[p.locality, originLabel, categoryNames.join(', ') || null].filter(Boolean).join(' · ')}
-          </p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {p.front ? <FrontBadge front={p.front} quoteCode={p.frontQuoteCode} /> : null}
+            {p.verified ? <VerifiedBadge /> : null}
+            <p className="text-sm text-muted-foreground">
+              {[p.locality, originLabel, categoryNames.join(', ') || null].filter(Boolean).join(' · ')}
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             {p.phone ? <span className="tabular-nums">{p.phone}</span> : <span className="text-muted-foreground">sin teléfono</span>}
             {waUrl ? (
@@ -298,23 +306,34 @@ export function ProspectCard({
         </div>
 
         <div className="flex flex-col items-end gap-1.5">
-          <Select value={p.status} onValueChange={(v) => setStatus(v as ProspectStatus)}>
-            <SelectTrigger
-              aria-label="Estado"
-              className={cn('h-8 w-48 shadow-none', PROSPECT_STATUS_CLASSES[p.status])}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PROSPECT_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {PROSPECT_STATUS_LABELS[s]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <StatusSelect prospect={p} onSave={save} onRegistered={() => setLinking(true)} />
           <FollowUpTag days={p.followUpInDays} date={p.nextFollowUpOn} />
         </div>
+      </div>
+
+      {p.nextStep || p.discardReason ? (
+        <p className="mt-3 text-sm">
+          {p.status === 'discarded' && p.discardReason ? (
+            <>
+              <span className="text-muted-foreground">Descartado: </span>
+              {p.discardReason}
+            </>
+          ) : (
+            <>
+              <span className="text-muted-foreground">Próximo paso: </span>
+              {p.nextStep}
+            </>
+          )}
+        </p>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <InteractionComposer prospect={p} onSaved={(next) => accept(next)} />
+        <Button asChild size="sm" variant="outline" className="h-9 shadow-none">
+          <Link to="/comercial/contactos/$prospectId" params={{ prospectId: p.id }}>
+            Ficha e historial{p.interactionCount > 0 ? ` (${formatInt(p.interactionCount)})` : ''}
+          </Link>
+        </Button>
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -323,19 +342,8 @@ export function ProspectCard({
           <AutosaveText id={`${idp}-talked`} value={p.talkedTo} maxLength={200} onCommit={(t) => save({ talkedTo: t })} />
         </div>
         <div className="space-y-1">
-          <label htmlFor={`${idp}-plan`} className={FIELD_LABEL}>Plan</label>
-          <Select value={p.plan} onValueChange={(v) => save({ plan: v as (typeof PROSPECT_PLANS)[number] })}>
-            <SelectTrigger id={`${idp}-plan`} className="w-full shadow-none">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PROSPECT_PLANS.map((plan) => (
-                <SelectItem key={plan} value={plan}>
-                  {PROSPECT_PLAN_LABELS[plan]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <label htmlFor={`${idp}-plan`} className={FIELD_LABEL}>Plan que eligió</label>
+          <PlanSelect id={`${idp}-plan`} value={p.plan} onChange={(plan) => save({ plan })} />
         </div>
         <div className="space-y-1">
           <label htmlFor={`${idp}-last`} className={FIELD_LABEL}>Último contacto</label>
@@ -358,7 +366,7 @@ export function ProspectCard({
           />
         </div>
         <div className="space-y-1 sm:col-span-2 lg:col-span-4">
-          <label htmlFor={`${idp}-notes`} className={FIELD_LABEL}>Respuesta y notas</label>
+          <label htmlFor={`${idp}-notes`} className={FIELD_LABEL}>Notas</label>
           <AutosaveText
             id={`${idp}-notes`}
             multiline
@@ -383,7 +391,7 @@ export function ProspectCard({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
           <span>
-            Comercial:{' '}
+            Conseguido por:{' '}
             <span className="text-foreground">
               {facets.owners.find((o) => o.id === p.ownerId)?.name ?? 'sin asignar'}
             </span>
@@ -406,8 +414,109 @@ export function ProspectCard({
   )
 }
 
-/** Lo que casi no cambia: nombre, teléfono, localidad, origen, rubros, comercial. */
-function FichaEditor({
+function PlanSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id: string
+  value: (typeof PROSPECT_PLANS)[number]
+  onChange: (plan: (typeof PROSPECT_PLANS)[number]) => void
+}) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as (typeof PROSPECT_PLANS)[number])}>
+      <SelectTrigger id={id} className="w-full shadow-none">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {PROSPECT_PLANS.map((plan) => (
+          <SelectItem key={plan} value={plan}>
+            {PROSPECT_PLAN_LABELS[plan]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * El estado, a mano. "Descartado" no se guarda hasta que haya motivo (la 030
+ * lo exige): pide el motivo ahí mismo y recién entonces guarda los dos juntos.
+ */
+export function StatusSelect({
+  prospect: p,
+  onSave,
+  onRegistered,
+}: {
+  prospect: PartnerProspect
+  onSave: (patch: ProspectPatch) => void
+  /** Pasó a un estado "registrado" sin proveedor vinculado. */
+  onRegistered: () => void
+}) {
+  const [discarding, setDiscarding] = useState(false)
+  const [reason, setReason] = useState('')
+
+  function pick(next: ProspectStatus) {
+    if (next === 'discarded') {
+      setDiscarding(true)
+      return
+    }
+    setDiscarding(false)
+    onSave({ status: next })
+    if (REGISTERED_PROSPECT_STATUSES.includes(next) && p.partnerId === null) onRegistered()
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <Select value={discarding ? 'discarded' : p.status} onValueChange={(v) => pick(v as ProspectStatus)}>
+        <SelectTrigger
+          aria-label="Estado"
+          className={cn('h-9 w-52 shadow-none', PROSPECT_STATUS_CLASSES[discarding ? 'discarded' : p.status])}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {PROSPECT_STATUSES.map((s) => (
+            <SelectItem key={s} value={s}>
+              {PROSPECT_STATUS_LABELS[s]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {discarding ? (
+        <form
+          className="flex w-full max-w-xs gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (reason.trim() === '') return
+            onSave({ status: 'discarded', discardReason: reason.trim() })
+            setDiscarding(false)
+            setReason('')
+          }}
+        >
+          <Input
+            autoFocus
+            aria-label="Motivo del descarte"
+            placeholder="Motivo (obligatorio)"
+            className="h-9 shadow-none"
+            value={reason}
+            maxLength={500}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <Button type="submit" size="sm" className="h-9" disabled={reason.trim() === ''}>
+            Descartar
+          </Button>
+          <Button type="button" size="sm" variant="ghost" className="h-9" onClick={() => setDiscarding(false)}>
+            No
+          </Button>
+        </form>
+      ) : null}
+    </div>
+  )
+}
+
+/** Lo que casi no cambia: nombre, teléfono, localidad, frente, origen, rubros, conseguido por. */
+export function FichaEditor({
   prospect: p,
   facets,
   save,
@@ -434,8 +543,18 @@ function FichaEditor({
         />
       </div>
       <div className="space-y-1">
-        <label htmlFor={`${idp}-loc`} className={FIELD_LABEL}>Localidad / ubicación</label>
+        <label htmlFor={`${idp}-loc`} className={FIELD_LABEL}>Localidad / zona</label>
         <AutosaveText id={`${idp}-loc`} value={p.locality} maxLength={200} onCommit={(t) => save({ locality: t })} />
+      </div>
+      <div className="space-y-1 sm:col-span-2 lg:col-span-3">
+        <span className={FIELD_LABEL}>Frente</span>
+        <FrontPicker
+          value={p.front}
+          quoteCode={p.frontQuoteCode}
+          onChange={(front, quote) =>
+            save(quote ? { front, frontQuoteRequestId: quote.id } : { front, frontQuoteRequestId: null })
+          }
+        />
       </div>
       <div className="space-y-1">
         <label htmlFor={`${idp}-origin`} className={FIELD_LABEL}>Origen</label>
@@ -464,7 +583,7 @@ function FichaEditor({
         />
       </div>
       <div className="space-y-1">
-        <label htmlFor={`${idp}-owner`} className={FIELD_LABEL}>Comercial</label>
+        <label htmlFor={`${idp}-owner`} className={FIELD_LABEL}>Conseguido por</label>
         <Select
           value={p.ownerId ?? NO_OWNER}
           onValueChange={(v) => save({ ownerId: v === NO_OWNER ? null : v })}
@@ -490,6 +609,86 @@ function FichaEditor({
   )
 }
 
+/** Lo que se sabe del proveedor: se completa una vez, en la ficha. Todo opcional. */
+export function ProviderInfoEditor({
+  prospect: p,
+  save,
+}: {
+  prospect: PartnerProspect
+  save: (patch: ProspectPatch) => void
+}) {
+  const idp = `pi-${p.id}`
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <div className="space-y-1.5">
+        <span className={FIELD_LABEL}>¿Conocía AutoLibre?</span>
+        <YesNo ariaLabel="¿Conocía AutoLibre?" value={p.knewAutolibre} onChange={(v) => save({ knewAutolibre: v })} />
+      </div>
+      <div className="space-y-1.5">
+        <span className={FIELD_LABEL}>¿Tiene lugar para más trabajo?</span>
+        <YesNo ariaLabel="¿Tiene lugar para más trabajo?" value={p.hasCapacity} onChange={(v) => save({ hasCapacity: v })} />
+      </div>
+      <div className="space-y-1.5 sm:col-span-2">
+        <span className={FIELD_LABEL}>Prefiere recibir pedidos</span>
+        <Segmented
+          ariaLabel="Cómo prefiere recibir pedidos"
+          allowClear
+          options={PREFERRED_CHANNELS.map((c) => ({ value: c, label: PREFERRED_CHANNEL_LABELS[c] }))}
+          value={p.preferredChannel}
+          onChange={(v) => save({ preferredChannel: v })}
+        />
+      </div>
+      <div className="space-y-1 sm:col-span-2">
+        <label htmlFor={`${idp}-acq`} className={FIELD_LABEL}>Cómo consigue clientes hoy</label>
+        <AutosaveText
+          id={`${idp}-acq`}
+          value={p.clientAcquisition}
+          maxLength={500}
+          onCommit={(t) => save({ clientAcquisition: t })}
+        />
+      </div>
+      <div className="space-y-1">
+        <label htmlFor={`${idp}-sys`} className={FIELD_LABEL}>Sistema de gestión que usa</label>
+        <AutosaveText
+          id={`${idp}-sys`}
+          value={p.managementSystem}
+          maxLength={200}
+          onCommit={(t) => save({ managementSystem: t })}
+        />
+      </div>
+      <div className="space-y-1">
+        <label htmlFor={`${idp}-net`} className={FIELD_LABEL}>Red o franquicia</label>
+        <AutosaveText id={`${idp}-net`} value={p.network} maxLength={200} onCommit={(t) => save({ network: t })} />
+      </div>
+    </div>
+  )
+}
+
+/** Los 4 checks de verificación. Con los 4, "Verificado". */
+export function VerificationEditor({
+  prospect: p,
+  save,
+}: {
+  prospect: PartnerProspect
+  save: (patch: ProspectPatch) => void
+}) {
+  const done = VERIFY_CHECKS.filter((c) => p[c.key]).length
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-sm">
+        {p.verified ? <VerifiedBadge /> : <span className="text-muted-foreground">{done} de 4</span>}
+      </div>
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        {VERIFY_CHECKS.map((c) => (
+          <ToggleCheck key={c.key} checked={p[c.key]} onChange={(v) => save({ [c.key]: v })}>
+            {c.label}
+          </ToggleCheck>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Vínculo con el proveedor del marketplace ──────────────────────────────
 
 /**
@@ -500,7 +699,7 @@ function FichaEditor({
  * Vincular es una elección explícita, nunca automática: dos proveedores pueden
  * compartir un teléfono (una cadena con varias sucursales).
  */
-function PartnerLinkSection({
+export function PartnerLinkSection({
   prospect: p,
   autoSuggest,
   onLink,
@@ -575,6 +774,11 @@ function PartnerLinkSection({
         {p.partnerStatus && p.partnerStatus !== 'active' ? (
           <span className="text-xs text-status-yellow">({p.partnerStatus})</span>
         ) : null}
+        {p.partnerRegisteredOn ? (
+          <span className="text-xs text-muted-foreground">
+            · alta {formatDate(`${p.partnerRegisteredOn}T12:00:00Z`)}
+          </span>
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
@@ -590,7 +794,7 @@ function PartnerLinkSection({
   if (!open) {
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-sm text-status-yellow">
-        Registrado sin vincular a un proveedor del marketplace.
+        Sin vincular a un proveedor del marketplace: la fecha de alta sale de ahí.
         <Button size="sm" variant="outline" className="ml-auto h-7 shadow-none" onClick={() => setOpen(true)}>
           Vincular
         </Button>

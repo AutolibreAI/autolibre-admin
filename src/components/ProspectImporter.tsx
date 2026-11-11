@@ -4,6 +4,7 @@ import { Upload } from 'lucide-react'
 import {
   CSV_COLUMNS,
   CSV_COLUMN_LABELS,
+  PROSPECT_FRONT_LABELS,
   PROSPECT_IMPORT_MAX,
   detectCsvColumns,
   matchCategory,
@@ -14,6 +15,7 @@ import {
 import { findPhoneMatchesFn, importProspectsFn } from '~/fn/partner-prospects'
 import { OriginPicker, OwnerPicker } from '~/components/ProspectComposer'
 import { MultiSelect } from '~/components/MultiSelect'
+import { Segmented } from '~/components/ProspectFields'
 import { Button } from '~/components/ui/button'
 import { Checkbox } from '~/components/ui/checkbox'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '~/components/ui/sheet'
@@ -83,6 +85,8 @@ export function ProspectImporter({ facets, currentUserId }: { facets: ProspectFa
   const [originSlug, setOriginSlug] = useState('')
   const [ownerId, setOwnerId] = useState<string | null>(currentUserId)
   const [batchCategories, setBatchCategories] = useState<Array<string>>([])
+  /** El frente de la tanda (030). "Por pedido" no: un pedido es de un solo proveedor. */
+  const [batchFront, setBatchFront] = useState<'ruta-2' | 'corredor-norte' | null>(null)
   const [unchecked, setUnchecked] = useState<Set<number>>(new Set())
   const [checkedPartners, setCheckedPartners] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -97,6 +101,7 @@ export function ProspectImporter({ facets, currentUserId }: { facets: ProspectFa
     setOriginSlug('')
     setOwnerId(currentUserId)
     setBatchCategories([])
+    setBatchFront(null)
     setUnchecked(new Set())
     setCheckedPartners(new Set())
     setError(null)
@@ -216,6 +221,7 @@ export function ProspectImporter({ facets, currentUserId }: { facets: ProspectFa
             originSlug,
             ownerId,
             categorySlugs: r.rubroSlug ? [r.rubroSlug] : batchCategories,
+            ...(batchFront ? { front: batchFront } : {}),
           })),
         },
       })
@@ -314,6 +320,20 @@ export function ProspectImporter({ facets, currentUserId }: { facets: ProspectFa
                   ))}
                 </div>
 
+                <div className="space-y-1">
+                  <span className={FIELD_LABEL}>Frente de la tanda</span>
+                  <Segmented
+                    ariaLabel="Frente de la tanda"
+                    allowClear
+                    options={[
+                      { value: 'ruta-2', label: PROSPECT_FRONT_LABELS['ruta-2'] },
+                      { value: 'corredor-norte', label: PROSPECT_FRONT_LABELS['corredor-norte'] },
+                    ]}
+                    value={batchFront}
+                    onChange={setBatchFront}
+                  />
+                </div>
+
                 <div className="grid gap-3 sm:grid-cols-3">
                   <div className="space-y-1">
                     <label htmlFor="pi-origin" className={FIELD_LABEL}>Origen de la tanda *</label>
@@ -331,7 +351,7 @@ export function ProspectImporter({ facets, currentUserId }: { facets: ProspectFa
                     />
                   </div>
                   <div className="space-y-1">
-                    <label htmlFor="pi-owner" className={FIELD_LABEL}>Comercial</label>
+                    <label htmlFor="pi-owner" className={FIELD_LABEL}>Conseguido por</label>
                     <OwnerPicker id="pi-owner" facets={facets} value={ownerId} onChange={setOwnerId} />
                   </div>
                   <div className="space-y-1">
