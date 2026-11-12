@@ -130,7 +130,6 @@ DECLARE
   v_log      ops.action_log%ROWTYPE;
   v_msg      text;
   v_n        int;
-  v_created  timestamptz;
   v_raw      jsonb;
 BEGIN
   SELECT actor_id, typed_id, device_id, account_qr_id, closed_id
@@ -158,9 +157,9 @@ BEGIN
     coalesce(v_row.contact_email, '(null)'));
   PERFORM pg_temp.check('13 patente cargada y normalizada', v_row.plate = 'AE456FG', coalesce(v_row.plate, '(null)'));
   PERFORM pg_temp.check('14 monto cargado', v_row.declared_amount = 180000, coalesce(v_row.declared_amount::text, '(null)'));
+  -- Desde la 032 el vehículo escrito es `quote_requests.vehicle_description`.
   PERFORM pg_temp.check('15 vehículo escrito cargado',
-    (SELECT vehicle_text FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_id) = 'Toyota Etios 1.5 2020',
-    'no');
+    v_row.vehicle_description = 'Toyota Etios 1.5 2020', coalesce(v_row.vehicle_description, '(null)'));
   PERFORM pg_temp.check('16 raw_submission intacto', v_row.raw_submission = v_raw, v_row.raw_submission::text);
   PERFORM pg_temp.check('17 status intacto', v_row.status::text = 'received', v_row.status::text);
   PERFORM pg_temp.check('18 ubicación tipeada INTACTA (source y textos)',
@@ -205,9 +204,10 @@ BEGIN
       AND v_row.location_province = 'CABA' AND v_row.description = 'Service de los 60.000 km, con frenos',
     coalesce(v_row.location_address, '(null)'));
 
-  -- 23-24. Cambiar SÓLO el vehículo escrito se loguea y conserva created_at.
+  -- 23-24. Cambiar SÓLO el vehículo escrito se loguea y queda en la columna.
+  -- (Hasta la 032 el 24 verificaba que la fila de `ops` conservara su
+  -- created_at; con la columna en `quote_requests` ese dato ya no existe.)
   SELECT count(*) INTO v_n FROM ops.action_log WHERE target_id = v_id AND action = 'quote_request.update';
-  SELECT created_at INTO v_created FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_id;
   PERFORM ops.update_quote_request(
     p_quote_request_id := v_id, p_actor_id := v_actor, p_contact_phone := '5491155550001',
     p_description := 'Service de los 60.000 km, con frenos', p_contact_name := 'Carlos',
@@ -217,8 +217,8 @@ BEGIN
   PERFORM pg_temp.check('23 cambiar sólo el vehículo escrito se loguea',
     (SELECT count(*) FROM ops.action_log WHERE target_id = v_id AND action = 'quote_request.update') = v_n + 1,
     v_n::text);
-  PERFORM pg_temp.check('24 editar el vehículo escrito conserva created_at',
-    (SELECT created_at FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_id) = v_created, 'cambió');
+  PERFORM pg_temp.check('24 el vehículo escrito editado queda en vehicle_description',
+    (SELECT vehicle_description FROM quote_requests WHERE id = v_id) = 'Toyota Etios XLS 1.5 2020', 'no');
 
   -- 25-27. Reemplazo completo: los opcionales en blanco se BORRAN… pero la
   -- ubicación no es uno de ellos.
@@ -231,8 +231,8 @@ BEGIN
   PERFORM pg_temp.check('25 blanco borra: nombre, email, patente, monto',
     v_row.contact_name IS NULL AND v_row.contact_email IS NULL AND v_row.plate IS NULL
       AND v_row.declared_amount IS NULL, 'algún no null');
-  PERFORM pg_temp.check('26 blanco borra: vehículo escrito (sin fila)',
-    NOT EXISTS (SELECT 1 FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_id), 'hay fila');
+  PERFORM pg_temp.check('26 blanco borra: vehículo escrito (vehicle_description NULL)',
+    v_row.vehicle_description IS NULL, coalesce(v_row.vehicle_description, '(null)'));
   PERFORM pg_temp.check('27 la ubicación sigue ahí (ya no es un campo de esta edición)',
     v_row.location_source::text = 'typed' AND v_row.location_address = 'Av. Cabildo 2000',
     coalesce(v_row.location_source::text, '(null)'));

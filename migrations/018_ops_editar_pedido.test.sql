@@ -135,7 +135,8 @@ BEGIN
   );
   v_id := (v_out->>'id')::uuid;
   SELECT * INTO v_row FROM quote_requests WHERE id = v_id;
-  SELECT vehicle_text INTO v_vt FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_id;
+  -- Desde la 032 el vehículo escrito es `quote_requests.vehicle_description`.
+  SELECT vehicle_description INTO v_vt FROM quote_requests WHERE id = v_id;
 
   PERFORM pg_temp.check('10 channel = whatsapp', v_row.channel::text = 'whatsapp', v_row.channel::text);
   PERFORM pg_temp.check('11 plate normalizada (upper, sin separadores)', v_row.plate = 'AB123CD', v_row.plate);
@@ -169,8 +170,8 @@ BEGIN
   );
   SELECT * INTO v_row FROM quote_requests WHERE id = (v_out->>'id')::uuid;
   PERFORM pg_temp.check('25 sin patente → plate NULL', v_row.plate IS NULL, coalesce(v_row.plate, '(null)'));
-  PERFORM pg_temp.check('26 sin vehículo escrito → sin fila en ops',
-    NOT EXISTS (SELECT 1 FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_row.id), 'hay fila');
+  PERFORM pg_temp.check('26 sin vehículo escrito → vehicle_description NULL',
+    v_row.vehicle_description IS NULL, coalesce(v_row.vehicle_description, '(null)'));
   PERFORM pg_temp.check('27 contact_name/email/amount ausentes → NULL',
     v_row.contact_name IS NULL AND v_row.contact_email IS NULL AND v_row.declared_amount IS NULL, 'algún no null');
 
@@ -180,8 +181,7 @@ BEGIN
   );
   SELECT * INTO v_row FROM quote_requests WHERE id = (v_out->>'id')::uuid;
   PERFORM pg_temp.check('28 patente y vehículo en blanco → NULL, no string vacío',
-    v_row.plate IS NULL
-      AND NOT EXISTS (SELECT 1 FROM ops.quote_request_vehicle_text WHERE quote_request_id = v_row.id),
+    v_row.plate IS NULL AND v_row.vehicle_description IS NULL,
     coalesce(v_row.plate, '(null)'));
 
   -- 29-35. Rechazos con sentinela.
