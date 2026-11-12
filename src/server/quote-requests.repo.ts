@@ -141,6 +141,35 @@ export async function quoteEditAvailable(opts: { signal?: AbortSignal } = {}): P
 }
 
 /**
+ * De dónde se LEE el vehículo escrito, según la base.
+ *
+ * - `'column'`: la 032 está aplicada y el vehículo escrito vive en
+ *   `quote_requests.vehicle_description` (0160 del backend), que es lo que lee
+ *   el despacho a talleres. Se reconoce porque la 032 dropea
+ *   `ops._set_quote_request_vehicle_text`, el único que escribía la tabla de
+ *   `ops`. NO alcanza con que exista la columna: si el backend ya desplegó la
+ *   0160 pero el panel todavía no migró la 032, los SPs siguen escribiendo en
+ *   `ops` y leer la columna haría desaparecer el texto de la pantalla.
+ * - `'ops'`: base sin la 032 (con la 018): la tabla vieja, como hasta ahora.
+ * - `null`: ni una cosa ni la otra.
+ *
+ * La tabla de `ops` quedó SIN USO con la 032 pero no se dropeó. El día que se
+ * dropee, la rama `'ops'` y este guard se van con ella.
+ */
+async function vehicleTextSource(): Promise<'column' | 'ops' | null> {
+  const row = await sqlOne<{ has_column: boolean; has_ops: boolean }>(
+    `select exists (select 1 from information_schema.columns
+                     where table_schema = 'public' and table_name = 'quote_requests'
+                       and column_name = 'vehicle_description')
+            and to_regprocedure('ops._set_quote_request_vehicle_text(uuid,uuid,text)') is null as has_column,
+            to_regclass('ops.quote_request_vehicle_text') is not null as has_ops`,
+  )
+  if (row?.has_column === true) return 'column'
+  if (row?.has_ops === true) return 'ops'
+  return null
+}
+
+/**
  * La clasificación por IA del backend (migración 0124): `quote_requests.classified_at`
  * + `quote_request_services`. Guard propio, como las propuestas: sin la 0124
  * (producción hasta su deploy) la tabla no existe y un SELECT explotaría al
@@ -626,16 +655,20 @@ export async function listQuoteRequests(
  * diría "disponible".
  */
 async function listExtraColumns(): Promise<{ columns: string; proposalsAvailable: boolean }> {
-  const [row, proposalsAvailable] = await Promise.all([
-    sqlOne<{ has_text: boolean; has_files: boolean }>(
-      `select to_regclass('ops.quote_request_vehicle_text') is not null as has_text,
-              to_regclass('public.quote_request_files') is not null as has_files`,
+  const [row, proposalsAvailable, textSource] = await Promise.all([
+    sqlOne<{ has_files: boolean }>(
+      `select to_regclass('public.quote_request_files') is not null as has_files`,
     ),
     quoteProposalsAvailability(),
+    vehicleTextSource(),
   ])
-  const vehicleText = row?.has_text
-    ? `(select vt.vehicle_text from ops.quote_request_vehicle_text vt where vt.quote_request_id = qr.id)`
-    : `null::text`
+  // Con la 032, la columna del backend; sin ella, la tabla vieja de `ops`.
+  const vehicleText =
+    textSource === 'column'
+      ? `qr.vehicle_description`
+      : textSource === 'ops'
+        ? `(select vt.vehicle_text from ops.quote_request_vehicle_text vt where vt.quote_request_id = qr.id)`
+        : `null::text`
   // Propuestas ACTIVAS: las retiradas liberaron su lugar y no entran al mensaje.
   const responseCount = proposalsAvailable
     ? `(select count(*)::int from quote_request_proposals pr where pr.quote_request_id = qr.id and pr.withdrawn_at is null)`
@@ -1045,21 +1078,29 @@ export async function findQuoteRequestDetail(
   )
 
   /**
-   * El vehículo escrito (018) también vive en `ops`, y con el mismo criterio
-   * que los rubros va en su propia consulta. Pero ésta puede no tener tabla:
-   * sin la 018 aplicada, `ops.quote_request_vehicle_text` no existe y un
-   * SELECT directo explotaría al planificarse. `to_regclass` primero, igual
-   * que `quoteResponsesAvailable()` de la 015.
+   * El vehículo escrito, en su propia consulta: desde la 032 es
+   * `quote_requests.vehicle_description` (0160 del backend), pero NO va en el
+   * SELECT compartido de arriba — una columna inexistente ahí apagaría la ficha
+   * entera en una base sin la 0160. Sin la 032 se lee la tabla vieja de `ops`
+   * (018). → `vehicleTextSource()`
    */
-  const editAvailable = await quoteEditAvailable()
-  const vehicleText = editAvailable
-    ? ((
-        await sqlOne<{ vehicle_text: string }>(
-          `select vehicle_text from ops.quote_request_vehicle_text where quote_request_id = $1`,
-          [id],
-        )
-      )?.vehicle_text ?? null)
-    : null
+  const [editAvailable, textSource] = await Promise.all([quoteEditAvailable(), vehicleTextSource()])
+  const vehicleText =
+    textSource === 'column'
+      ? ((
+          await sqlOne<{ vehicle_description: string | null }>(
+            `select vehicle_description from quote_requests where id = $1`,
+            [id],
+          )
+        )?.vehicle_description ?? null)
+      : textSource === 'ops'
+        ? ((
+            await sqlOne<{ vehicle_text: string }>(
+              `select vehicle_text from ops.quote_request_vehicle_text where quote_request_id = $1`,
+              [id],
+            )
+          )?.vehicle_text ?? null)
+        : null
 
   // Geocode del backend (0140) + el punto viejo de la 021 como fallback
   // transicional de lectura. → `~/server/quote-geocode.repo`
@@ -1365,9 +1406,11 @@ export async function quoteEditWithoutLocationAvailable(): Promise<boolean> {
  *   y por eso la 028 existe. Con GPS la 018 exige que no cambie: la subconsulta
  *   le da exactamente eso.
  *
- * El backend no tiene camino admin para el resto de estos campos, y el
- * vehículo escrito ni siquiera tiene columna en `quote_requests`. Si un
- * `UPDATE quote_requests` aparece suelto en este archivo, está mal.
+ * El backend no tiene camino admin para el resto de estos campos. El vehículo
+ * escrito, desde la 032, es `quote_requests.vehicle_description` (0160 del
+ * backend, que lo usa en el despacho), y lo escribe este mismo SP: el backend
+ * no tiene endpoint para él. Si un `UPDATE quote_requests` aparece suelto en
+ * este archivo, está mal.
  */
 export async function updateQuoteRequest(
   input: UpdateQuoteRequestInput,

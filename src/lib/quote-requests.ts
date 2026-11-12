@@ -591,7 +591,11 @@ const plateField = z
   .max(20)
   .refine((s) => s.replace(/[^A-Za-z0-9]/g, '').length <= 7, 'La patente tiene hasta 7 letras y números.')
 
-/** El vehículo escrito ("Peugeot 208 1.6 2019"). Vive en `ops`, no en `quote_requests` — migración 018. */
+/**
+ * El vehículo escrito ("Peugeot 208 1.6 2019"). Desde la migración 032 es
+ * `quote_requests.vehicle_description` (0160 del backend, con CHECK de ≤ 200 y
+ * no en blanco); antes vivía en `ops.quote_request_vehicle_text` (018).
+ */
 const vehicleTextField = z.string().trim().max(200, 'El vehículo tiene hasta 200 caracteres.')
 
 /**
@@ -713,9 +717,10 @@ export interface QuoteRequestListItem {
   locationLocality: string | null
   /**
    * El vehículo ESCRITO ("Peugeot 208 1.6 2019") cuando no hay `vehicleId`
-   * que vincular — `ops.quote_request_vehicle_text` (018). `null` = no se
-   * cargó, o la 018 no está aplicada. La lista lo muestra en vez de "sin
-   * vehículo vinculado".
+   * que vincular — `quote_requests.vehicle_description` desde la 032 (antes
+   * `ops.quote_request_vehicle_text`, 018). `null` = no se cargó, o la base no
+   * tiene dónde guardarlo. La lista lo muestra en vez de "sin vehículo
+   * vinculado".
    */
   vehicleText: string | null
   contactedAt: string | null
@@ -836,9 +841,10 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
   rubroCategorySlugs: Array<string>
   /**
    * El vehículo ESCRITO por el operador ("Peugeot 208 1.6 2019"), para cuando
-   * no hay `vehicleId` que vincular. Vive en `ops.quote_request_vehicle_text`
-   * (migración 018), no en `quote_requests`: el backend no tiene columna para
-   * esto. `null` = no se cargó (o la 018 no está aplicada).
+   * no hay `vehicleId` que vincular. Desde la migración 032 vive en
+   * `quote_requests.vehicle_description` (0160 del backend), que el despacho a
+   * talleres usa como label cuando no hay modelo de catálogo; antes, en
+   * `ops.quote_request_vehicle_text` (018). `null` = no se cargó.
    */
   vehicleText: string | null
   /** `device` (GPS del teléfono, no se edita), `typed` (tipeada) o `null` (sin ubicación). */
