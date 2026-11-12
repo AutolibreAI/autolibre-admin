@@ -135,7 +135,7 @@ export const readinessStatusLabel = (s: string) => label(READINESS_STATUS_LABELS
 
 export const READINESS_REASON_LABELS: Record<string, string> = {
   request_closed: 'El pedido está cerrado.',
-  missing_vehicle_catalog: 'El vehículo no tiene modelo de catálogo (marca, modelo y año).',
+  missing_vehicle_catalog: 'Falta el vehículo: no tiene modelo de catálogo ni vehículo escrito.',
   missing_location: 'El pedido no tiene ubicación.',
   not_classified: 'El pedido no tiene rubros clasificados.',
   empty_description: 'La descripción está vacía.',
@@ -147,7 +147,9 @@ export const readinessReasonLabel = (r: string) => label(READINESS_REASON_LABELS
 
 /** Qué se puede arreglar desde esta misma ficha, para que el aviso diga cómo. */
 export const READINESS_REASON_HINTS: Record<string, string> = {
-  missing_vehicle_catalog: 'Cargá la patente y tocá «Identificar vehículo» (tarjeta Vehículo). «Editar datos» no alcanza: el vehículo escrito no es un modelo de catálogo.',
+  // Desde la 0160 del backend (migración 032 acá) el despacho acepta el vehículo
+  // escrito como label: el bloqueo salta sólo si no hay catálogo NI descripción.
+  missing_vehicle_catalog: 'Completá uno de los dos: cargá la patente y tocá «Identificar vehículo» (tarjeta Vehículo), o escribí el vehículo en «Editar datos».',
   missing_location: 'Cargá la ubicación con «Corregir ubicación» y, si no está ubicada, «Geocodificar» (tarjeta Pedido).',
   not_classified: 'Elegí los rubros en «Talleres candidatos» y guardá la clasificación.',
   empty_description: 'Completá la descripción en «Editar datos».',
