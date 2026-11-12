@@ -1172,6 +1172,14 @@ Alcance: `migrations/018_ops_editar_pedido.sql` y su `.test.sql`, `createQuoteRe
 2. **`ops.quote_request_vehicle_text`**: el vehículo ESCRITO ("Peugeot 208 1.6 2019"). Tabla de
    `ops` por el mismo motivo que la 015: `quote_requests` no tiene columna para esto y nada de la
    app lo lee. Sin FK. El `UPDATE … FROM` del backfill está en la cabecera de la migración.
+   **Mudado el 2026-11-12 (migración 032)** a `public.quote_requests.vehicle_description` (0160
+   del backend, que lo usa en el despacho a talleres). La 032 exige la columna
+   (`VEHICLE_DESCRIPTION_COLUMN_MISSING` si el backend no desplegó la 0160), copia los textos
+   normalizados donde la columna está NULL, hace que el alta y la edición escriban la columna
+   (CREATE OR REPLACE, misma firma, sigue siendo `p_vehicle_text`), deja `vehicle_text` como alias
+   en el snapshot del log y dropea `ops._set_quote_request_vehicle_text`. La tabla de `ops` queda
+   **sin uso pero NO dropeada** hasta confirmar en producción. La copia mueve `updated_at` de esos
+   pedidos (trigger del backend).
 3. **`ops.update_quote_request`**: contacto, patente, vehículo escrito, descripción, monto
    declarado y ubicación tipeada. Reemplazo COMPLETO (lo que llega es lo que queda; blanco borra).
 
@@ -1233,7 +1241,9 @@ DEV antes de producción**: la réplica no tiene el resto de `public`.
 
 El alta y la edición llaman a las firmas nuevas, así que el handler chequea
 `to_regclass('ops.quote_request_vehicle_text')` antes (`QUOTE_EDIT_UNAVAILABLE`), y la ficha
-esconde «Editar datos». La lectura del vehículo escrito también se guarda con ese chequeo.
+esconde «Editar datos». La lectura del vehículo escrito se guarda con
+`vehicleTextSource()`: la columna `vehicle_description` sólo si la 032 está aplicada (se reconoce
+porque dropea `ops._set_quote_request_vehicle_text`), si no la tabla vieja de `ops`.
 **Consecuencia: entre el merge y la aplicación de la 018, "Cargar pedido" no funciona** en esa
 base. En producción la aplica el `vercel-build` antes de buildear, así que no hay ventana.
 

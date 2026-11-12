@@ -101,9 +101,14 @@ y el backend resuelve `quote_requests.vehicle_catalog_id` con el proveedor de pa
 (hasta ~10 s, timeout propio de 30 s). Respuesta `resolved` / `searching` (reintentar con la misma
 patente en minutos) / `not_found` / `insufficient_data` (el modelo va a mano: **todavía no hay
 selector**, aunque el backend tiene `PUT …/vehicle-catalog`). Se ofrece sólo abierto y SIN modelo:
-el vehículo de un pedido no cambia (con modelo, 400 `INVALID_STATE_TRANSITION`). Ojo: el vehículo
-escrito de «Editar datos» (`ops.quote_request_vehicle_text`) NO es un modelo de catálogo, y
+el vehículo de un pedido no cambia (con modelo, 400 `INVALID_STATE_TRANSITION`). Ojo:
 `ops.update_quote_request` también escribe `plate` sin conocer esa regla.
+
+**Desde el 2026-11-12 el vehículo escrito también lo destraba.** La 0160 del backend suma
+`quote_requests.vehicle_description` y el despacho la usa como label cuando no hay
+`vehicle_catalog_id`: `missing_vehicle_catalog` (el reason conserva el nombre) salta sólo si no hay
+catálogo NI descripción. «Editar datos» la escribe por SQL desde la migración 032 (antes iba a
+`ops.quote_request_vehicle_text`, que el backend nunca leía). La pista dice «completá uno de los dos».
 
 **Radio: 5 km**, no 10 — `quotes.md` del backend dice 10 y quedó viejo; el controller dice "a 5 km o
 menos".

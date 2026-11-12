@@ -1280,7 +1280,8 @@ Migración 018 (`ops-write-actions.md`). Tres cambios:
   (`plate` nullable); la exigía nuestro SP. Se normaliza a mayúsculas sin
   separadores (`AB 123 CD` → `AB123CD`), porque la columna es `varchar(7)`.
   Con cuenta de AutoLibre la base SÍ la exige, y la edición no deja vaciarla.
-- **Vehículo escrito** (`vehicleText`, `ops.quote_request_vehicle_text`): lo que
+- **Vehículo escrito** (`vehicleText`; desde la migración 032 es
+  `quote_requests.vehicle_description`, antes `ops.quote_request_vehicle_text`): lo que
   cuenta la persona, para cuando no hay `vehicle_id`. No es el vehículo
   VINCULADO (eso sigue sin picker, ver "Sin vincular usuario ni vehículo"). Las
   plantillas lo usan en este orden: catálogo del vinculado → escrito → patente
