@@ -4,6 +4,7 @@ import { Check, Copy, History, MessageCircle, Pencil, Plus } from 'lucide-react'
 import {
   TEMPLATE_VARIABLES,
   WHATSAPP_TEXT_MAX,
+  quoteEntryContact,
   readableQuoteMessageTemplateError,
   renderQuoteTemplate,
   saveQuoteMessageTemplateSchema,
@@ -16,7 +17,7 @@ import {
 } from '~/lib/quote-templates'
 import { canonicalWhatsAppDigits } from '~/lib/partners'
 import { listQuoteMessageTemplateVersionsFn, saveQuoteMessageTemplateFn } from '~/fn/quote-message-templates'
-import type { QuoteRequestDetail } from '~/lib/quote-requests'
+import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -120,7 +121,14 @@ export function QuoteTemplates({
   // adivinar la característica — adivinarla mal le escribe a otra persona.
   const digits = isForPerson ? canonicalWhatsAppDigits(detail.contactPhone) : null
   const waUrl = isForPerson ? whatsAppMessageUrl(digits, text) : null
-  const { expired } = splitQuoteMessageEntries(entries)
+  const { included, expired } = splitQuoteMessageEntries(entries)
+  // Los talleres que salen con el número como texto y no como link de
+  // WhatsApp: se avisa ACÁ, nunca en el mensaje, para que el operador lo
+  // corrija a mano.
+  const unlinkable = included.flatMap((e, i) => {
+    const contact = quoteEntryContact(e, quotePublicCode(detail.publicNumber))
+    return contact?.kind === 'phone' ? [{ position: i + 1, name: e.name, phone: contact.phone, reason: contact.reason }] : []
+  })
 
   async function copy() {
     try {
@@ -197,6 +205,20 @@ export function QuoteTemplates({
               : `${expired.length} propuestas vencieron y no entran en el mensaje.`}{' '}
             Mandar un precio caducado es peor que mandar uno menos.
           </p>
+        ) : null}
+
+        {active.id === 'presupuestos' && unlinkable.length > 0 ? (
+          <ul className="mb-3 space-y-1 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
+            {unlinkable.map((u) => (
+              <li key={u.position}>
+                <span className="font-medium">
+                  {u.position}. {u.name}
+                </span>
+                : ⚠️ Teléfono no normalizable para WhatsApp ({u.phone}): {u.reason}. Sale como texto, sin link;
+                corregilo en la propuesta o en la ficha del taller.
+              </li>
+            ))}
+          </ul>
         ) : null}
 
         <div className="rounded-md border border-border bg-secondary p-3">

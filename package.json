@@ -8,6 +8,7 @@
     "vercel-build": "node --env-file-if-exists=.env scripts/migrate.mjs --on-deploy && vite build",
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "node --test \"tests/*.test.ts\"",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
     "db:migrate:status": "node --env-file-if-exists=.env scripts/migrate.mjs --status",
     "db:migrate:dry": "node --env-file-if-exists=.env scripts/migrate.mjs --dry-run"

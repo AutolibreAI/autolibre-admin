@@ -1064,6 +1064,19 @@ Cuatro detalles del armado que se descubrieron CORRIENDO el render
 - **Las fechas van con `formatDate`**, el mismo formateador del resto del
   panel, no el `YYYY-MM-DD` crudo.
 
+**El contacto del taller es un link `wa.me`, no el número** (desde el
+2026-11-13). En WhatsApp un número escrito no es un link: tocarlo abre un menú
+y, si no coincide exacto con una cuenta, ofrece "Invitar a WhatsApp". El 📞
+pasó a `💬 WhatsApp: https://wa.me/549…?text=…` con un saludo corto que nombra
+el `AL-n` (`quoteEntryContact`, con `toWhatsAppAR` de `~/lib/whatsapp-ar`:
+sólo arma el texto, no guarda nada). Los paréntesis van como `%28`/`%29`
+porque el linkificador de WhatsApp puede cortar en `)`. Si el número no se
+puede normalizar (no da 10 dígitos nacionales, o el 15 es ambiguo) queda el
+📞 crudo y la tarjeta Mensajes lo avisa en ámbar al lado del taller — nunca
+en el mensaje. Tests: `node --test "tests/*.test.ts"`. Al 2026-11-13, los 152
+números de producción (WhatsApp de partners activos + talleres de afuera)
+normalizan.
+
 **El botón manda lo EDITADO**, no el render original: si mandara el original,
 el operador editaría el cuadro y se preguntaría por qué llegó otra cosa.
 

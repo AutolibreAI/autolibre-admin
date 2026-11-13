@@ -4,6 +4,7 @@ import { formatAmount, formatQuoteAmount } from '~/lib/quote-responses'
 import type { QuoteProposal } from '~/lib/quote-proposals'
 import { formatDate } from '~/lib/format'
 import { partnerProfileUrl } from '~/lib/partners'
+import { toWhatsAppAR } from '~/lib/whatsapp-ar'
 
 /**
  * Plantillas de mensajes para la ficha de un pedido (`/leads/pedidos/:id`).
@@ -512,7 +513,37 @@ function formatItemAmount(amount: number, currency: string): string {
   return amount === 0 ? 'sin cargo' : formatAmount(amount, currency)
 }
 
-function responsesBlock(entries: ReadonlyArray<QuoteMessageEntry>): string {
+/**
+ * Cómo sale el contacto de un taller en el mensaje.
+ *
+ * En WhatsApp un número escrito como texto no es un link: al tocarlo aparece
+ * un menú, y si no coincide exacto con una cuenta (fijo, sin el 9, con 15…)
+ * ofrece "Invitar a WhatsApp". Por eso, si el número se puede normalizar
+ * (`toWhatsAppAR`), sale como link `wa.me` que abre el chat directo, con un
+ * saludo corto ya escrito (WhatsApp muestra la URL entera). Si no se puede, el
+ * mensaje NO se rompe: queda el 📞 con el número tal cual, y la pantalla avisa
+ * al operador al lado del taller para que lo corrija a mano. La normalización
+ * es sólo para el texto: no se guarda en ningún lado.
+ *
+ * `phone` ya viene con el WhatsApp como prioridad: es
+ * `coalesce(partners.whatsapp, provider_phone)` (`quote-proposals.repo.ts`).
+ */
+export type QuoteEntryContact =
+  | { kind: 'whatsapp'; url: string }
+  | { kind: 'phone'; phone: string; reason: string }
+
+export function quoteEntryContact(entry: QuoteMessageEntry, quoteCode: string | null): QuoteEntryContact | null {
+  if (!entry.phone) return null
+  const r = toWhatsAppAR(entry.phone)
+  if (!r.ok) return { kind: 'phone', phone: entry.phone, reason: r.reason }
+  const text = `Hola ${entry.name}, te escribo por el presupuesto de AutoLibre${quoteCode ? ` (pedido #${quoteCode})` : ''}`
+  // `encodeURIComponent` deja los paréntesis sin codificar, y el linkificador
+  // de WhatsApp puede cortar el link en un `)`: se codifican también.
+  const encoded = encodeURIComponent(text).replace(/\(/g, '%28').replace(/\)/g, '%29')
+  return { kind: 'whatsapp', url: `https://wa.me/${r.digits}?text=${encoded}` }
+}
+
+function responsesBlock(entries: ReadonlyArray<QuoteMessageEntry>, quoteCode: string | null = null): string {
   const { included } = splitQuoteMessageEntries(entries)
   if (included.length === 0) return '[todavía no hay propuestas cargadas en el pedido]'
 
@@ -522,7 +553,9 @@ function responsesBlock(entries: ReadonlyArray<QuoteMessageEntry>): string {
       // La recomendada lo dice con el MISMO motivo que la persona lee en la app.
       if (r.recommendationReason) lines.push(`⭐ Te lo recomendamos: ${r.recommendationReason}`)
       if (r.address) lines.push(`📍 ${r.address}`)
-      if (r.phone) lines.push(`📞 ${r.phone}`)
+      const contact = quoteEntryContact(r, quoteCode)
+      if (contact?.kind === 'whatsapp') lines.push(`💬 WhatsApp: ${contact.url}`)
+      else if (contact) lines.push(`📞 ${contact.phone}`)
       if (r.hours) lines.push(`🕘 ${r.hours}`)
       // El perfil público del taller en la web (pedido del 2026-10-27), para que
       // la persona vea más del taller que lo que entra en el mensaje. Sólo con
@@ -576,7 +609,7 @@ export function renderQuoteTemplate(
     zona: zoneValue(detail),
     localidad: localityValue(detail),
     intro: introSentence(included.length, vehiclePhrase(detail), detail.description),
-    presupuestos: responsesBlock(entries),
+    presupuestos: responsesBlock(entries, quotePublicCode(detail.publicNumber)),
   }
 
   // Una línea cuyo ÚNICO contenido es un placeholder de `OPTIONAL_LINE_KEYS`
