@@ -1,12 +1,14 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import { RefreshCw, Send } from 'lucide-react'
+import { RefreshCw, Search, Send, Undo2, X } from 'lucide-react'
 import { approvePartnerDispatchFn } from '~/fn/partner-dispatch'
 import {
   MAX_DISPATCH_SLOTS,
   READINESS_REASON_HINTS,
   defaultDispatchSelection,
   deliveryStatusLabel,
+  discardReducer,
+  dispatchRows,
   exclusionReasonLabel,
   failureReasonLabel,
   formatDispatchDistance,
@@ -27,6 +29,7 @@ import {
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
 import { Checkbox } from '~/components/ui/checkbox'
+import { Input } from '~/components/ui/input'
 import { formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
@@ -51,6 +54,15 @@ import { cn } from '~/lib/utils'
  * sin duplicar. Si después de un fallo cambió la selección, se arma un id
  * nuevo: el mismo id con otros talleres sería `DISPATCH_ID_CONFLICT`.
  *
+ * ── Sugeridos, otros, búsqueda y descartes ────────────────────────────────
+ *
+ * Además de los sugeridos (`candidates`: a ≤ 5 km y con algún rubro pedido),
+ * el borrador trae `otherPartners`: TODOS los demás activos despachables, y se
+ * eligen igual. La búsqueda por nombre filtra las dos listas y muestra en gris
+ * los excluidos que coinciden, con su motivo. «Descartar» esconde un taller y
+ * lo saca de la selección: es del cliente, sin persistir ni motivo, y vuelve
+ * con «Actualizar» o al recargar (`refreshNonce` remonta la sección).
+ *
  * ── El mensaje sobrevive a la relectura ───────────────────────────────────
  *
  * El componente queda montado en todos los estados (la ruta lo monta con
@@ -63,11 +75,16 @@ export function PartnerDispatch({ quoteRequestId, data }: { quoteRequestId: stri
   // El último resultado de una aprobación. Vive acá, no en el bloque de
   // candidatos, para que una relectura que cambia el borrador no lo borre.
   const [notice, setNotice] = useState<Notice | null>(null)
+  // Cada «Actualizar» de esta tarjeta remonta el borrador aunque no haya
+  // cambiado: los descartes (del cliente, sin persistir) vuelven, igual que al
+  // recargar la página.
+  const [refreshNonce, setRefreshNonce] = useState(0)
 
   const refresh = async () => {
     setRefreshing(true)
     try {
       await router.invalidate()
+      setRefreshNonce((n) => n + 1)
     } finally {
       setRefreshing(false)
     }
@@ -106,7 +123,7 @@ export function PartnerDispatch({ quoteRequestId, data }: { quoteRequestId: stri
 
             {data.draft.ok ? (
               <DraftSection
-                key={draftKey(data.draft.data)}
+                key={`${draftKey(data.draft.data)}#${refreshNonce}`}
                 quoteRequestId={quoteRequestId}
                 draft={data.draft.data}
                 staleIds={notice?.kind === 'error' ? notice.staleIds : []}
@@ -135,8 +152,9 @@ export function PartnerDispatch({ quoteRequestId, data }: { quoteRequestId: stri
                 <ErrorBlock error={data.outreach.error} what="el seguimiento" />
               )}
               <p className="text-xs leading-relaxed text-muted-foreground">
-                No se actualiza solo: el backend todavía no recibe las respuestas de los talleres. Tocá «Actualizar»
-                para ver el estado más reciente. Las horas son UTC.
+                No se actualiza solo: el backend recibe las respuestas de los talleres y vence los contactos sin
+                respuesta, pero esta tarjeta no sondea. Tocá «Actualizar» para ver el estado más reciente. Las horas son
+                UTC.
               </p>
             </section>
           </>
@@ -152,7 +170,7 @@ export function PartnerDispatch({ quoteRequestId, data }: { quoteRequestId: stri
  * tiene que sobrevivir —el aviso— vive en el padre.
  */
 const draftKey = (d: DispatchDraft) =>
-  `${d.readiness.status}|${d.freeSlots}|${d.candidates.map((c) => c.partnerId).join(',')}`
+  `${d.readiness.status}|${d.freeSlots}|${d.candidates.map((c) => c.partnerId).join(',')}|${d.otherPartners.map((c) => c.partnerId).join(',')}`
 
 type Notice =
   | { kind: 'success'; text: string }
@@ -228,6 +246,15 @@ function DraftSection({
   // La selección con la que falló el último intento: si cambia, el id viejo no sirve.
   const [failedSelection, setFailedSelection] = useState<string | null>(null)
   const inFlight = useRef(false)
+  // Búsqueda por nombre y descartes: del CLIENTE, no se guardan en ningún lado.
+  const [query, setQuery] = useState('')
+  const [discarded, dispatchDiscard] = useReducer(discardReducer, [])
+  const [showDiscarded, setShowDiscarded] = useState(false)
+
+  // Sugeridos primero, después los otros: es también el orden de `partnerIds`.
+  const selectable = [...draft.candidates, ...draft.otherPartners]
+  const rows = dispatchRows(draft, { query, discarded })
+  const searching = query.trim() !== ''
 
   const selectionKey = [...selected].sort().join(',')
   const canApprove = ready && reviewed && selected.length >= 1 && selected.length <= maxSelectable
@@ -236,6 +263,14 @@ function DraftSection({
     setSelected((prev) => (on ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((x) => x !== id)))
     setConfirming(false)
   }
+
+  const discard = (id: string) => {
+    dispatchDiscard({ type: 'discard', partnerId: id })
+    setSelected((prev) => prev.filter((x) => x !== id))
+    setConfirming(false)
+  }
+
+  const rowDisabled = (id: string) => !ready || busy || (!selected.includes(id) && selected.length >= maxSelectable)
 
   const openConfirm = () => {
     // En el handler, nunca en el render: `crypto.randomUUID()` no corre en SSR.
@@ -250,8 +285,8 @@ function DraftSection({
     if (!canApprove || !dispatchId || inFlight.current) return
     inFlight.current = true
     setBusy(true)
-    // El orden de la selección es el de los candidatos del borrador.
-    const partnerIds = draft.candidates.map((c) => c.partnerId).filter((id) => selected.includes(id))
+    // El orden de la selección es el del borrador: sugeridos, después otros.
+    const partnerIds = selectable.map((c) => c.partnerId).filter((id) => selected.includes(id))
     try {
       const result = await approvePartnerDispatchFn({ data: { quoteRequestId, dispatchId, partnerIds } })
       const n = result.outreach.length
@@ -284,7 +319,7 @@ function DraftSection({
 
   const reasons = draft.readiness.reasons
   const hints = reasons.map((r) => READINESS_REASON_HINTS[r]).filter((h): h is string => h !== undefined)
-  const selectedNames = draft.candidates.filter((c) => selected.includes(c.partnerId)).map((c) => c.name)
+  const selectedNames = selectable.filter((c) => selected.includes(c.partnerId)).map((c) => c.name)
 
   return (
     <div className="space-y-4">
@@ -353,22 +388,81 @@ function DraftSection({
         </p>
       </section>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative w-full max-w-xs">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar taller por nombre…"
+            aria-label="Buscar taller por nombre"
+            className="h-8 pl-8 text-sm"
+          />
+        </div>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {formatInt(selected.length)} de {formatInt(maxSelectable)} elegidos
+        </span>
+        {discarded.length > 0 ? (
+          <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setShowDiscarded((v) => !v)}>
+            {showDiscarded ? 'Ocultar descartados' : `Mostrar descartados (${formatInt(discarded.length)})`}
+          </Button>
+        ) : null}
+      </div>
+
+      {showDiscarded && rows.discardedRows.length > 0 ? (
+        <section className="space-y-1 rounded-md border border-dashed border-border px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Descartados (sólo en esta pantalla)
+            </h3>
+            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => dispatchDiscard({ type: 'restoreAll' })}>
+              Restaurar todos
+            </Button>
+          </div>
+          <ul className="space-y-0.5 text-sm">
+            {rows.discardedRows.map((c) => (
+              <li key={c.partnerId} className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">
+                  {c.name} · <span className="tabular-nums">{formatDispatchDistance(c)}</span>
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={() => dispatchDiscard({ type: 'restore', partnerId: c.partnerId })}
+                >
+                  <Undo2 className="size-3.5" aria-hidden />
+                  Restaurar
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section className="space-y-2">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Candidatos</h3>
+        <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Sugeridos{draft.candidates.length > 0 ? ` (${formatInt(rows.suggested.length)})` : ''}
+        </h3>
         {draft.candidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">Sin talleres sugeridos a 5 km o menos que cubran algún rubro pedido.</p>
+        ) : rows.suggested.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {searching ? 'Ningún sugerido con ese nombre.' : 'Descartaste todos los sugeridos.'}
+          </p>
         ) : (
           <ul className="space-y-2">
-            {draft.candidates.map((c) => (
+            {rows.suggested.map((c) => (
               <li key={c.partnerId}>
                 <CandidateRow
                   candidate={c}
                   checked={selected.includes(c.partnerId)}
-                  disabled={
-                    !ready || busy || (!selected.includes(c.partnerId) && selected.length >= maxSelectable)
-                  }
+                  disabled={rowDisabled(c.partnerId)}
                   stale={staleIds.includes(c.partnerId)}
                   onChange={(on) => toggle(c.partnerId, on)}
+                  onDiscard={busy ? null : () => discard(c.partnerId)}
                 />
               </li>
             ))}
@@ -376,13 +470,69 @@ function DraftSection({
         )}
       </section>
 
-      {draft.excluded.length > 0 ? (
+      {draft.otherPartners.length > 0 ? (
+        <section className="space-y-2">
+          <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Otros talleres ({formatInt(rows.others.length)})
+          </h3>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Activos, fuera de los 5 km, sin el rubro pedido o sin ubicación, del más cercano al más lejano. Se pueden
+            elegir igual que los sugeridos.
+          </p>
+          {rows.others.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {searching ? 'Ningún otro taller con ese nombre.' : 'Descartaste todos los otros talleres.'}
+            </p>
+          ) : (
+            <ul className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
+              {rows.others.map((c) => (
+                <li key={c.partnerId}>
+                  <CandidateRow
+                    candidate={c}
+                    checked={selected.includes(c.partnerId)}
+                    disabled={rowDisabled(c.partnerId)}
+                    stale={staleIds.includes(c.partnerId)}
+                    onChange={(on) => toggle(c.partnerId, on)}
+                    onDiscard={busy ? null : () => discard(c.partnerId)}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+
+      {searching && rows.excludedMatches.length > 0 ? (
+        <section className="space-y-1">
+          <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            No se les puede mandar
+          </h3>
+          <ul className="space-y-1">
+            {rows.excludedMatches.map((x) => (
+              <li
+                key={`${x.partnerId}-${x.reason}`}
+                className="rounded-md border border-border bg-secondary px-3 py-2 text-sm text-muted-foreground"
+                aria-disabled
+              >
+                <span>{x.name ?? 'Taller sin nombre'}</span>
+                {x.distanceKm !== undefined ? <span className="tabular-nums"> · {formatDispatchDistance(x)}</span> : null}
+                <span> · {exclusionReasonLabel(x.reason)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {!searching && draft.excluded.length > 0 ? (
         <section className="space-y-1">
           <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Excluidos</h3>
           <ul className="space-y-0.5 text-sm">
             {draft.excluded.map((x) => (
               <li key={`${x.partnerId}-${x.reason}`}>
                 <span className={x.name ? undefined : 'text-muted-foreground'}>{x.name ?? 'Taller sin nombre'}</span>
+                {x.distanceKm !== undefined ? (
+                  <span className="tabular-nums text-muted-foreground"> · {formatDispatchDistance(x)}</span>
+                ) : null}
                 <span className="text-muted-foreground"> · {exclusionReasonLabel(x.reason)}</span>
               </li>
             ))}
@@ -450,12 +600,15 @@ function CandidateRow({
   disabled,
   stale,
   onChange,
+  onDiscard,
 }: {
   candidate: DispatchCandidate
   checked: boolean
   disabled: boolean
   stale: boolean
   onChange: (on: boolean) => void
+  /** Esconderlo de la lista (del cliente, sin motivo). `null` = no se ofrece. */
+  onDiscard: (() => void) | null
 }) {
   return (
     <div
@@ -475,14 +628,30 @@ function CandidateRow({
           <span className="mt-0.5 block text-xs">
             {c.coveredRubros.length > 0 ? (
               <span className="text-muted-foreground">Cubre: {c.coveredRubros.join(', ')}</span>
-            ) : null}
-            {c.uncoveredRubros.length > 0 ? (
-              <span className="text-status-yellow">
-                {c.coveredRubros.length > 0 ? ' · ' : ''}No cubre: {c.uncoveredRubros.join(', ')}
-              </span>
+            ) : (
+              <span className="text-status-yellow">No cubre ningún rubro pedido</span>
+            )}
+            {c.coveredRubros.length > 0 && c.uncoveredRubros.length > 0 ? (
+              <span className="text-status-yellow"> · No cubre: {c.uncoveredRubros.join(', ')}</span>
             ) : null}
           </span>
         </span>
+        {onDiscard ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground"
+            onClick={(e) => {
+              // Dentro del <label>: sin esto el click también tildaría la casilla.
+              e.preventDefault()
+              onDiscard()
+            }}
+          >
+            <X className="size-3.5" aria-hidden />
+            Descartar
+          </Button>
+        ) : null}
       </label>
       <details className="mt-1.5 pl-6 text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Ver el mensaje que recibe</summary>
