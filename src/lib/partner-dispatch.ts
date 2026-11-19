@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 /**
- * «Despacho por WhatsApp» — el pedido sale a hasta 3 talleres por un template
+ * «Despacho por WhatsApp» — el pedido sale a hasta 10 talleres por un template
  * de WhatsApp que manda el BACKEND (`partner_outreach`, 0142). Client-safe:
  * tipos, schemas de las respuestas, etiquetas y la traducción de errores.
  * → `.claude/rules/partner-dispatch.md`
@@ -11,7 +11,16 @@ import { z } from 'zod'
  * nunca en blanco y nunca rompe la validación de la respuesta entera.
  */
 
-export const MAX_DISPATCH_SLOTS = 3
+/** Lugares por pedido (0156 del backend; antes 3). El backend aprueba 1..10 `partnerIds`. */
+export const MAX_DISPATCH_SLOTS = 10
+
+/**
+ * Cuántos sugeridos arrancan tildados. NO es el tope: con 10 lugares, tildar
+ * todo lo que entra mandaría 10 WhatsApp con un solo click distraído. Los
+ * primeros 3 sugeridos (el orden del backend: pedidos por la persona, más
+ * cobertura, más cerca) y el resto lo suma el operador a mano.
+ */
+export const DEFAULT_PRESELECTED_DISPATCH = 3
 
 /** Sentinelas propias. Las arma `backendError(..., { dispatch: true })` y los handlers. */
 export const PARTNER_DISPATCH_ERROR = 'PARTNER_DISPATCH_ERROR'
@@ -22,6 +31,25 @@ export const PARTNER_DISPATCH_BAD_RESPONSE = 'PARTNER_DISPATCH_BAD_RESPONSE'
 
 const textPreviewSchema = z.object({ text: z.string() })
 
+/**
+ * Un taller del borrador: sugerido (`candidates`) u otro (`otherPartners`), la
+ * misma forma. `distanceKm` es el km EXACTO, sin redondear (agregado después
+ * del despacho original): `.optional()` para un backend que todavía no lo
+ * manda, `null` = el taller no tiene ubicación. `distanceBucket` es `null` en
+ * los otros talleres sin ubicación.
+ */
+const dispatchPartnerSchema = z.object({
+  partnerId: z.string(),
+  name: z.string(),
+  distanceBucket: z.string().nullable(),
+  distanceKm: z.number().nullable().optional(),
+  templateRubros: z.string(),
+  coveredRubros: z.array(z.string()),
+  uncoveredRubros: z.array(z.string()),
+  coversAllRubros: z.boolean(),
+  templatePreview: textPreviewSchema,
+})
+
 export const dispatchDraftSchema = z.object({
   readiness: z.object({
     status: z.string(),
@@ -30,23 +58,19 @@ export const dispatchDraftSchema = z.object({
   freeSlots: z.number().int(),
   rubros: z.array(z.object({ slug: z.string(), name: z.string(), primary: z.boolean() })),
   locality: z.string().nullable(),
-  candidates: z.array(
-    z.object({
-      partnerId: z.string(),
-      name: z.string(),
-      distanceBucket: z.string(),
-      templateRubros: z.string(),
-      coveredRubros: z.array(z.string()),
-      uncoveredRubros: z.array(z.string()),
-      coversAllRubros: z.boolean(),
-      templatePreview: textPreviewSchema,
-    }),
-  ),
+  candidates: z.array(dispatchPartnerSchema),
+  /**
+   * Todos los OTROS partners activos despachables (fuera de los 5 km, sin el
+   * rubro o sin ubicación), por distancia con los sin ubicación al final.
+   * `.default([])`: un backend anterior no lo manda y la tarjeta sigue andando.
+   */
+  otherPartners: z.array(dispatchPartnerSchema).default([]),
   excluded: z.array(
     z.object({
       partnerId: z.string(),
       name: z.string().nullable(),
       reason: z.string(),
+      distanceKm: z.number().nullable().optional(),
     }),
   ),
   detailsPreview: textPreviewSchema,
@@ -61,6 +85,7 @@ export const dispatchDraftSchema = z.object({
 })
 export type DispatchDraft = z.infer<typeof dispatchDraftSchema>
 export type DispatchCandidate = DispatchDraft['candidates'][number]
+export type DispatchExcluded = DispatchDraft['excluded'][number]
 
 export const approvedDispatchSchema = z.object({
   dispatchId: z.string(),
@@ -140,8 +165,8 @@ export const READINESS_REASON_LABELS: Record<string, string> = {
   not_classified: 'El pedido no tiene rubros clasificados.',
   empty_description: 'La descripción está vacía.',
   description_has_pii: 'La descripción tiene datos personales.',
-  no_free_slots: 'No quedan lugares libres (como mucho 3 talleres por pedido).',
-  no_candidates: 'No hay talleres candidatos a 5 km o menos que cubran el rubro principal.',
+  no_free_slots: `No quedan lugares libres (como mucho ${MAX_DISPATCH_SLOTS} talleres por pedido).`,
+  no_candidates: 'No hay ningún taller activo al que mandárselo (ni sugeridos a 5 km ni otros).',
 }
 export const readinessReasonLabel = (r: string) => label(READINESS_REASON_LABELS, r)
 
@@ -163,6 +188,20 @@ export const DISTANCE_BUCKET_LABELS: Record<string, string> = {
   over_10_km: 'a más de 10 km',
 }
 export const distanceBucketLabel = (b: string) => label(DISTANCE_BUCKET_LABELS, b)
+
+const exactKm = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/**
+ * La distancia de un taller del borrador. Con `distanceKm` (número), el km
+ * EXACTO con dos decimales («2,37 km»): en el admin se permite (el operador
+ * elige a quién mandar); al taller nunca le llega. `null` = sin ubicación.
+ * Ausente (backend anterior) = la etiqueta del bucket.
+ */
+export function formatDispatchDistance(p: { distanceKm?: number | null; distanceBucket?: string | null }): string {
+  if (typeof p.distanceKm === 'number') return `${exactKm.format(p.distanceKm)} km`
+  if (p.distanceKm === null) return 'sin ubicación'
+  return p.distanceBucket ? distanceBucketLabel(p.distanceBucket) : 'sin ubicación'
+}
 
 export const EXCLUSION_REASON_LABELS: Record<string, string> = {
   invalid_whatsapp: 'sin WhatsApp válido en su ficha',
@@ -241,6 +280,82 @@ export const MESSAGE_DIRECTION_LABELS: Record<string, string> = {
   inbound: 'Taller',
 }
 export const messageDirectionLabel = (d: string) => label(MESSAGE_DIRECTION_LABELS, d)
+
+// ── Selección, búsqueda y descartes (del cliente) ───────────────────────────
+
+/** Los sugeridos que arrancan tildados: los primeros, hasta los lugares libres y `DEFAULT_PRESELECTED_DISPATCH`. */
+export function defaultDispatchSelection(input: {
+  ready: boolean
+  freeSlots: number
+  candidates: ReadonlyArray<{ partnerId: string }>
+}): Array<string> {
+  if (!input.ready) return []
+  const n = Math.max(0, Math.min(input.freeSlots, MAX_DISPATCH_SLOTS, DEFAULT_PRESELECTED_DISPATCH))
+  return input.candidates.slice(0, n).map((c) => c.partnerId)
+}
+
+/** Minúsculas, sin tildes ni diéresis (ñ → n) y con los espacios colapsados. */
+export function normalizeForSearch(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Contención por nombre. Una búsqueda vacía matchea todo; un nombre `null`, sólo la vacía. */
+export function matchesPartnerSearch(name: string | null, query: string): boolean {
+  const q = normalizeForSearch(query)
+  if (q === '') return true
+  return name !== null && normalizeForSearch(name).includes(q)
+}
+
+/**
+ * «Descartar» es estado del CLIENTE, sin persistir y sin motivo: esconde al
+ * taller de la lista mientras se arma el despacho. Vuelve al recargar la
+ * página o con «Actualizar».
+ */
+export type DiscardAction =
+  | { type: 'discard'; partnerId: string }
+  | { type: 'restore'; partnerId: string }
+  | { type: 'restoreAll' }
+
+export function discardReducer(state: ReadonlyArray<string>, action: DiscardAction): Array<string> {
+  switch (action.type) {
+    case 'discard':
+      return state.includes(action.partnerId) ? [...state] : [...state, action.partnerId]
+    case 'restore':
+      return state.filter((id) => id !== action.partnerId)
+    case 'restoreAll':
+      return []
+  }
+}
+
+export interface DispatchRows {
+  suggested: Array<DispatchCandidate>
+  others: Array<DispatchCandidate>
+  /** Los descartados, sugeridos y otros en ese orden: para restaurarlos. */
+  discardedRows: Array<DispatchCandidate>
+  /** Excluidos que coinciden con la búsqueda (sólo buscando): se muestran grises, no se eligen. */
+  excludedMatches: Array<DispatchExcluded>
+}
+
+/** Qué filas pinta la tarjeta, con la búsqueda y los descartes aplicados. */
+export function dispatchRows(
+  draft: Pick<DispatchDraft, 'candidates' | 'otherPartners' | 'excluded'>,
+  opts: { query: string; discarded: ReadonlyArray<string> },
+): DispatchRows {
+  const discarded = new Set(opts.discarded)
+  const keep = (c: DispatchCandidate) => !discarded.has(c.partnerId) && matchesPartnerSearch(c.name, opts.query)
+  const searching = normalizeForSearch(opts.query) !== ''
+  return {
+    suggested: draft.candidates.filter(keep),
+    others: draft.otherPartners.filter(keep),
+    discardedRows: [...draft.candidates, ...draft.otherPartners].filter((c) => discarded.has(c.partnerId)),
+    excludedMatches: searching ? draft.excluded.filter((x) => matchesPartnerSearch(x.name, opts.query)) : [],
+  }
+}
 
 // ── Errores ─────────────────────────────────────────────────────────────────
 

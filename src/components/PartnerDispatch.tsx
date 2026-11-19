@@ -5,10 +5,11 @@ import { approvePartnerDispatchFn } from '~/fn/partner-dispatch'
 import {
   MAX_DISPATCH_SLOTS,
   READINESS_REASON_HINTS,
+  defaultDispatchSelection,
   deliveryStatusLabel,
-  distanceBucketLabel,
   exclusionReasonLabel,
   failureReasonLabel,
+  formatDispatchDistance,
   messageDirectionLabel,
   messageKindLabel,
   outreachStatusLabel,
@@ -30,7 +31,7 @@ import { formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 
 /**
- * «Despacho por WhatsApp» — el backend le manda a hasta 3 talleres un template
+ * «Despacho por WhatsApp» — el backend le manda a hasta 10 talleres un template
  * de WhatsApp con el pedido (sin datos de la persona), y el que acepta recibe
  * los detalles. Acá se ve el borrador, se aprueba y se sigue cada contacto.
  * → `.claude/rules/partner-dispatch.md`
@@ -215,9 +216,10 @@ function DraftSection({
   const ready = draft.readiness.status === 'ready'
   const maxSelectable = Math.max(0, Math.min(draft.freeSlots, MAX_DISPATCH_SLOTS))
 
-  // Default: todos los candidatos tildados cuando está listo, hasta los lugares libres.
+  // Default: los primeros sugeridos tildados cuando está listo, como mucho
+  // `DEFAULT_PRESELECTED_DISPATCH` (3) aunque haya 10 lugares: el resto se suma a mano.
   const [selected, setSelected] = useState<Array<string>>(() =>
-    ready ? draft.candidates.slice(0, maxSelectable).map((c) => c.partnerId) : [],
+    defaultDispatchSelection({ ready, freeSlots: draft.freeSlots, candidates: draft.candidates }),
   )
   const [reviewed, setReviewed] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -354,7 +356,7 @@ function DraftSection({
       <section className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Candidatos</h3>
         {draft.candidates.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Sin candidatos a 5 km o menos que cubran el rubro principal.</p>
+          <p className="text-sm text-muted-foreground">Sin talleres sugeridos a 5 km o menos que cubran algún rubro pedido.</p>
         ) : (
           <ul className="space-y-2">
             {draft.candidates.map((c) => (
@@ -467,7 +469,7 @@ function CandidateRow({
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-sm font-medium">{c.name}</span>
-            <span className="text-xs text-muted-foreground">{distanceBucketLabel(c.distanceBucket)}</span>
+            <span className="text-xs tabular-nums text-muted-foreground">{formatDispatchDistance(c)}</span>
             {stale ? <span className="text-xs text-destructive">ya no es candidato — actualizá</span> : null}
           </span>
           <span className="mt-0.5 block text-xs">
