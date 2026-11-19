@@ -461,13 +461,34 @@ reglas que crea el panel): en el código son `NotificationRule` vs
 `NotificationSchedule`, y en la UI "Recordatorios de vencimiento" vs "Envíos
 programados", las dos secciones de `/notificaciones/reglas`.
 
-### Sólo lectura, y por qué todavía
+### Escrituras por HTTP — desde el 2026-11-19
 
-Ni un `UPDATE`/`INSERT` en `notification-rules.repo.ts`. La excepción de
-`ops-write-actions.md` se gana con un `grep` al backend que no se pudo correr,
-y hay una mina concreta: **si el seed del backend reactiva las reglas en cada
-deploy, una pausa desde el panel se deshace sola.** Está pedido al backend
-(plan, §8). Cuando conteste, las escrituras van por HTTP o por un SP 018.
+Ni un `UPDATE`/`INSERT` en `notification-rules.repo.ts`: agregar, pausar y
+reactivar van al backend (rama `feat/notifications-admin-rules`, `AdminGuard`),
+por `createNotificationRule` / `setNotificationRuleActive` de `backend.ts`. La
+mina que frenaba esto no existe: el seed del backend es un script manual que
+falla ante una tupla existente, así que una pausa desde el panel sobrevive a los
+deploys.
+
+| Acción | Endpoint | Respuesta |
+|---|---|---|
+| Agregar | `POST /admin/notification-rules` `{sourceType, offsetUnit, offsetValue}` | 201 `{id}` · 409 `CONFLICT` + `existingRuleId`/`existingRuleActive` |
+| Pausar / reactivar | `PATCH /admin/notification-rules/:id` `{active}` | 204, idempotente · 404 si no existe |
+
+- `sourceType` ∈ seguro, VTV, licencia, mantenimiento (`MANAGEABLE_RULE_SOURCES`);
+  `km` sólo para mantenimiento; `offsetValue` 0..10000. Canal (`push`) y
+  dirección (`before`) los fija el backend.
+- **Las 5 filas viejas de `registration_card` no muestran control**: el backend
+  da 400. El server function lo corta por SQL antes del fetch
+  (`NOTIFICATION_RULE_NOT_MANAGEABLE`).
+- **Un 409 de una regla PAUSADA ofrece «Reactivarlo»**, no un error: es la
+  misma tupla. Errores con el modo `notificationRule` de `backendError`
+  (`NOTIFICATION_RULE_ERROR:` + JSON, lo lee `parseNotificationRuleError`).
+- **Rige desde la próxima corrida del cron de detección (cada hora)**, y la UI
+  lo dice. Después de cada escritura, `router.invalidate()`.
+- **"Editar" = pausar + agregar.** `notifications.rule_id` sigue apuntando a la
+  vieja, así el historial queda bien. Por eso no hay botón de editar.
+- No hay GET en el backend: la lectura sigue siendo SQL.
 
 ### Cuatro hechos relevados contra producción, que deciden cualquier escritura futura
 

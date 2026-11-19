@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { NOTIFICATION_SOURCE_LABELS } from './notifications'
 
 /**
@@ -12,9 +13,11 @@ import { NOTIFICATION_SOURCE_LABELS } from './notifications'
  * offset se cumple. El TEXTO no está en la tabla — lo arma el backend en
  * código —, así que acá sólo se lee.
  *
- * Por qué no hay escrituras todavía: `.claude/plans/reglas-de-vencimiento.md`
- * (§3 y §8). Hasta que el backend conteste si su seed reactiva las reglas en
- * cada deploy, una pausa desde el panel podría deshacerse sola.
+ * Desde el 2026-11-19 se crean, pausan y reactivan por HTTP
+ * (`POST /admin/notification-rules`, `PATCH /admin/notification-rules/:id`,
+ * `AdminGuard`). El backend contestó la duda del plan (§8): el seed es un
+ * script manual que falla ante una tupla existente, así que una pausa desde el
+ * panel sobrevive a los deploys. Ni un `INSERT`/`UPDATE` por SQL.
  */
 
 export interface NotificationRule {
@@ -128,4 +131,119 @@ export function groupNotificationRules(rules: Array<NotificationRule>): Array<No
         sample,
       }
     })
+}
+
+// ── Escrituras (HTTP, backend feat/notifications-admin-rules) ───────────────
+
+/**
+ * Los `source_type` que el backend deja crear y pausar: los que tienen un cron
+ * de detección. Otro (las 5 filas viejas de `registration_card`, multas…) da
+ * 400, así que esas filas NO muestran el control.
+ */
+export const MANAGEABLE_RULE_SOURCES = [
+  'insurance',
+  'vehicle_inspection',
+  'driver_license',
+  'maintenance_occurrence',
+] as const
+export type ManageableRuleSource = (typeof MANAGEABLE_RULE_SOURCES)[number]
+
+export const isManageableRuleSource = (s: string): s is ManageableRuleSource =>
+  (MANAGEABLE_RULE_SOURCES as ReadonlyArray<string>).includes(s)
+
+export const RULE_OFFSET_UNITS = ['days', 'km'] as const
+export type RuleOffsetUnit = (typeof RULE_OFFSET_UNITS)[number]
+
+/** Los km sólo existen para mantenimiento: es el único vencimiento por kilometraje. */
+export const unitsForSource = (s: ManageableRuleSource): ReadonlyArray<RuleOffsetUnit> =>
+  s === 'maintenance_occurrence' ? RULE_OFFSET_UNITS : ['days']
+
+export const RULE_OFFSET_MAX = 10_000
+
+/**
+ * Espejo del DTO del backend. Canal (`push`) y dirección (`before`) no viajan:
+ * el backend los fija, porque los crons sólo evalúan "antes" y push es el único
+ * proveedor.
+ */
+export const createNotificationRuleSchema = z
+  .object({
+    sourceType: z.enum(MANAGEABLE_RULE_SOURCES),
+    offsetUnit: z.enum(RULE_OFFSET_UNITS),
+    offsetValue: z.number().int().min(0).max(RULE_OFFSET_MAX),
+  })
+  .refine((v) => v.offsetUnit === 'days' || v.sourceType === 'maintenance_occurrence', {
+    message: 'Los km sólo valen para mantenimiento.',
+    path: ['offsetUnit'],
+  })
+export type CreateNotificationRuleInput = z.infer<typeof createNotificationRuleSchema>
+
+export const setNotificationRuleActiveSchema = z.object({
+  ruleId: z.uuid(),
+  active: z.boolean(),
+})
+
+/** La regla no se puede manejar desde el panel (tipo viejo). Se corta ANTES del fetch. */
+export const NOTIFICATION_RULE_NOT_MANAGEABLE = 'NOTIFICATION_RULE_NOT_MANAGEABLE'
+export const NOTIFICATION_RULE_NOT_FOUND = 'NOTIFICATION_RULE_NOT_FOUND'
+
+/** Sentinela del modo `notificationRule` de `backendError`: `NOTIFICATION_RULE_ERROR:` + JSON. */
+export const NOTIFICATION_RULE_ERROR = 'NOTIFICATION_RULE_ERROR'
+
+export interface NotificationRuleError {
+  status: number
+  code: string
+  message: string
+  /** Sólo en el 409 del alta: la regla que ya existe con esa tupla. */
+  existingRuleId: string | null
+  existingRuleActive: boolean | null
+  /** 404 «Cannot POST/PATCH»: el backend desplegado no tiene la ruta. */
+  cannotRoute: boolean
+}
+
+export function parseNotificationRuleError(cause: unknown): NotificationRuleError | null {
+  const raw = cause instanceof Error ? cause.message : String(cause)
+  if (!raw.startsWith(`${NOTIFICATION_RULE_ERROR}:`)) return null
+  try {
+    const j = JSON.parse(raw.slice(NOTIFICATION_RULE_ERROR.length + 1)) as Partial<NotificationRuleError>
+    return {
+      status: typeof j.status === 'number' ? j.status : 0,
+      code: typeof j.code === 'string' ? j.code : '',
+      message: typeof j.message === 'string' ? j.message : '',
+      existingRuleId: typeof j.existingRuleId === 'string' ? j.existingRuleId : null,
+      existingRuleActive: typeof j.existingRuleActive === 'boolean' ? j.existingRuleActive : null,
+      cannotRoute: j.cannotRoute === true,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** El texto de un error de alta / pausa / reactivación. */
+export function readableNotificationRuleError(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause)
+  if (raw === NOTIFICATION_RULE_NOT_MANAGEABLE)
+    return 'Este tipo de recordatorio no se puede pausar ni reactivar: el backend ya no lo conoce.'
+  if (raw === NOTIFICATION_RULE_NOT_FOUND) return 'Esa regla ya no existe; recargá.'
+  if (raw === 'UNAUTHENTICATED') return 'Tu sesión expiró. Cerrá sesión y volvé a entrar.'
+  if (raw === 'FORBIDDEN') return 'Tu rol no tiene permiso para esta acción.'
+  if (raw.startsWith('BACKEND_UNREACHABLE:')) {
+    const url = raw.slice('BACKEND_UNREACHABLE:'.length)
+    return `El panel no llega al backend en ${url}. En producción es la variable AUTOLIBRE_BACKEND_URL de Vercel; en desarrollo, si no está en el .env, el panel usa localhost:3005 y el backend tiene que estar corriendo ahí.`
+  }
+  if (raw.includes('AUTOLIBRE_BACKEND_URL')) return 'Falta configurar AUTOLIBRE_BACKEND_URL.'
+  const e = parseNotificationRuleError(cause)
+  if (e) {
+    if (e.status === 401) return 'El backend no aceptó tu sesión. Cerrá sesión y volvé a entrar.'
+    if (e.status === 403) return 'Tu usuario no es admin en el backend.'
+    if (e.cannotRoute)
+      return 'El backend al que le habla el panel no tiene todavía la gestión de recordatorios (`/admin/notification-rules`): falta desplegarla.'
+    if (e.status === 404) return 'Esa regla ya no existe; recargá.'
+    if (e.status === 409)
+      return e.existingRuleActive === false
+        ? 'Ya existe ese recordatorio, pausado. Reactivalo en vez de crear otro.'
+        : 'Ya existe ese recordatorio y está activo.'
+    if (e.status === 400) return `El backend rechazó el pedido: «${e.message}».`
+    return `El backend respondió ${e.status}: ${e.message}`
+  }
+  return raw || 'Falló sin explicación.'
 }

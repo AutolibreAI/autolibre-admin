@@ -1,11 +1,11 @@
 import '@tanstack/react-start/server-only'
 
-import { sql } from './db'
+import { sql, sqlOne } from './db'
 import type { NotificationRule } from '~/lib/notification-rules'
 
 /**
  * Las reglas de aviso por vencimiento (`public.notification_rules`, del
- * backend). SÓLO LECTURA.
+ * backend). SÓLO LECTURA por SQL.
  *
  * Reemplaza el `select * from notification_rules` + el `count(*) … group by
  * rule_id` contra `notifications` que nadie corría: hasta acá no había forma de
@@ -13,11 +13,9 @@ import type { NotificationRule } from '~/lib/notification-rules'
  *
  * ── Ni un `UPDATE`/`INSERT` acá ─────────────────────────────────────────────
  *
- * La tabla es del backend, y la excepción de `ops-write-actions.md` (escribir
- * `public` desde un SP de `ops`) se gana con un `grep` que todavía no se pudo
- * correr. Además hay una mina concreta: si el seed del backend reactiva las
- * reglas en cada deploy, una pausa desde el panel se deshace sola. Pedido al
- * backend → `.claude/plans/reglas-de-vencimiento.md`, §8.
+ * Crear, pausar y reactivar van por HTTP al backend (`/admin/notification-rules`,
+ * desde el 2026-11-19). La tabla es suya y el cron de detección la lee en cada
+ * corrida.
  */
 
 interface NotificationRuleRow {
@@ -102,4 +100,17 @@ export async function listNotificationRules(
       sampleBody: r.sample_body,
     }),
   )
+}
+
+/**
+ * El `source_type` de una regla, para cortar ANTES del fetch las que el backend
+ * ya no sabe pausar (`registration_card`: 400). `null` = no existe. Es lectura:
+ * pausar y reactivar van por HTTP (`setNotificationRuleActive` de `backend.ts`).
+ */
+export async function findNotificationRuleSource(ruleId: string): Promise<string | null> {
+  const row = await sqlOne<{ source_type: string }>(
+    'select source_type::text as source_type from notification_rules where id = $1',
+    [ruleId],
+  )
+  return row?.source_type ?? null
 }

@@ -32,7 +32,7 @@ import { formatDateTime, formatInt } from '~/lib/format'
  * 1. **Recordatorios de vencimiento** (`public.notification_rules`, del
  *    backend). Reemplaza el `select * from notification_rules` + el
  *    `count(*) … group by rule_id` contra `notifications` que nadie corría.
- *    Sólo lectura: `.claude/plans/reglas-de-vencimiento.md`.
+ *    Se leen por SQL; agregar, pausar y reactivar van por HTTP al backend.
  * 2. **Envíos programados** (`ops.notification_schedule`, migración 014).
  *    Los filtros de la URL (`q`, `scheduleState`) son SÓLO de esta sección, y
  *    por eso viven adentro de ella y no en el header de la página.

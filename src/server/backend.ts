@@ -11,6 +11,7 @@ import '@tanstack/react-start/server-only'
 import { auth } from '@clerk/tanstack-react-start/server'
 import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
 import { QUOTE_LOCATION_ERROR, type QuoteLocation } from '~/lib/quote-location'
+import { NOTIFICATION_RULE_ERROR } from '~/lib/notification-rules'
 import {
   QUOTE_PLATE_ERROR,
   QUOTE_PLATE_TIMEOUT_MS,
@@ -198,6 +199,7 @@ async function backendError(
     whatsapp?: boolean
     quoteLocation?: boolean
     quotePlate?: boolean
+    notificationRule?: boolean
   } = {},
 ): Promise<Error> {
   let body: BackendErrorBody | null = null
@@ -300,6 +302,26 @@ async function backendError(
         code: typeof body?.code === 'string' ? body.code : '',
         message: message ?? `${what} falló sin explicación`,
         cannotRoute: response.status === 404 && /^Cannot (PUT|POST|GET)\b/.test(message ?? ''),
+      })}`,
+    )
+  }
+
+  /**
+   * Modo `notificationRule` — opt-in, los recordatorios de vencimiento
+   * (2026-11-19). El 409 del alta trae `existingRuleId` / `existingRuleActive`
+   * top-level: con una pausada, la UI ofrece «Reactivar» en vez de un error.
+   * Lo lee `parseNotificationRuleError` de `~/lib/notification-rules`.
+   */
+  if (opts.notificationRule) {
+    const extra = body as (BackendErrorBody & { existingRuleId?: unknown; existingRuleActive?: unknown }) | null
+    return new Error(
+      `${NOTIFICATION_RULE_ERROR}:${JSON.stringify({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        message: message ?? `${what} falló sin explicación`,
+        existingRuleId: typeof extra?.existingRuleId === 'string' ? extra.existingRuleId : null,
+        existingRuleActive: typeof extra?.existingRuleActive === 'boolean' ? extra.existingRuleActive : null,
+        cannotRoute: response.status === 404 && /^Cannot (PATCH|POST)\b/.test(message ?? ''),
       })}`,
     )
   }
@@ -1509,4 +1531,59 @@ export async function identifyQuoteRequestVehicleByPlate(
     )
   }
   return parsed.data
+}
+
+/**
+ * Crea un recordatorio de vencimiento (`POST /admin/notification-rules`,
+ * `AdminGuard`). 201 `{ id }`. 409 si la tupla ya existe, activa o pausada.
+ * → `.claude/rules/notifications.md`, "Recordatorios de vencimiento"
+ */
+export async function createNotificationRule(input: {
+  sourceType: string
+  offsetUnit: string
+  offsetValue: number
+}): Promise<{ id: string }> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/notification-rules`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'El alta del recordatorio', { notificationRule: true })
+  const body = (await response.json().catch(() => null)) as { id?: unknown } | null
+  return { id: typeof body?.id === 'string' ? body.id : '' }
+}
+
+/**
+ * Pausa (`false`) o reactiva (`true`) un recordatorio
+ * (`PATCH /admin/notification-rules/:id`). 204 sin cuerpo, idempotente. Rige
+ * desde el próximo cron de detección (cada hora).
+ */
+export async function setNotificationRuleActive(ruleId: string, active: boolean): Promise<void> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/notification-rules/${ruleId}`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ active }),
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok)
+    throw await backendError(response, active ? 'Reactivar el recordatorio' : 'Pausar el recordatorio', {
+      notificationRule: true,
+    })
 }
