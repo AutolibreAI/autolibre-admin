@@ -176,7 +176,7 @@ export const READINESS_REASON_HINTS: Record<string, string> = {
   // escrito como label: el bloqueo salta sólo si no hay catálogo NI descripción.
   missing_vehicle_catalog: 'Completá uno de los dos: cargá la patente y tocá «Identificar vehículo» (tarjeta Vehículo), o escribí el vehículo en «Editar datos».',
   missing_location: 'Cargá la ubicación con «Corregir ubicación» y, si no está ubicada, «Geocodificar» (tarjeta Pedido).',
-  not_classified: 'Elegí los rubros en «Talleres candidatos» y guardá la clasificación.',
+  not_classified: 'Elegí los servicios en «Derivar a un taller» y tocá «Guardar clasificación».',
   empty_description: 'Completá la descripción en «Editar datos».',
 }
 

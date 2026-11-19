@@ -840,6 +840,14 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    */
   rubroCategorySlugs: Array<string>
   /**
+   * La corrección de SERVICIOS del operador que lee el BACKEND
+   * (`quote_request_operator_services`, 0155), en su orden. Es la que manda
+   * para el despacho; `rubroCategorySlugs` es su espejo en familias para el
+   * panel. `[]` = no hay corrección (el despacho usa la IA); `null` = la base
+   * no tiene la 0155. → `~/lib/quote-services`
+   */
+  operatorServiceSlugs: Array<string> | null
+  /**
    * El vehículo ESCRITO por el operador ("Peugeot 208 1.6 2019"), para cuando
    * no hay `vehicleId` que vincular. Desde la migración 032 vive en
    * `quote_requests.vehicle_description` (0160 del backend), que el despacho a

@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
 import { Check, List, Map as MapIcon, MapPin, MessageCircle, Save, Send, Sparkles } from 'lucide-react'
-import {
-  addQuoteRequestInternalNoteFn,
-  setQuoteRequestRubrosFn,
-} from '~/fn/quote-requests'
+import { addQuoteRequestInternalNoteFn } from '~/fn/quote-requests'
+import { correctQuoteRequestServicesFn } from '~/fn/quote-services'
+import { readableQuoteServicesError, sameServiceSet } from '~/lib/quote-services'
 import {
   canonicalWhatsAppDigits,
   isRemoteModality,
@@ -38,9 +37,14 @@ import type { ServiceFamily } from '~/lib/catalog'
  *
  * Dos escrituras separadas, y son a propósito distintas en forma:
  *
- *  - **Clasificar los rubros** es DATO: `ops.set_quote_request_rubros` (016,
- *    reemplaza a la 013 de un solo rubro). Habilita "¿qué rubros nos piden
- *    más?" con un `group by`.
+ *  - **Clasificar** es DATO, y desde el 2026-11-19 son SERVICIOS, no rubros:
+ *    «Guardar clasificación» manda los servicios elegidos al BACKEND
+ *    (`PUT /admin/quote-requests/:id/services`, 0155), que es lo que lee el
+ *    despacho por WhatsApp (candidatos y el `{{2}}` del template). Antes
+ *    guardaba familias en `ops.set_quote_request_rubros` (016), que el backend
+ *    nunca leyó: corregir no cambiaba nada del despacho. La 016 se sigue
+ *    escribiendo como espejo (familias derivadas de los servicios) porque la
+ *    leen esta ficha y `/partners/estudio`. → `~/fn/quote-services`
  *  - **Registrar la derivación** es NOTA INTERNA:
  *    `ops.add_quote_request_internal_note` (011), la misma escritura que ya
  *    usa el hilo de notas de la ficha. NO hay una tabla de derivaciones — el
@@ -134,6 +138,8 @@ interface PartnerCandidatesProps {
   zones: Array<string>
   /** Lo que hay guardado en `ops.quote_request_rubro`, si algo. */
   savedCategorySlugs: Array<string>
+  /** La corrección de servicios que lee el backend (0155). `null` = la base no la tiene. */
+  savedServiceSlugs: Array<string> | null
   /** Los rubros efectivos que se están mirando: `quoteRubros` de la URL, o los guardados. */
   selectedCategorySlugs: Array<string>
   candidates: Array<PartnerCandidate>
@@ -149,6 +155,7 @@ export function PartnerCandidates({
   catalog,
   zones,
   savedCategorySlugs,
+  savedServiceSlugs,
   selectedCategorySlugs,
   candidates,
   onChangeCategories,
@@ -156,24 +163,25 @@ export function PartnerCandidates({
   const router = useRouter()
   const [savingRubro, setSavingRubro] = useState(false)
   const [rubroError, setRubroError] = useState<string | null>(null)
+  const [rubroWarning, setRubroWarning] = useState<string | null>(null)
   const [zoneFilter, setZoneFilter] = useState<Array<string>>([])
-  // Los servicios que sugirió la IA (0124) arrancan tildados. Es sólo el
-  // valor inicial: el operador los cambia, y fuera de los rubros elegidos
-  // dejan de filtrar solos (`activeServiceFilter` interseca con las opciones).
-  // El componente se monta con `key` por pedido, así que no arrastra la
-  // sugerencia de otro.
+  // Arrancan tildados los servicios de la corrección guardada en el backend;
+  // si no hay, los que sugirió la IA (0124). Es sólo el valor inicial: el
+  // operador los cambia, y fuera de los rubros elegidos dejan de contar solos
+  // (`activeServiceFilter` interseca con las opciones). El componente se monta
+  // con `key` por pedido, así que no arrastra la sugerencia de otro.
   const ai = detail.aiClassification
   const aiServices = ai.available ? ai.services : []
-  const [serviceFilter, setServiceFilter] = useState<Array<string>>(() => aiServices.map((s) => s.serviceSlug))
+  const savedServices = savedServiceSlugs ?? []
+  const [serviceFilter, setServiceFilter] = useState<Array<string>>(() =>
+    savedServices.length > 0 ? savedServices : aiServices.map((s) => s.serviceSlug),
+  )
   const [onlyFounding, setOnlyFounding] = useState(false)
   const [order, setOrder] = useState<CandidateOrder>('distance')
   const [view, setView] = useState<CandidateView>('list')
 
   const categories = catalog.map((f) => ({ slug: f.slug, name: f.name }))
-  const savedSet = new Set(savedCategorySlugs)
   const selectedSet = new Set(selectedCategorySlugs)
-  const dirty =
-    selectedSet.size !== savedSet.size || selectedCategorySlugs.some((s) => !savedSet.has(s))
 
   // Los servicios de los rubros elegidos, en orden de catálogo. Con más de un
   // rubro, el nombre lleva el rubro adelante: "Frenos" de dos familias distintas
@@ -191,6 +199,9 @@ export function PartnerCandidates({
   )
   const serviceOptionSet = new Set(serviceOptions.map((o) => o.value))
   const activeServiceFilter = serviceFilter.filter((slug) => serviceOptionSet.has(slug))
+  // Lo que se guarda son los SERVICIOS elegidos (el backend los exige: al menos
+  // uno). Cambió si difiere de la corrección guardada, como conjunto.
+  const dirty = activeServiceFilter.length > 0 && !sameServiceSet(activeServiceFilter, savedServices)
 
   // Mismo texto para todos los candidatos — sólo cambia el destinatario. Se
   // arma una vez acá, no por fila, y sin `responses`: la plantilla «red» no
@@ -246,13 +257,19 @@ export function PartnerCandidates({
   async function saveRubro() {
     setSavingRubro(true)
     setRubroError(null)
+    setRubroWarning(null)
     try {
-      await setQuoteRequestRubrosFn({
-        data: { quoteRequestId, categorySlugs: selectedCategorySlugs },
+      const result = await correctQuoteRequestServicesFn({
+        data: { quoteRequestId, serviceSlugs: activeServiceFilter },
       })
+      if (!result.legacySynced)
+        setRubroWarning(
+          'Se guardó para el despacho, pero no el registro de rubros del panel (la lista de rubros de esta ficha y el Estudio pueden quedar viejos).',
+        )
+      // Relee la ficha: el borrador del despacho se recalcula con la corrección.
       await router.invalidate()
     } catch (cause) {
-      setRubroError(readableQuoteRequestError(cause))
+      setRubroError(readableQuoteServicesError(cause).text)
     } finally {
       setSavingRubro(false)
     }
@@ -289,26 +306,55 @@ export function PartnerCandidates({
             />
           </div>
 
+          {serviceOptions.length > 0 ? (
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Servicios del pedido
+              </span>
+              <MultiSelect
+                label="Servicios del pedido"
+                options={serviceOptions}
+                selected={activeServiceFilter}
+                onChange={setServiceFilter}
+                placeholder="Elegí los servicios…"
+                searchPlaceholder="Buscar servicio…"
+                className="w-64"
+              />
+            </div>
+          ) : null}
+
           {dirty ? (
             <Button size="sm" variant="outline" disabled={savingRubro} onClick={() => void saveRubro()} className="gap-1.5">
               <Save className="size-3.5" aria-hidden />
               {savingRubro ? 'Guardando…' : 'Guardar clasificación'}
             </Button>
-          ) : selectedCategorySlugs.length > 0 ? (
+          ) : activeServiceFilter.length > 0 ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <Check className="size-3.5 text-status-green" aria-hidden />
               clasificación guardada
             </span>
+          ) : selectedCategorySlugs.length > 0 ? (
+            <span className="text-xs text-muted-foreground">Elegí al menos un servicio para guardar la clasificación.</span>
           ) : null}
         </div>
+
+        <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
+          «Guardar clasificación» guarda los SERVICIOS en el backend: el despacho por WhatsApp sugiere a quien cubra al
+          menos uno y se los nombra al taller en este orden. Los rubros sólo acotan la lista de servicios.
+        </p>
 
         {rubroError ? (
           <p role="alert" className="text-sm text-destructive">
             {rubroError}
           </p>
         ) : null}
+        {rubroWarning ? (
+          <p role="status" className="text-sm text-status-yellow">
+            {rubroWarning}
+          </p>
+        ) : null}
 
-        <AiSuggestion classification={ai} usedForRubros={savedCategorySlugs.length === 0} />
+        <AiSuggestion classification={ai} usedForRubros={savedCategorySlugs.length === 0 && savedServices.length === 0} />
 
 
         {selectedCategorySlugs.length === 0 ? (
@@ -319,23 +365,6 @@ export function PartnerCandidates({
           <div className="space-y-4">
             {candidates.length > 0 ? (
               <div className="flex flex-wrap items-end gap-4">
-                {serviceOptions.length > 0 ? (
-                  <div className="space-y-1.5">
-                    <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                      Servicio
-                    </span>
-                    <MultiSelect
-                      label="Servicio"
-                      options={serviceOptions}
-                      selected={activeServiceFilter}
-                      onChange={setServiceFilter}
-                      placeholder="Todos los del rubro"
-                      searchPlaceholder="Buscar servicio…"
-                      className="w-64"
-                    />
-                  </div>
-                ) : null}
-
                 <div className="space-y-1.5">
                   <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Zona

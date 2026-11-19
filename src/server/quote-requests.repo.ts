@@ -179,6 +179,27 @@ async function vehicleTextSource(): Promise<'column' | 'ops' | null> {
  * Sólo lectura: `quote_request_services` es output del clasificador y la escribe
  * únicamente el backend. Un `INSERT`/`UPDATE` ahí desde el panel está mal.
  */
+/**
+ * La corrección de servicios del operador que lee el backend (0155), en su
+ * orden. La escribe SÓLO el backend (`PUT /admin/quote-requests/:id/services`);
+ * acá se lee para saber qué está guardado. `null` sin la tabla.
+ */
+async function readOperatorServiceSlugs(id: string): Promise<Array<string> | null> {
+  const guard = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.quote_request_operator_services') is not null as ok`,
+  )
+  if (guard?.ok !== true) return null
+  const rows = await sql<{ slug: string }>(
+    `select s.slug
+       from quote_request_operator_services qos
+       join services s on s.id = qos.service_id
+      where qos.quote_request_id = $1
+      order by qos.position`,
+    [id],
+  )
+  return rows.map((r) => r.slug)
+}
+
 async function readAiClassification(id: string): Promise<QuoteAiClassification> {
   const guard = await sqlOne<{ ok: boolean }>(
     `select to_regclass('public.quote_request_services') is not null
@@ -1112,6 +1133,7 @@ export async function findQuoteRequestDetail(
   })
 
   const aiClassification = await readAiClassification(id)
+  const operatorServiceSlugs = await readOperatorServiceSlugs(id)
   const timingAndParts = await readTimingAndParts(id)
   const requestVehicleCatalog = await readRequestVehicleCatalog(id)
 
@@ -1133,6 +1155,7 @@ export async function findQuoteRequestDetail(
     locationLocality: r.location_locality ?? geocodeRead.geocodedLocality,
     catalogShortLabel: r.catalog_short_label,
     rubroCategorySlugs: rubros.map((row) => row.category_slug),
+    operatorServiceSlugs,
     vehicleText,
     locationSource: r.location_source,
     locationProvince: r.location_province ?? geocodeRead.geocodedProvince,

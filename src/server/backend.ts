@@ -11,6 +11,7 @@ import '@tanstack/react-start/server-only'
 import { auth } from '@clerk/tanstack-react-start/server'
 import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
 import { QUOTE_LOCATION_ERROR, type QuoteLocation } from '~/lib/quote-location'
+import { QUOTE_SERVICES_ERROR } from '~/lib/quote-services'
 import { NOTIFICATION_RULE_ERROR } from '~/lib/notification-rules'
 import {
   QUOTE_PLATE_ERROR,
@@ -176,6 +177,8 @@ interface BackendErrorBody {
   /** `details` de un 422 de la bandeja de WhatsApp: el estado actualizado de la conversación. */
   sessionWindowExpiresAt?: unknown
   replyState?: unknown
+  /** `details` del `VALIDATION_ERROR` de la corrección de servicios: los que no están en el catálogo activo. */
+  serviceSlugs?: unknown
 }
 
 /**
@@ -199,6 +202,7 @@ async function backendError(
     whatsapp?: boolean
     quoteLocation?: boolean
     quotePlate?: boolean
+    quoteServices?: boolean
     notificationRule?: boolean
   } = {},
 ): Promise<Error> {
@@ -322,6 +326,25 @@ async function backendError(
         existingRuleId: typeof extra?.existingRuleId === 'string' ? extra.existingRuleId : null,
         existingRuleActive: typeof extra?.existingRuleActive === 'boolean' ? extra.existingRuleActive : null,
         cannotRoute: response.status === 404 && /^Cannot (PATCH|POST)\b/.test(message ?? ''),
+      })}`,
+    )
+  }
+
+  /**
+   * Modo `quoteServices` — opt-in, lo usa sólo «Guardar clasificación» (la
+   * corrección de servicios, 0155). Mismo formato que `quoteLocation`, más los
+   * `serviceSlugs` que el backend rechazó (no están en el catálogo activo). Lo
+   * lee `parseQuoteServicesError` de `~/lib/quote-services`.
+   */
+  if (opts.quoteServices) {
+    const strings = (x: unknown) => (Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string') : [])
+    return new Error(
+      `${QUOTE_SERVICES_ERROR}:${JSON.stringify({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        message: message ?? `${what} falló sin explicación`,
+        serviceSlugs: strings(body?.serviceSlugs),
+        cannotRoute: response.status === 404 && /^Cannot (PUT|POST|GET)\b/.test(message ?? ''),
       })}`,
     )
   }
@@ -1470,6 +1493,47 @@ export async function requestQuoteRequestGeocode(quoteRequestId: string): Promis
     throw new Error(`BACKEND_UNREACHABLE:${base}`)
   }
   if (!response.ok) throw await backendError(response, 'La geocodificación del pedido', { quoteLocation: true })
+}
+
+// ── Corregir los servicios de un pedido (0155 del backend) ──────────────────
+
+/**
+ * «Guardar clasificación»: `PUT /admin/quote-requests/:id/services`
+ * (`AdminQuoteRequestController`, `AdminGuard`) con `{serviceSlugs}` —
+ * SERVICIOS del catálogo, no familias, en el orden elegido. Reemplaza entera
+ * la corrección anterior; la misma lista responde 204 sin escribir. Es lo que
+ * lee el despacho: candidatos y `{{2}}` del template salen de acá. → `~/lib/quote-services`
+ *
+ * 204 sin cuerpo. Un timeout se traduce a la sentinela con `status: 0`:
+ * reintentar con la misma lista es seguro.
+ */
+export async function correctQuoteRequestServices(
+  quoteRequestId: string,
+  serviceSlugs: ReadonlyArray<string>,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  const timeout = AbortSignal.timeout(JSON_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${base}/admin/quote-requests/${encodeURIComponent(quoteRequestId)}/services`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ serviceSlugs }),
+      cache: 'no-store',
+      signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') {
+      throw new Error(
+        `${QUOTE_SERVICES_ERROR}:${JSON.stringify({ status: 0, code: 'TIMEOUT', message: 'timeout', serviceSlugs: [], cannotRoute: false })}`,
+      )
+    }
+    if (cause instanceof Error && cause.name === 'AbortError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, 'Corregir la clasificación', { quoteServices: true })
 }
 
 // ── Identificar el vehículo de un pedido por la patente (2026-11-09) ────────

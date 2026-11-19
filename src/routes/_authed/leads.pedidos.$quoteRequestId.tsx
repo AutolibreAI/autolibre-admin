@@ -40,6 +40,7 @@ import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { PartnerDispatch } from '~/components/PartnerDispatch'
 import { getPartnerDispatchFn } from '~/fn/partner-dispatch'
+import { familiesOfServices } from '~/lib/quote-services'
 import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
 import { QuoteLocationSection } from '~/components/QuoteLocationSection'
@@ -157,14 +158,20 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     // param gana; si no está, los rubros guardados por el operador; y si el
     // operador nunca clasificó, los rubros de los servicios que sugirió la IA
     // (0124 del backend). La sugerencia nunca pisa lo que eligió una persona.
+    // Entre los guardados y la IA, las familias de la corrección de servicios
+    // del backend (0155): normalmente coinciden con los guardados en `ops`
+    // (`~/fn/quote-services` escribe los dos), salvo que el espejo haya fallado.
     const ai = result.detail.aiClassification
     const aiCategorySlugs = ai.available ? [...new Set(ai.services.map((s) => s.categorySlug))] : []
+    const operatorCategorySlugs = familiesOfServices(catalog, result.detail.operatorServiceSlugs ?? [])
     const effectiveCategorySlugs =
       deps.quoteRubros.length > 0
         ? deps.quoteRubros
         : result.detail.rubroCategorySlugs.length > 0
           ? result.detail.rubroCategorySlugs
-          : aiCategorySlugs
+          : operatorCategorySlugs.length > 0
+            ? operatorCategorySlugs
+            : aiCategorySlugs
 
     const candidates =
       effectiveCategorySlugs.length > 0
@@ -561,6 +568,7 @@ function QuoteRequestScreen() {
         catalog={catalog}
         zones={zones}
         savedCategorySlugs={d.rubroCategorySlugs}
+        savedServiceSlugs={d.operatorServiceSlugs}
         selectedCategorySlugs={effectiveCategorySlugs}
         candidates={candidates}
         onChangeCategories={setQuoteRubros}
