@@ -163,7 +163,7 @@ export const CENSUS_ENTRIES: ReadonlyArray<CensusEntry> = [
 
   { key: 'notifications', label: 'Notificaciones', table: 'notifications', group: 'Contacto y marketplace', via: 'user_id' },
   { key: 'leads', label: 'Leads enviados', table: 'leads', group: 'Contacto y marketplace', via: 'user_id' },
-  { key: 'ownedPartners', label: 'Partners que administra', table: 'partners', group: 'Contacto y marketplace', via: 'user_id' },
+  { key: 'ownedPartners', label: 'Partners que administra', table: 'partner_members', group: 'Contacto y marketplace', via: 'user_id' },
   { key: 'feedback', label: 'Feedback enviado', table: 'feedback', group: 'Contacto y marketplace', via: 'user_id' },
 
   /**

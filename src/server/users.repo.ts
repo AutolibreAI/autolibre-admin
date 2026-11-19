@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { partnerMembersAvailability } from './partner-members.repo'
 import { lastSignalSql } from '~/lib/activity'
 import { loadLocationTable, locationJoin, mapLocation, type LocationQueryColumns } from './vehicle-location'
 import type {
@@ -299,7 +300,18 @@ type CensusRow = Record<string, number | string>
  * tablas que cuelgan de `vehicles` también cuelgan de `users`, y contarlas por
  * los dos caminos las duplicaría.
  */
-const CENSUS_SQL = `
+/**
+ * "Partners que administra" = membresías ACTIVAS en `partner_members` (0141).
+ * La 0139 del backend dropeó `partners.user_id` (2026-11-03): ser partner es una
+ * relación, no una columna del taller. Sin la 0141 no hay ningún vínculo
+ * representable, así que el conteo es 0 y la lista vacía — nunca un 500.
+ */
+const OWNED_PARTNERS_COUNT = (hasMembers: boolean) =>
+  hasMembers
+    ? `(select count(*) from partner_members where user_id = $1 and revoked_at is null)::int`
+    : `0`
+
+const censusSql = (hasMembers: boolean) => `
 with v as (select id from vehicles where user_id = $1),
      c as (select id from conversations where user_id = $1),
      s as (select id from driving_sessions where user_id = $1)
@@ -330,7 +342,7 @@ select
   (select count(*) from maintenance_occurrences where user_id = $1)::int as maintenance_occurrences,
   (select count(*) from notifications where user_id = $1)::int as notifications,
   (select count(*) from leads where user_id = $1)::int as leads,
-  (select count(*) from partners where user_id = $1)::int as owned_partners,
+  ${OWNED_PARTNERS_COUNT(hasMembers)} as owned_partners,
   (select count(*) from feedback where user_id = $1)::int as feedback,
   (select count(*) from partner_applications where reviewed_by_id = $1)::int as reviewed_applications
 `
@@ -453,8 +465,10 @@ export async function findUserDetail(
   )
   if (!user) return null
 
+  const hasMembers = await partnerMembersAvailability()
+
   const [census, vehicles, legal, licenses, push, preferences, partners, tasks] = await Promise.all([
-    sqlOne<CensusRow>(CENSUS_SQL, [userId]),
+    sqlOne<CensusRow>(censusSql(hasMembers), [userId]),
 
     /**
      * `join` y no `left join` sobre el catálogo: `vehicle_catalog_spec_id` es
@@ -534,12 +548,16 @@ export async function findUserDetail(
       [userId],
     ),
 
-    sql<OwnedPartnerRow>(
-      `select id, name, status::text as status, coverage_zone
-       from partners where user_id = $1
-       order by name`,
-      [userId],
-    ),
+    hasMembers
+      ? sql<OwnedPartnerRow>(
+          `select p.id, p.name, p.status::text as status, p.coverage_zone
+           from partner_members pm
+           join partners p on p.id = pm.partner_id
+           where pm.user_id = $1 and pm.revoked_at is null
+           order by p.name`,
+          [userId],
+        )
+      : Promise.resolve([] as Array<OwnedPartnerRow>),
 
     /**
      * Las tareas — `maintenance_occurrences` de todos sus vehículos. Se filtra
