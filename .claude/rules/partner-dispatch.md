@@ -4,13 +4,16 @@ Alcance: `src/lib/partner-dispatch.ts`, `src/fn/partner-dispatch.ts`,
 `src/server/partner-dispatch.repo.ts` (sólo el guard), `src/components/PartnerDispatch.tsx`, las
 funciones `getPartnerDispatchDraft` / `approvePartnerDispatch` / `listQuoteRequestOutreach` y el modo
 `{ dispatch: true }` de `backendError` en `src/server/backend.ts`, y el loader de
-`src/routes/_authed/leads.pedidos.$quoteRequestId.tsx`. Agregada el 2026-11-04.
+`src/routes/_authed/leads.pedidos.$quoteRequestId.tsx`. Agregada el 2026-11-04. Desde el 2026-11-19
+también la corrección de servicios («Guardar clasificación»): `src/lib/quote-services.ts`,
+`src/fn/quote-services.ts`, `correctQuoteRequestServices` y el modo `{ quoteServices: true }` de
+`backendError`.
 
 ## Qué reemplaza
 
 El "le escribo a tres talleres por WhatsApp a mano" que el operador hace desde «Talleres candidatos»
 (`PartnerCandidates`, botón «Pedir cotización»). Con la 0142 del backend (`partner_outreach`) el
-BACKEND manda un template de WhatsApp aprobado por Meta a hasta 3 talleres, sin datos de la persona,
+BACKEND manda un template de WhatsApp aprobado por Meta a hasta 10 talleres (0156; antes 3), sin datos de la persona,
 y al que acepta le manda los detalles. Esta tarjeta muestra el borrador, lo aprueba y sigue cada
 contacto.
 
@@ -28,15 +31,61 @@ notificaciones, conocimiento, propuestas y logo.
 | Acción | Endpoint | Respuesta |
 |---|---|---|
 | Borrador | `GET /admin/quote-requests/:id/dispatch-draft` | 200, cálculo puro, no guarda nada |
-| Aprobar | `POST /admin/quote-requests/:id/dispatches` `{dispatchId, partnerIds[1..3], descriptionReviewed: true}` | 202 `{dispatchId, outreach[]}`, asincrónico |
+| Aprobar | `POST /admin/quote-requests/:id/dispatches` `{dispatchId, partnerIds[1..10], descriptionReviewed: true}` | 202 `{dispatchId, outreach[]}`, asincrónico |
 | Seguimiento | `GET /admin/quote-requests/:id/outreach` | 200, array en orden de aprobación (`[]` si nunca) |
+| Corregir servicios | `PUT /admin/quote-requests/:id/services` `{serviceSlugs[1..]}` | 204 sin cuerpo (también si no cambió) |
 
 **Ni una escritura SQL a `partner_outreach`**, y tampoco una lectura: el único SQL es el guard
 (`to_regclass('public.partner_outreach')`), que corta con "falta desplegar la migración 0142" sin
 hacer fetch. Un `INSERT` no le mandaría un WhatsApp a nadie.
 
-El borrador **nunca trae km, coordenadas ni el WhatsApp** del taller: sólo `distanceBucket`. No los
-derives de otro lado para "completar" la tarjeta.
+El borrador **nunca trae coordenadas ni el WhatsApp** del taller. **El km exacto sí, desde el
+2026-11-19** (decisión del usuario): `distanceKm` (float sin redondear, `null` = taller sin ubicación)
+en `candidates[]`, `otherPartners[]` y `excluded[]`, y `distanceBucket` sigue. Se muestra con dos
+decimales en es-AR («2,37 km», `formatDispatchDistance`); sin el campo (backend anterior) cae a la
+etiqueta del bucket. **Es sólo para el admin**: al taller nunca le llega la distancia, ni en el template
+ni en los detalles. Las coordenadas siguen sin derivarse de ningún lado.
+
+## Sugeridos, otros talleres, búsqueda y descartes (2026-11-19)
+
+- **`candidates`** («Sugeridos»): activos a ≤ 5 km que cubren algún rubro pedido, en el orden del
+  backend. **`otherPartners`** («Otros talleres», misma forma): TODOS los demás activos despachables
+  (fuera de radio, sin el rubro o sin ubicación), por distancia y los sin ubicación al final. Se eligen
+  igual; el `POST` acepta cualquiera de las dos listas. `no_candidates` sólo aparece si las dos están
+  vacías. El schema es tolerante: `otherPartners` `.default([])` y `distanceKm` `.optional()`, para
+  seguir andando contra un backend sin el cambio.
+- **Selección por default**: como mucho los 3 primeros sugeridos (`DEFAULT_PRESELECTED_DISPATCH`),
+  aunque haya 10 lugares — tildar todo mandaría 10 WhatsApp con un click distraído. El tope de la
+  selección es `min(freeSlots, MAX_DISPATCH_SLOTS = 10)`. `partnerIds` viaja en orden: sugeridos y
+  después otros.
+- **Búsqueda** por nombre (sin tildes ni mayúsculas, por contención: `normalizeForSearch`) sobre las
+  dos listas. Buscando, también aparecen en gris los `excluded` que coinciden, con su motivo y sin
+  casilla: así el operador entiende por qué alguien no se puede elegir.
+- **«Descartar»** esconde un taller y lo saca de la selección. **Es estado del CLIENTE**: sin
+  persistir, sin motivo, sin escribirle nada al backend. Vuelve al recargar o con «Actualizar» de la
+  tarjeta (`refreshNonce` remonta la sección). «Mostrar descartados (n)» permite restaurar uno o todos
+  dentro de la sesión. Lógica pura y testeada en `~/lib/partner-dispatch` (`discardReducer`,
+  `dispatchRows`).
+
+## «Guardar clasificación» corrige los SERVICIOS en el backend (2026-11-19)
+
+Antes, «Guardar clasificación» de `PartnerCandidates` escribía FAMILIAS en
+`ops.set_quote_request_rubros` (016), y **el backend nunca leyó esa tabla**: corregir no cambiaba ni
+los candidatos del despacho ni el `{{2}}` del template. Ahora manda los **servicios** elegidos (el
+multiselect «Servicios del pedido», acotado por los rubros) a `PUT /admin/quote-requests/:id/services`
+(0155). Mientras exista, esa corrección **manda** sobre la clasificación de la IA, sin primario: es
+candidato quien cubra al menos uno, y el orden de la lista es el orden en que se le nombran al taller.
+Después del 204, `router.invalidate()` y el borrador se recalcula.
+
+- **La 016 se sigue escribiendo, como espejo**: las familias DERIVADAS de los servicios
+  (`familiesOfServices`). La leen la ficha (los rubros con los que se buscan candidatos) y
+  `/partners/estudio` (`listQuoteRequestRubros`). Orden: backend primero; si el espejo falla, la
+  corrección ya vale para el despacho y la UI avisa (`legacySynced: false`), sin tirar.
+- **Lo guardado se lee de `quote_request_operator_services`** (`operatorServiceSlugs` del detalle,
+  guard `to_regclass`, `null` sin la 0155). Arrancan tildados esos servicios; si no hay, los de la IA.
+- Errores (`QUOTE_SERVICES_ERROR` + JSON, `readableQuoteServicesError`): 400 `VALIDATION_ERROR` con
+  `serviceSlugs` (no están en el catálogo activo), 400 `INVALID_STATE_TRANSITION` (pedido cerrado),
+  404 / 404 «Cannot PUT» (backend sin el endpoint), 409 (reintentar), timeout (reintentar: idempotente).
 
 Aprobar **no cambia el estado del pedido** (sigue en el que estaba): no toca `QuoteRequestActions`
 ni `QuoteBoard`.
@@ -119,12 +168,14 @@ El backend exige `true`. La UI lo pide con una casilla obligatoria ("Revisé la 
 recibir el taller") al lado del texto exacto (`detailsPreview`), y con `piiWarning` muestra en ámbar
 qué se ocultó. El server function siempre manda `true`: sólo llega ahí si la casilla estaba tildada.
 
-## Lo que el backend todavía no hace — por eso no hay sondeo
+## Respuestas, vencimiento y BAJA: ya existen en el backend — y todavía no hay sondeo
 
-Al 2026-11-04 el backend no recibe las respuestas de los talleres (webhook entrante), no corre el
-cron de vencimiento ni procesa la BAJA. El seguimiento cambia poco y no hay refresco automático: un
-botón «Actualizar» (`router.invalidate()`) y una nota que lo dice. Cuando lleguen las respuestas, se
-evalúa un sondeo como el de `/conocimiento`.
+Al 2026-11-04 el backend no recibía las respuestas de los talleres. **Hoy sí** (ver `contexts/quotes.md`
+del backend): el webhook entrante procesa el «Sí» / «No» del botón (y manda los detalles al que
+acepta), un cron cada 15 min vence los `template_sent` sin respuesta (24 h hábiles) y reencola los
+`approved` trabados, y la BAJA da de baja el WhatsApp del taller y cancela sus contactos abiertos.
+La tarjeta **sigue sin sondear**: «Actualizar» (`router.invalidate()`) y una nota que lo dice. Un
+sondeo como el de `/conocimiento` queda pendiente.
 
 ## Cómo verificar un cambio acá
 
