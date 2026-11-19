@@ -512,6 +512,94 @@ where rule_id is not null` (78 al 2026-09-25), y el Historial filtrado por cada
 regla trae exactamente su conteo. `tmp/probe-reglas.mjs` carga los módulos
 reales y verifica las dos cosas.
 
+## La audiencia en SQL (migración 033) — desde el 2026-11-19
+
+El motor de envíos programados lo corre el BACKEND (un cron que va a llamar a
+`ops.enqueue_due_notifications()`, otra migración), y ese cron no tiene el
+TypeScript del panel. Por eso el catálogo de `~/lib/audience` existe ahora
+también en SQL: `ops.resolve_audience(jsonb) → SETOF uuid`. Esto da vuelta la
+decisión de la 014 ("no se reimplementa el catálogo"), y la cabecera de la 033
+dice por qué.
+
+- **Hay DOS copias del catálogo, y se tocan juntas.** `AUDIENCE_SQL` +
+  `conditionSql` (`audience.repo.ts`) y `ops._audience_field_expr` +
+  `ops._audience_field_ops` + `ops._audience_condition_sql` (033). Las
+  expresiones son copia TEXTUAL (incluidos `OK`, `INTERNAL_PREDICATE` y
+  `lastSignalSql('u.id')`, que en SQL quedaron escritos a mano: si
+  `USER_ACTIVITY_SIGNALS` suma una señal, hay que sumarla en la 033 vía una
+  migración nueva). Agregar un campo es: el catálogo TS, `AUDIENCE_SQL`, y una
+  migración con `CREATE OR REPLACE` de las dos funciones de `ops`.
+- **La prueba de que no divergieron es `tmp/probe-audiencia-paridad.mjs`**:
+  corre ~20 audiencias por `previewAudience` real (vite) y por
+  `ops.resolve_audience`, y compara ids. Correrlo después de tocar cualquiera de
+  los dos lados.
+- **Lo que TS rechaza, SQL rechaza**: campo fuera del catálogo
+  (`INVALID_AUDIENCE_FIELD`), operador fuera de `def.ops ?? OPERATORS_BY_KIND`
+  (`INVALID_AUDIENCE_OPERATOR`), falta o sobra el número
+  (`AUDIENCE_VALUE_REQUIRED` / `AUDIENCE_VALUE_NOT_ALLOWED`), número no entero o
+  fuera de 0..3650 (`INVALID_AUDIENCE_VALUE`). `ops._validate_notification_conditions`
+  (misma firma que la 014) ahora aplica todo eso al guardar una regla: una regla
+  que el cron no pueda resolver no se guarda. Las ya guardadas no se revalidan.
+- **`value` nunca entra al texto**: viaja por `EXECUTE … USING` como `int[]` y
+  cada condición lo lee como `$1[n]`; `field`/`op` salen de un CASE cerrado.
+- **Mismo universo que la vista previa**: `users` entero, sin filtros por
+  default, orden `created_at, id`, sin el tope de 500. Excluir internos o
+  exigir dispositivo es de quien llama (las banderas `exclude_internal` /
+  `require_device` de la regla), no de la audiencia.
+- **`activated_at`** (`ops.notification_schedule`): lo estampa
+  `set_notification_schedule_active` en false→true; true→true no lo mueve y una
+  pausa lo conserva. CHECK: activa ⇒ con `activated_at`. El cron va a mirar sólo
+  ocurrencias posteriores, así reanudar no dispara las que "se perdió".
+- La suite (`033_….test.sql`) está pensada para la réplica `tmp/replica-033.sql`
+  (los fixtures no llenan los NOT NULL/FK reales de `vehicles` y compañía):
+  `node tmp/run-033.mjs` con `PGLITE_DIR`. Contra una base real, el probe.
+
+## El motor de envíos programados (migración 034) — desde el 2026-11-19
+
+`ops.enqueue_due_notifications()` lo llama el cron del BACKEND cada 15 minutos.
+**El panel no manda nada y el motor tampoco**: sólo inserta `batch_id`,
+`user_id`, `title`, `body` y `scheduled_at` en `public.notification_dispatch_requests`
+(tabla del backend, que nunca se altera desde acá), y el backend procesa esas
+filas con su caso de uso. `status`, `reject_reason` y `processed_at` son del
+backend; `public.notifications`, también.
+
+- **Una corrida por ocurrencia.** Por regla activa se calcula la ÚLTIMA
+  ocurrencia `<= now()` en hora de Buenos Aires (`AT TIME ZONE`), con su FECHA
+  dentro de `[starts_on, ends_on]` y `>= activated_at`. El freno de la doble
+  corrida es el UNIQUE `(schedule_id, occurrence_at)` de la 014 con
+  `ON CONFLICT DO NOTHING`; no hay advisory lock. El id de la corrida es el
+  `batch_id`.
+- **Ventana de 6 h** (inclusive). Más vieja: corrida `skipped` /
+  `missed_window`, sólo la última, una vez.
+- **Destinatarios al momento del tick**: la 033 ∩ dispositivo (si
+  `require_device`) ∩ no interna (si `exclude_internal`, `INTERNAL_PREDICATE`
+  textual) ∩ `max_per_user` contando filas de corridas anteriores de ESA regla
+  con `status <> 'rejected'`. Cero → `skipped` / `no_recipients`.
+- **Una regla rota no tira las demás**: la corrida se inserta antes del
+  subbloque y el handler la marca `failed` con el error. Una `recurrence`
+  ilegible devuelve `failed` sin corrida (sin ocurrencia no hay clave), y lo
+  va a devolver en cada tick hasta que se arregle.
+- **La única que corta la llamada entera: `DISPATCH_TABLE_MISSING`**. Si se
+  tragara por regla, quemaría las ocurrencias en corridas `failed`.
+- **Sin `ops.action_log`**: la auditoría del motor es la tabla de corridas; el
+  log sigue siendo para lo que hace una persona.
+- `monthlyDay` sólo admite 1–28 (014), así que no hay "31 de febrero";
+  `weekly.weekdays` es 0 (domingo) … 6, como `extract(dow)`; `everyNDays`
+  cuenta desde `starts_on`.
+- **El backend purga las filas cerradas** (`processed` / `rejected`) de
+  `notification_dispatch_requests` 180 días después de `processed_at`; las
+  `pending` nunca. El historial de envíos de una regla que se lea de ahí no va
+  más atrás; `ops.notification_schedule_run` sí queda entera.
+- **Para probar en DEV, cuidado con la audiencia**: los tokens de
+  `expo_push_tokens` en DEV son reales (Expo de verdad, sin push falso) y hay
+  personas de afuera con token. No hay condición "este usuario": acotá con el
+  catálogo (p. ej. «Alta · hace menos de N días») y verificá con
+  `ops.resolve_audience` ∩ dispositivo ∩ no interno ANTES de activar. Con el
+  backend: `ADMIN_DISPATCH_ENABLED=true` (exacto); el cron corre a :00/:15/:30/:45
+  UTC y la regla tiene que activarse ANTES de la ocurrencia.
+- `now()` es inyectable: `ops._enqueue_due_notifications_at(p_now)`. Suite en la
+  réplica: `node tmp/run-034.mjs` con `PGLITE_DIR`.
+
 ## Cómo verificar un cambio acá
 
 `pnpm typecheck` + `pnpm build` (en esta máquina: `& ".\node_modules\.bin\vite.CMD" build`

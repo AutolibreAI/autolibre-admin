@@ -495,9 +495,9 @@ Dos conclusiones, y son opuestas entre sí:
 
 | Destino | Base | Qué es |
 |---|---|---|
-| `localhost:5435` (Docker) | `autolibre_ai_hex` | **DEV.** Es acá donde se desarrolla y se prueban las migraciones de `ops`. |
+| `localhost:5435` (Docker) · desde nov-2026 `localhost:5432` | `autolibre_ai_hex` | **DEV.** Es acá donde se desarrolla y se prueban las migraciones de `ops`. **Al 2026-11-19 es la que usa el `.env`** (`current_user = postgres`). |
 | `db-pgsql-nyc1-…ondigitalocean.com:25060` | `autolibre` | **PRODUCCIÓN, directo.** No se toca para explorar. |
-| `db-pgsql-nyc1-…ondigitalocean.com:25061/autolibre-pool` | `autolibre` | **PRODUCCIÓN, por el pooler (pgBouncer).** Es la que el `.env` usa hoy. Ver la trampa de abajo. |
+| `db-pgsql-nyc1-…ondigitalocean.com:25061/autolibre-pool` | `autolibre` | **PRODUCCIÓN, por el pooler (pgBouncer).** Era la del `.env` hasta noviembre de 2026; antes de escribir, verificá el host. Ver la trampa de abajo. |
 | `…neon.tech` | `neondb` | sin relevar |
 
 > **⚠ Corregido el 2026-09-04, segunda pasada — no existe ninguna base local.**
@@ -584,6 +584,21 @@ Reglas que salen de esto y no son negociables:
    **Al 2026-11-11 la 029 (modalidad y mensaje de WhatsApp del partner) dio 27/27 en una réplica
    PGlite — NO aplicada en ninguna base.** Sin ella la ficha muestra los dos campos de sólo lectura
    con el aviso; la aplica el `vercel-build` del próximo deploy de `main`.
+   **Al 2026-11-19 la 033 (la audiencia en SQL: `ops.resolve_audience`, validación del catálogo en las
+   reglas y `notification_schedule.activated_at`) dio 123/123 en una réplica PGlite (y la suite de la
+   014 sigue en 60/60 con ella). Aplicada en DEV el 2026-11-19 (`autolibre_ai_hex`, `postgres`,
+   `localhost:5432`, junto con 027–032), NO en producción.** La paridad TS ↔ SQL
+   (`tmp/probe-audiencia-paridad.mjs`) dio 23/23 en la réplica y 23/23 contra DEV (~15.000 usuarios;
+   en las audiencias de más de 500 compara el total y los primeros 500, que es lo que devuelve la
+   vista previa).
+   **Al 2026-11-19 la 034 (el motor de envíos programados: `ops.enqueue_due_notifications()`, que el
+   cron del backend llama cada 15 min y que sólo encola en `public.notification_dispatch_requests`)
+   dio 70/70 en una réplica PGlite (033 y 014 siguen en 123/123 y 60/60). Aplicada en DEV el
+   2026-11-19, NO en producción.** Prueba de punta a punta en DEV dentro de `BEGIN … ROLLBACK`: una
+   regla diaria encoló 3 filas `pending` (= audiencia ∩ dispositivo ∩ no interno), con el título
+   recortado y `scheduled_at` = la ocurrencia, y el segundo tick no duplicó ni la corrida ni las
+   filas. Necesita la tabla del backend: sin ella la llamada entera falla con
+   `DISPATCH_TABLE_MISSING`. → `.claude/rules/notifications.md`, "El motor de envíos programados".
    **Corregido el 2026-11-02: en producción están aplicadas de la 001 a la 024**, todas
    (`ops.schema_migrations`, `doadmin`, puerto 25060). Todos los "NO aplicada" de arriba (010 a 024)
    quedaron viejos para producción; para DEV no se relevó. Lo mismo con
