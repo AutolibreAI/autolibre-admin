@@ -3,7 +3,17 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { getWhatsAppInboxSourceFn, listWhatsAppConversationsFn } from '~/fn/whatsapp-inbox'
 import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
-import { readableWhatsAppInboxError } from '~/lib/whatsapp-inbox'
+import { z } from 'zod'
+import {
+  WHATSAPP_LINES,
+  WHATSAPP_LINE_LABELS,
+  compareUnreadFirst,
+  conversationLine,
+  defaultLine,
+  readableWhatsAppInboxError,
+  unreadByLine,
+  whatsappLineParam,
+} from '~/lib/whatsapp-inbox'
 import { MockBanner } from '~/components/MockBanner'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ConversationList, WhatsAppInboxProvider } from '~/components/WhatsAppInbox'
@@ -27,6 +37,8 @@ import { Button } from '~/components/ui/button'
  */
 export const Route = createFileRoute('/_authed/whatsapp')({
   ssr: 'data-only',
+  // La pestaña (Proveedores / Usuarios). Sin ella, la que tiene no leídas.
+  validateSearch: z.object({ whatsappLine: whatsappLineParam }),
   loader: async ({ abortController }) => {
     const [page, source] = await Promise.all([
       listWhatsAppConversationsFn({ data: {}, signal: abortController.signal }),
@@ -97,10 +109,16 @@ function useFillViewport(deps: ReadonlyArray<unknown>) {
 function WhatsAppLayout() {
   const { page, source } = Route.useLoaderData()
   const { conversationId } = useParams({ strict: false })
+  const search = Route.useSearch()
+  const navigate = Route.useNavigate()
 
   return (
     <WhatsAppInboxProvider initial={page} openConversationId={conversationId}>
-      {({ conversations, unreadConversations, error, nextCursor, loadMore, loadingMore, nowMs }) => (
+      {({ conversations, unreadConversations, error, nextCursor, loadMore, loadingMore, nowMs }) => {
+        const counts = unreadByLine(conversations)
+        const line = search.whatsappLine ?? defaultLine(counts)
+        const visible = conversations.filter((c) => conversationLine(c) === line).sort(compareUnreadFirst)
+        return (
         <InboxFrame source={source} error={error}>
           {(frame) => (
         <>
@@ -132,6 +150,32 @@ function WhatsAppLayout() {
               No se pudo actualizar la lista: {error}
             </p>
           ) : null}
+          <div role="tablist" aria-label="Línea" className="mb-3 flex gap-1 border-b border-border">
+            {WHATSAPP_LINES.map((l) => (
+              <button
+                key={l}
+                type="button"
+                role="tab"
+                aria-selected={line === l}
+                onClick={() => navigate({ to: '/whatsapp', search: { whatsappLine: l } })}
+                className={cn(
+                  '-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium',
+                  line === l ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {WHATSAPP_LINE_LABELS[l]}
+                {counts[l] > 0 ? (
+                  <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-status-red px-1.5 text-[11px] font-semibold text-white tabular-nums">
+                    {counts[l] > 99 ? '99+' : counts[l]}
+                    <span className="sr-only"> sin leer</span>
+                  </span>
+                ) : null}
+              </button>
+            ))}
+            <span className="ml-auto self-center text-xs text-muted-foreground">
+              Provisorio: una conversación es de Proveedores si el número es de un taller.
+            </span>
+          </div>
           <div
             ref={frame.ref}
             style={frame.height === null ? undefined : { height: frame.height }}
@@ -145,7 +189,12 @@ function WhatsAppLayout() {
               aria-label="Conversaciones"
             >
               <ConversationList
-                conversations={conversations}
+                conversations={visible}
+                emptyText={
+                  line === 'usuarios'
+                    ? 'Todavía no hay conversaciones de usuarios en esta línea.'
+                    : 'Todavía no hay conversaciones de proveedores.'
+                }
                 activeId={conversationId}
                 nowMs={nowMs}
                 nextCursor={nextCursor}
@@ -160,7 +209,8 @@ function WhatsAppLayout() {
         </>
           )}
         </InboxFrame>
-      )}
+        )
+      }}
     </WhatsAppInboxProvider>
   )
 }

@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { teamAvailable } from './team.repo'
 import {
   CLOSED_PROSPECT_STATUSES,
   PROSPECT_LIST_LIMIT,
@@ -710,6 +711,29 @@ export async function listProspectOrigins(): Promise<Array<ProspectOrigin>> {
  * heredados (`CLAUDE.md`).
  */
 export async function listProspectOwners(): Promise<Array<ProspectOwner>> {
+  /**
+   * Opción A (2026-11-20, migración 035): el catálogo del equipo es la lista.
+   * `owner_id` sigue siendo un `users.id`, así que se ofrecen las personas
+   * ACTIVAS con usuario del panel vinculado (con el nombre del catálogo), más
+   * quien ya figure como comercial de un contacto. Mientras nadie esté
+   * vinculado, se usa la lista vieja: si no, el selector quedaría vacío justo
+   * después de aplicar la 035.
+   */
+  if (await teamAvailable()) {
+    const linked = await sqlOne<{ n: number }>(
+      `select count(*)::int as n from ops.team_member where user_id is not null and active`,
+    )
+    if (Number(linked?.n ?? 0) > 0) {
+      return sql<ProspectOwner>(
+        `select u.id, coalesce(m.name, nullif(btrim(u.name), ''), u.email) as name, u.email
+           from users u
+           left join ops.team_member m on m.user_id = u.id
+          where (m.id is not null and m.active)
+             or u.id in (select owner_id from ops.partner_prospect where owner_id is not null)
+          order by 2`,
+      )
+    }
+  }
   return sql<ProspectOwner>(
     `select u.id, coalesce(nullif(btrim(u.name), ''), u.email) as name, u.email
        from users u

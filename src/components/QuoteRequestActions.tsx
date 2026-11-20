@@ -12,6 +12,7 @@ import {
   OPERATOR_CLOSE_REASONS,
   QUOTE_REQUEST_OUTCOMES,
   quoteCloseReasonLabel,
+  quoteNeedsManualContact,
   quoteOutcomeLabel,
   quoteStatusLabel,
   readableQuoteRequestError,
@@ -19,6 +20,7 @@ import {
   type QuoteRequestOutcome,
 } from '~/lib/quote-requests'
 import { Chip, FilterGroup } from '~/components/Filters'
+import { formatDateTime } from '~/lib/format'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
@@ -93,14 +95,77 @@ function FlashLine({ flash }: { flash: Flash }) {
 
 type RunFn = ReturnType<typeof useQuoteAction>['run']
 
+/**
+ * «Marcar contactado», arriba en la ficha (entre Fotos y Despacho, decidido el
+ * 2026-11-20) y SÓLO para los pedidos de WhatsApp y web: a esa persona hay que
+ * escribirle. Uno de la app no lo necesita (`quoteNeedsManualContact`).
+ *
+ * Queda montado mientras el pedido esté abierto, también ya contactado: el
+ * «Marcado como contactado» y un error tienen que seguir a la vista después de
+ * que `router.invalidate()` cambie el estado (misma lección que las acciones).
+ */
+export function QuoteContactedCard({
+  quoteRequestId,
+  status,
+  channel,
+  contactedAt,
+}: {
+  quoteRequestId: string
+  status: string
+  channel: string
+  contactedAt: string | null
+}) {
+  const { busy, flash, run } = useQuoteAction()
+  if (!quoteNeedsManualContact(channel) || !isOpen(status)) return null
+  return (
+    <Card className="mb-4">
+      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-5">
+        {status === 'received' ? (
+          <>
+            <div className="min-w-0 flex-1">
+              <FormTitle>Contacto con la persona</FormTitle>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Entró por {channel === 'web' ? 'la web' : 'WhatsApp'}: escribile y marcalo. Mientras no esté respondido,
+                la persona todavía puede cancelarlo.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              disabled={busy}
+              className="gap-1.5"
+              onClick={() =>
+                void run(() => markQuoteRequestContactedFn({ data: { quoteRequestId } }), 'Marcado como contactado.')
+              }
+            >
+              <PhoneCall className="size-3.5" aria-hidden />
+              {busy ? 'Guardando…' : 'Marcar contactado'}
+            </Button>
+          </>
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CheckCheck className="size-4 text-status-green" aria-hidden />
+            Contactado{contactedAt ? ` el ${formatDateTime(contactedAt)}` : ''}.
+          </p>
+        )}
+        <div className="w-full">
+          <FlashLine flash={flash} />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function QuoteRequestActions({
   quoteRequestId,
   status,
+  channel,
   closeReasonCode,
   loadedProposals,
 }: {
   quoteRequestId: string
   status: string
+  /** Para decir dónde está «Marcar contactado» (o que un pedido de la app no lo necesita). */
+  channel: string
   closeReasonCode: string | null
   /**
    * Cuántas propuestas activas hay cargadas («Propuestas en la app», desde el
@@ -143,7 +208,14 @@ export function QuoteRequestActions({
         <div className="grid gap-8 lg:grid-cols-2">
           <div>
             {status === 'received' ? (
-              <ContactedForm quoteRequestId={quoteRequestId} busy={busy} run={run} />
+              <div>
+                <FormTitle>Recibido</FormTitle>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {quoteNeedsManualContact(channel)
+                    ? '«Marcar contactado» está arriba, entre Fotos y Despacho por WhatsApp.'
+                    : 'Pedido de la app: no hace falta marcarlo contactado. Pasa a Respondido solo cuando se le cargan propuestas.'}
+                </p>
+              </div>
             ) : status === 'contacted' ? (
               <AnsweredForm
                 quoteRequestId={quoteRequestId}
@@ -170,35 +242,6 @@ export function QuoteRequestActions({
         <FlashLine flash={flash} />
       </CardContent>
     </Card>
-  )
-}
-
-// ── received → contacted ─────────────────────────────────────────────────────
-
-function ContactedForm({ quoteRequestId, busy, run }: { quoteRequestId: string; busy: boolean; run: RunFn }) {
-  return (
-    <form
-      className="space-y-3"
-      onSubmit={(e) => {
-        e.preventDefault()
-        void run(
-          () => markQuoteRequestContactedFn({ data: { quoteRequestId } }),
-          'Marcado como contactado.',
-        )
-      }}
-    >
-      <div>
-        <FormTitle>Marcar contactado</FormTitle>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Ya le respondimos algo a la persona —un mensaje, una llamada, un «estamos buscando»—. La app se lo muestra,
-          y mientras no esté respondido la persona todavía puede cancelarlo.
-        </p>
-      </div>
-      <Button type="submit" size="sm" disabled={busy} className="gap-1.5">
-        <PhoneCall className="size-3.5" aria-hidden />
-        {busy ? 'Guardando…' : 'Marcar contactado'}
-      </Button>
-    </form>
   )
 }
 

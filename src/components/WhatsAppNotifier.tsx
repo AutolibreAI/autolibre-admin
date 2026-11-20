@@ -39,11 +39,12 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l)
 }
 
+/** Apagado por defecto (pedido del 2026-11-20): suena sólo si alguien lo prendió en este navegador. */
 function readSoundPref(): boolean {
   try {
-    return typeof window === 'undefined' || window.localStorage.getItem(SOUND_KEY) !== 'off'
+    return typeof window !== 'undefined' && window.localStorage.getItem(SOUND_KEY) === 'on'
   } catch {
-    return true
+    return false
   }
 }
 
@@ -59,7 +60,7 @@ export function useWhatsAppUnread(): number | null {
 }
 
 export function useWhatsAppSound(): [boolean, (on: boolean) => void] {
-  const on = useSyncExternalStore(subscribe, () => soundOn, () => true)
+  const on = useSyncExternalStore(subscribe, () => soundOn, () => false)
   const set = useCallback((next: boolean) => {
     soundOn = next
     try {

@@ -27,20 +27,26 @@ import { cn } from '~/lib/utils'
 import type { ApplicationDetail } from '~/lib/partners'
 import { PartnerWelcomeCard } from '~/components/PartnerWelcomeCard'
 import { readableApprovalError, type ApprovalResult } from '~/lib/partner-approval'
+import { getApplicationSourcingFn, getSourcingContextFn } from '~/fn/team'
+import { SourcerSelect } from '~/components/SourcerSelect'
+import { SourcingHistoryCard } from '~/components/SourcingHistoryCard'
 
 export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
   loader: async ({ params, abortController }) => {
     const signal = abortController.signal
-    const [app, catalog] = await Promise.all([
+    const [app, catalog, sourcing, sourcingHistory] = await Promise.all([
       getPartnerApplication({ data: params, signal }).catch((cause: unknown) => {
         if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
         throw cause
       }),
       getServiceCatalog({ signal }),
+      // "Alta por" (035). Sin la migración devuelven vacío: no hay selector.
+      getSourcingContextFn({ signal }),
+      getApplicationSourcingFn({ data: params, signal }),
     ])
 
     if (!app) throw notFound()
-    return { app, catalog }
+    return { app, catalog, sourcing, sourcingHistory }
   },
 
   head: ({ loaderData }) => ({
@@ -53,7 +59,7 @@ export const Route = createFileRoute('/_authed/solicitudes/$applicationId')({
 })
 
 function ApplicationDetailPage() {
-  const { app, catalog } = Route.useLoaderData()
+  const { app, catalog, sourcing, sourcingHistory } = Route.useLoaderData()
   const [draft, setDraftState] = useState<ApplicationDraft | null>(null)
   const setDraft = useCallback((next: ApplicationDraft) => setDraftState(next), [])
   /**
@@ -79,6 +85,14 @@ function ApplicationDetailPage() {
         actions={
           <>
             <ApplicationStatusBadge status={app.status} />
+            {sourcing.available ? (
+              <div className="flex items-center gap-2">
+                <span aria-hidden className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Alta por
+                </span>
+                <SourcerSelect applicationId={app.id} current={app.sourcer} members={sourcing.members} compact />
+              </div>
+            ) : null}
             <SsrTag>ssr: full</SsrTag>
           </>
         }
@@ -93,6 +107,8 @@ function ApplicationDetailPage() {
         </div>
 
         <div className="space-y-4">
+          {sourcing.available ? <SourcingHistoryCard sourcing={sourcingHistory} /> : null}
+
           {approval ? (
             <ApprovalResultCard
               app={app}

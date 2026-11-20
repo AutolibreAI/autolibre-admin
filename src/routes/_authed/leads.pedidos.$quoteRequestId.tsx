@@ -39,9 +39,9 @@ import { whatsappOptInMock } from '~/mocks/quote-whatsapp-opt-in'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
 import { PartnerDispatch } from '~/components/PartnerDispatch'
-import { getPartnerDispatchFn } from '~/fn/partner-dispatch'
+import { getDispatchPartnerFactsFn, getPartnerDispatchFn } from '~/fn/partner-dispatch'
 import { familiesOfServices } from '~/lib/quote-services'
-import { QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
+import { QuoteContactedCard, QuoteRequestActions, QuoteRequestNoteComposer } from '~/components/QuoteRequestActions'
 import { QuoteRequestEditor } from '~/components/QuoteRequestEditor'
 import { QuoteLocationSection } from '~/components/QuoteLocationSection'
 import { QuotePlateIdentifier } from '~/components/QuotePlateIdentifier'
@@ -125,6 +125,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         photos: { available: false as const },
         proposals: { available: false as const },
         dispatch: { available: false as const },
+        dispatchFacts: null,
       }
 
     // Los presupuestos viejos de `ops` ya no tienen tarjeta (2026-10-27): se
@@ -140,7 +141,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     // en una base sin ellas vuelven `{ available: false }`, nunca un 500.
     // El despacho por WhatsApp (0142) va por HTTP y devuelve borrador y
     // seguimiento como resultados propios: nunca tira, así que no frena la ficha.
-    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals, dispatch] = await Promise.all([
+    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals, dispatch, dispatchFacts] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
       listQuoteResponsesFn({ data: params, signal }),
@@ -152,6 +153,9 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       listQuoteRequestPhotosFn({ data: { quoteRequestId: params.quoteRequestId }, signal }),
       listQuoteProposalsFn({ data: params, signal }),
       getPartnerDispatchFn({ data: params, signal }),
+      // Plan y propuestas del mes de cada taller, para la lista del despacho.
+      // Si falla, la tarjeta se muestra igual sin esos datos.
+      getDispatchPartnerFactsFn({ signal }).catch(() => null),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
@@ -200,6 +204,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       photos,
       proposals,
       dispatch,
+      dispatchFacts,
     }
   },
 
@@ -231,6 +236,7 @@ function QuoteRequestScreen() {
     photos,
     proposals,
     dispatch,
+    dispatchFacts,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -519,6 +525,18 @@ function QuoteRequestScreen() {
       <QuoteRequestPhotos key={`photos-${d.id}`} quoteRequestId={d.id} data={photos} />
 
       {/*
+        «Marcar contactado», entre Fotos y Despacho (2026-11-20), sólo para
+        WhatsApp y web: a un pedido de la app no hace falta escribirle.
+      */}
+      <QuoteContactedCard
+        key={`contacted-${d.id}`}
+        quoteRequestId={d.id}
+        status={d.status}
+        channel={d.channel}
+        contactedAt={d.contactedAt}
+      />
+
+      {/*
         El ÚNICO lugar donde se carga lo que consiguió el operador, llegue el
         pedido por la app o por WhatsApp (2026-10-27: la tarjeta de
         Presupuestos de `ops` se sacó). Con cuenta, la persona lo ve en la app;
@@ -530,7 +548,13 @@ function QuoteRequestScreen() {
         talleres. Va antes de las propuestas: es de donde salen.
         → `.claude/rules/partner-dispatch.md`
       */}
-      <PartnerDispatch key={`dispatch-${d.id}`} quoteRequestId={d.id} data={dispatch} />
+      <PartnerDispatch
+        key={`dispatch-${d.id}`}
+        quoteRequestId={d.id}
+        publicNumber={d.publicNumber}
+        data={dispatch}
+        facts={dispatchFacts}
+      />
 
       <QuoteProposals
         key={`proposals-${d.id}`}
@@ -554,6 +578,7 @@ function QuoteRequestScreen() {
         key={`actions-${d.id}`}
         quoteRequestId={d.id}
         status={d.status}
+        channel={d.channel}
         closeReasonCode={d.closeReasonCode}
         loadedProposals={activeProposals.length}
       />

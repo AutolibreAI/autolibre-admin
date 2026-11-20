@@ -99,3 +99,28 @@ con `import.meta.env.DEV && WHATSAPP_INBOX_MOCK !== '0'`). `tsc` limpio. **Sin v
 navegador** (pide login de Clerk). Para pasar al backend real: borrar el mock y el `if` de
 `useMock()`. Pendiente: el badge de no leídas en el nav y el link desde la ficha del partner
 (`getWhatsAppConversationsByPartnerFn` ya existe).
+
+## Botón flotante y dos líneas — 2026-11-20
+
+- **`WhatsAppDock`** (`src/components/WhatsAppDock.tsx`), montado en el shell (`_authed.tsx`, sólo
+  admins): botón de 56 px abajo a la derecha (Action Dark, contador `status-red` con el total de
+  no leídas; sin contador en 0) y un `Sheet` a la derecha. **En la ficha de una solicitud va arriba a
+  la derecha** (decisión del 2026-11-20). **En `/whatsapp` no se muestra**: tapaba el «Enviar» del
+  hilo y esa pantalla ya es la versión completa.
+- El panel reusa `WhatsAppInboxProvider`, `ConversationList` (prop `onSelect`: la fila es un botón
+  y el hilo se abre adentro) y `WhatsAppThread` (prop `onBack`). Cero lógica duplicada.
+- **Un solo sondeo a la vez**: el de fondo (`useWhatsAppBackgroundPoll`, 20 s, ahora llamado desde
+  el dock) se pausa en `/whatsapp` y con el panel abierto, porque ahí sondea el provider.
+- **Dos pestañas, Proveedores y Usuarios**, también en `/whatsapp` (search param `whatsappLine`).
+  Abre en la que tiene no leídas (Proveedores si las dos). No leídas arriba y resaltadas.
+- **La línea es PROVISORIA**: `conversationLine()` usa `line` si el backend lo manda; si no, número
+  de un proveedor → Proveedores, el resto → Usuarios. El backend no guarda la línea ni elige el
+  número de salida por conversación → `docs/pedido-backend-whatsapp-lineas.md`. Hoy hay un solo
+  número, así que toda respuesta sale por el de la conversación.
+- `handoffRequestedAt` (pase a humano) ya es campo opcional del schema, sin UI.
+- **Sonido apagado por defecto** (antes prendido): suena sólo con `'on'` en localStorage.
+- Título de la pestaña «(N) …» con un `MutationObserver` sobre `<head>` (el router reescribe el
+  `<title>` en cada navegación).
+- Los no leídos POR pestaña salen de las conversaciones cargadas (primera página + lo que trae el
+  sondeo); el total, del `unreadConversations` del backend. Con más de una página pueden no sumar
+  igual: está pedido `unreadConversationsByLine`.

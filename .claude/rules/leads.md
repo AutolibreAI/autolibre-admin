@@ -1638,3 +1638,23 @@ dijo» (cliente viejo, landing, pedido cargado a mano). Sólo lectura: lo escrib
   espejo no conoce sale crudo, nunca en blanco.
 - Verificado contra la base local con la 0143 (y con una columna borrada en una transacción revertida:
   el guard da `false`). Al 2026-11-03 la 0143 NO está en producción.
+
+### «Contactado» sólo para WhatsApp y web, y el tablero partido — desde el 2026-11-20
+
+- **`quoteNeedsManualContact(channel)`** (`~/lib/quote-requests`): sólo `whatsapp` y `web`. A un
+  pedido de la app no hace falta escribirle: pasa a Respondido cuando se le cargan propuestas.
+  **No cambia ningún estado en la base** (uno de la app sigue `received`).
+- **Ficha**: «Marcar contactado» salió de «Acciones» y vive en `QuoteContactedCard`, entre Fotos y
+  Despacho por WhatsApp, sólo para WhatsApp y web. Queda montada ya contactado («Contactado el …»)
+  para que el aviso sobreviva al `invalidate()`.
+- **«Sin contactar»** (columna, chip, tarjeta del resumen): `uncontactedPredicate` suma
+  `channel <> 'app'`. Se toca junto con `quoteNeedsManualContact`.
+- **Tablero** (`QUOTE_BOARD_COLUMNS`, `quoteBoardColumn`): Recibido · Contactado · Respondido 1 ·
+  Respondido 2 · Respondido completo · Cerrado.
+  - Un pedido de la app `received` va a **Contactado** («contactado automático (app)»): pendiente de
+    presupuestos. No se arrastra a contactado ni a respondido (lo mueve la carga de propuestas); sí
+    se puede cerrar.
+  - Respondido se parte por propuestas ACTIVAS (`responseCount`, si no `proposals_count`): 1 (o 0),
+    2, y completo con `QUOTE_PROMISED_PROPOSALS` = 3. Sirve para perseguir los que no llegaron a las
+    tres prometidas. Entre esas tres columnas no hay arrastre: la cantidad decide.
+  - Soltar en «Respondido · 2» precarga 2 en la cantidad del recuadro (se puede cambiar).

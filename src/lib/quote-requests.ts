@@ -502,6 +502,109 @@ export function canMoveQuoteRequest(from: string, to: string): boolean {
   return allowed?.includes(to) ?? false
 }
 
+// ── Contactado: sólo WhatsApp y web (2026-11-20) ─────────────────────────────
+
+/**
+ * ¿Este pedido necesita que alguien lo marque «contactado» a mano? Sólo los
+ * que entran por WhatsApp o por la web: a esa persona hay que escribirle. Uno
+ * de la APP ya está en la app; pasa a «respondido» cuando se le cargan
+ * propuestas (el backend lo mueve). Decidido el 2026-11-20.
+ *
+ * No cambia ningún estado: un pedido de la app sigue `received` en la base.
+ * El tablero lo muestra en la columna de contactados («automático») y la ficha
+ * no ofrece el botón.
+ */
+export function quoteNeedsManualContact(channel: string): boolean {
+  return channel !== 'app'
+}
+
+/** Las propuestas que se le prometen a la persona. */
+export const QUOTE_PROMISED_PROPOSALS = 3
+
+// ── Columnas del tablero ─────────────────────────────────────────────────────
+
+/**
+ * Las columnas del tablero (2026-11-20). No son los estados de la base:
+ * - un pedido de la APP `received` va a **Contactado** («automático», pendiente
+ *   de presupuestos);
+ * - **Respondido** se parte por cuántas propuestas ACTIVAS tiene (1 · 2 ·
+ *   completo = 3 o más), para perseguir los que no llegaron a las tres
+ *   prometidas. Sin el dato (`responseCount` null, base sin 0120–0122) se usa
+ *   `proposals_count`, y si tampoco hay, cae en la primera.
+ */
+export const QUOTE_BOARD_COLUMNS = ['received', 'contacted', 'answered_1', 'answered_2', 'answered_full', 'closed'] as const
+export type QuoteBoardColumn = (typeof QUOTE_BOARD_COLUMNS)[number]
+
+export const QUOTE_BOARD_COLUMN_LABELS: Record<QuoteBoardColumn, string> = {
+  received: 'Recibido',
+  contacted: 'Contactado',
+  answered_1: 'Respondido · 1',
+  answered_2: 'Respondido · 2',
+  answered_full: 'Respondido · completo',
+  closed: 'Cerrado',
+}
+
+export const QUOTE_BOARD_COLUMN_HINTS: Partial<Record<QuoteBoardColumn, string>> = {
+  contacted: 'Pendientes de presupuestos. Los de la app entran solos.',
+  answered_1: 'Una propuesta (o ninguna cargada): faltan dos.',
+  answered_2: 'Dos propuestas: falta una.',
+  answered_full: `${QUOTE_PROMISED_PROPOSALS} o más propuestas.`,
+}
+
+/** El estado de la base al que lleva soltar en esa columna. */
+export const QUOTE_BOARD_COLUMN_STATUS: Record<QuoteBoardColumn, QuoteRequestStatus> = {
+  received: 'received',
+  contacted: 'contacted',
+  answered_1: 'answered',
+  answered_2: 'answered',
+  answered_full: 'answered',
+  closed: 'closed',
+}
+
+/** Propuestas que cuentan para partir Respondido. */
+export function quoteProposalTotal(row: Pick<QuoteRequestListItem, 'responseCount' | 'proposalsCount'>): number {
+  return row.responseCount ?? row.proposalsCount ?? 0
+}
+
+/** `true` si la fila está en Contactado sólo por venir de la app (sigue `received`). */
+export function isAutoContacted(row: Pick<QuoteRequestListItem, 'status' | 'channel'>): boolean {
+  return row.status === 'received' && !quoteNeedsManualContact(row.channel)
+}
+
+export function quoteBoardColumn(
+  row: Pick<QuoteRequestListItem, 'status' | 'channel' | 'responseCount' | 'proposalsCount'>,
+): QuoteBoardColumn | null {
+  switch (row.status) {
+    case 'received':
+      return isAutoContacted(row) ? 'contacted' : 'received'
+    case 'contacted':
+      return 'contacted'
+    case 'answered': {
+      const n = quoteProposalTotal(row)
+      return n >= QUOTE_PROMISED_PROPOSALS ? 'answered_full' : n === 2 ? 'answered_2' : 'answered_1'
+    }
+    case 'closed':
+      return 'closed'
+    default:
+      return null
+  }
+}
+
+/**
+ * ¿Se puede soltar la fila en esa columna? Es la transición de la base
+ * (`canMoveQuoteRequest`) más una regla: un pedido de la app no se pasa a mano
+ * a contactado ni a respondido — lo mueve la carga de propuestas. Entre las
+ * tres de Respondido no hay movimiento: la columna la decide la cantidad.
+ */
+export function canDropOnBoardColumn(
+  row: Pick<QuoteRequestListItem, 'status' | 'channel'>,
+  column: QuoteBoardColumn,
+): boolean {
+  const to = QUOTE_BOARD_COLUMN_STATUS[column]
+  if (!quoteNeedsManualContact(row.channel) && (to === 'contacted' || to === 'answered')) return false
+  return canMoveQuoteRequest(row.status, to)
+}
+
 /** Sentinela del handler cuando `quote_requests` no existe o le faltan columnas. */
 export const QUOTE_REQUESTS_UNAVAILABLE = 'QUOTE_REQUESTS_UNAVAILABLE'
 

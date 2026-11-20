@@ -6,6 +6,9 @@ import {
   applicationSearchSchema,
 } from '~/lib/partners'
 import { getPipelineHealth, listPartnerApplications } from '~/fn/partners'
+import { getSourcingContextFn } from '~/fn/team'
+import { SOURCER_FILTER_NONE, sourcerLabel, type SourcingContext } from '~/lib/team'
+import { ClaimSourcerButton, SourcerSelect } from '~/components/SourcerSelect'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ApplicationStatusBadge } from '~/components/ApplicationStatusBadge'
 import { ResolvedServicesSummary } from '~/components/ResolvedServicesSummary'
@@ -39,8 +42,14 @@ export const Route = createFileRoute('/_authed/solicitudes/')({
   loader: async ({ deps, abortController }) => {
     const signal = abortController.signal
     const healthPromise = getPipelineHealth({ signal })
-    const applications = await listPartnerApplications({ data: deps, signal })
-    return { applications, healthPromise }
+    // "Alta por" (035): el selector, "Es mío" y el progreso necesitan el
+    // catálogo del equipo. Arranca antes del await de la cola (en paralelo).
+    const sourcingPromise = getSourcingContextFn({ signal })
+    const [applications, sourcing] = await Promise.all([
+      listPartnerApplications({ data: deps, signal }),
+      sourcingPromise,
+    ])
+    return { applications, healthPromise, sourcing }
   },
 
   head: () => ({ meta: [{ title: 'Solicitudes de partners — AutoLibre' }] }),
@@ -48,7 +57,7 @@ export const Route = createFileRoute('/_authed/solicitudes/')({
 })
 
 function ApplicationsQueue() {
-  const { applications, healthPromise } = Route.useLoaderData()
+  const { applications, healthPromise, sourcing } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
@@ -105,6 +114,33 @@ function ApplicationsQueue() {
           </div>
         </div>
 
+        {sourcing.available ? (
+          <div className="space-y-1.5">
+            <label
+              htmlFor="filter-sourcer"
+              className="block text-xs font-medium uppercase tracking-wider text-muted-foreground"
+            >
+              Alta por
+            </label>
+            <select
+              id="filter-sourcer"
+              value={search.applicationSourcer ?? ''}
+              onChange={(e) => setFilter({ applicationSourcer: (e.target.value || undefined) as typeof search.applicationSourcer })}
+              className="h-8 rounded-md border border-border bg-card px-2 text-sm"
+            >
+              <option value="">Todas</option>
+              <option value={SOURCER_FILTER_NONE}>Sin asignar</option>
+              {sourcing.members
+                .filter((m) => m.active || m.applicationCount > 0)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {sourcerLabel(m)}
+                  </option>
+                ))}
+            </select>
+          </div>
+        ) : null}
+
         <div className="space-y-1.5">
           <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Publicadas
@@ -120,6 +156,14 @@ function ApplicationsQueue() {
         </div>
       </div>
 
+      <SourcingProgress
+        sourcing={sourcing}
+        filteringUnassigned={search.applicationSourcer === SOURCER_FILTER_NONE}
+        onShowUnassigned={() =>
+          setFilter({ applicationSourcer: SOURCER_FILTER_NONE, published: 'show', status: undefined })
+        }
+      />
+
       {applications.length === 0 ? (
         <div className="rounded-lg border border-border bg-card py-16 text-center text-sm text-muted-foreground">
           No hay solicitudes con esos filtros.
@@ -131,6 +175,7 @@ function ApplicationsQueue() {
               <TableRow>
                 <TableHead>Taller</TableHead>
                 <TableHead>Estado</TableHead>
+                {sourcing.available ? <TableHead>Alta por</TableHead> : null}
                 <TableHead>Al aprobar</TableHead>
                 <TableHead>Seguimiento</TableHead>
                 <TableHead>Recibida</TableHead>
@@ -138,7 +183,7 @@ function ApplicationsQueue() {
             </TableHeader>
             <TableBody>
               {applications.map((app) => (
-                <Row key={app.id} app={app} />
+                <Row key={app.id} app={app} sourcing={sourcing} />
               ))}
             </TableBody>
           </Table>
@@ -241,7 +286,51 @@ function Chip({
   )
 }
 
-function Row({ app }: { app: ApplicationListItem }) {
+/**
+ * El progreso de la carga de "Alta por": solicitudes no descartadas sin
+ * asignar, de todas las fechas y estados (incluidas las publicadas). El link
+ * arma el filtro para recorrerlas: sin asignar + publicadas a la vista.
+ */
+function SourcingProgress({
+  sourcing,
+  filteringUnassigned,
+  onShowUnassigned,
+}: {
+  sourcing: SourcingContext
+  filteringUnassigned: boolean
+  onShowUnassigned: () => void
+}) {
+  if (!sourcing.available || !sourcing.progress) return null
+  const { unassigned, total } = sourcing.progress
+  const done = unassigned === 0
+  return (
+    <div
+      className={cn(
+        'mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3.5 py-2.5 text-sm',
+        done ? 'border-border bg-card' : 'border-status-yellow/30 bg-status-yellow-bg',
+      )}
+    >
+      <span className={cn('font-heading font-semibold', done ? 'text-status-green' : 'text-status-yellow')}>
+        {done ? 'Todas asignadas' : `${unassigned} de ${total} solicitudes sin asignar`}
+      </span>
+      <span className="text-xs text-muted-foreground">
+        «Alta por»: quién del equipo trajo al proveedor. Cuenta todas menos las descartadas, de cualquier fecha.
+      </span>
+      {!done && !filteringUnassigned ? (
+        <button type="button" onClick={onShowUnassigned} className="ml-auto text-xs font-medium text-foreground underline underline-offset-2">
+          Ver las sin asignar
+        </button>
+      ) : null}
+      {!sourcing.meMemberId ? (
+        <span className="w-full text-xs text-muted-foreground">
+          Tu usuario no está vinculado a ninguna persona del equipo: vinculalo en Comercial › Equipo para tener «Es mío».
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function Row({ app, sourcing }: { app: ApplicationListItem; sourcing: SourcingContext }) {
   return (
     <TableRow>
       <TableCell>
@@ -270,6 +359,16 @@ function Row({ app }: { app: ApplicationListItem }) {
           ) : null}
         </div>
       </TableCell>
+      {sourcing.available ? (
+        <TableCell>
+          <div className="flex items-start gap-2">
+            <SourcerSelect applicationId={app.id} current={app.sourcer} members={sourcing.members} compact />
+            {!app.sourcer && sourcing.meMemberId ? (
+              <ClaimSourcerButton applicationId={app.id} meMemberId={sourcing.meMemberId} members={sourcing.members} />
+            ) : null}
+          </div>
+        </TableCell>
+      ) : null}
       <TableCell>
         <ResolvedServicesSummary
           resolved={app.resolved}

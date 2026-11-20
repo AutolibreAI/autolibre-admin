@@ -71,7 +71,11 @@ function usePageVisible() {
   return visible
 }
 
-export function WhatsAppThread({ initial }: { initial: ThreadPage }) {
+/**
+ * `onBack`: el panel flotante abre el hilo adentro y vuelve a SU lista (sin
+ * navegar). Sin él, la flecha (sólo en mobile) lleva a `/whatsapp`.
+ */
+export function WhatsAppThread({ initial, onBack }: { initial: ThreadPage; onBack?: () => void }) {
   const inbox = useInbox()
   const conversationId = initial.conversation.id
   const conversation = inbox.get(conversationId) ?? initial.conversation
@@ -256,7 +260,7 @@ export function WhatsAppThread({ initial }: { initial: ThreadPage }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ThreadHeader conversation={conversation} replyState={replyState} nowMs={nowMs} />
+      <ThreadHeader onBack={onBack} conversation={conversation} replyState={replyState} nowMs={nowMs} />
 
       <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto bg-canvas px-4 py-3">
         {olderCursor ? (
@@ -301,13 +305,29 @@ export function WhatsAppThread({ initial }: { initial: ThreadPage }) {
 
 // ── Cabecera ────────────────────────────────────────────────────────────────
 
-function ThreadHeader({ conversation, replyState, nowMs }: { conversation: WhatsAppConversation; replyState: string; nowMs: number }) {
+function ThreadHeader({
+  conversation,
+  replyState,
+  nowMs,
+  onBack,
+}: {
+  conversation: WhatsAppConversation
+  replyState: string
+  nowMs: number
+  onBack?: () => void
+}) {
   return (
     <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
       <div className="flex min-w-0 items-start gap-2">
-        <Link to="/whatsapp" className="mt-0.5 text-muted-foreground hover:text-foreground md:hidden" aria-label="Volver a la lista">
-          <ArrowLeft className="size-4" />
-        </Link>
+        {onBack ? (
+          <button type="button" onClick={onBack} className="mt-0.5 text-muted-foreground hover:text-foreground" aria-label="Volver a la lista">
+            <ArrowLeft className="size-4" />
+          </button>
+        ) : (
+          <Link to="/whatsapp" className="mt-0.5 text-muted-foreground hover:text-foreground md:hidden" aria-label="Volver a la lista">
+            <ArrowLeft className="size-4" />
+          </Link>
+        )}
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold">{conversationTitle(conversation)}</h2>
           <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">

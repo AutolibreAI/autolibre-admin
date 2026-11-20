@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { applicationSourcerParam, type SourcerRef } from '~/lib/team'
 
 /**
  * Marketplace — contrato de la cola de solicitudes.
@@ -109,6 +110,11 @@ export interface ApplicationListItem {
   /** De la vista `v_partner_application_queue`. */
   alreadyPublished: boolean
   resolved: ResolvedServices
+  /**
+   * "Alta por": quién del equipo trajo el proveedor (migración 035). `null` =
+   * sin asignar, o la 035 no está aplicada. → `~/lib/team`
+   */
+  sourcer: SourcerRef | null
 }
 
 export interface ApplicationDetail extends ApplicationListItem {
@@ -188,6 +194,13 @@ export const applicationSearchSchema = z.object({
   published: z.enum(['hide', 'show']).catch('hide').default('hide'),
 
   q: z.string().trim().max(80).optional(),
+
+  /**
+   * "Alta por": `none` = sin asignar, un uuid = esa persona. Calificado (no
+   * `sourcer`): un nombre genérico choca en el merge de search params de
+   * TanStack (`notifications.md`). Sin la 035 se ignora.
+   */
+  applicationSourcer: applicationSourcerParam,
 })
 
 export type ApplicationSearch = z.infer<typeof applicationSearchSchema>

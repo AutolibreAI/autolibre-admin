@@ -10,6 +10,9 @@ import {
   type ProspectSummarySearch,
 } from '~/lib/partner-prospects'
 import { getComercialSummaryFn } from '~/fn/partner-prospects'
+import { getSourcingCountsFn } from '~/fn/team'
+import { sourcingUnitParam } from '~/lib/team'
+import { SourcingCountsSection } from '~/components/SourcingCounts'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { MultiSelect } from '~/components/MultiSelect'
@@ -40,9 +43,18 @@ const LABEL = 'text-xs font-medium uppercase tracking-wider text-muted-foregroun
  * hora de Buenos Aires, así que el servidor y el navegador pintan lo mismo.
  */
 export const Route = createFileRoute('/_authed/comercial/resumen')({
-  validateSearch: prospectSummarySearchSchema,
+  // `sourcingUnit`: semana o mes del bloque «Altas por persona» (035).
+  validateSearch: prospectSummarySearchSchema.extend({ sourcingUnit: sourcingUnitParam }),
   loaderDeps: ({ search }) => search,
-  loader: ({ deps }) => getComercialSummaryFn({ data: deps }),
+  loader: async ({ deps }) => {
+    const { sourcingUnit, ...summarySearch } = deps
+    const [summary, sourcing] = await Promise.all([
+      getComercialSummaryFn({ data: summarySearch }),
+      // No depende de la 030: se muestra aunque Comercial esté apagado.
+      getSourcingCountsFn({ data: { unit: sourcingUnit } }),
+    ])
+    return { ...summary, sourcing }
+  },
   head: () => ({ meta: [{ title: 'Resumen · Seguimiento comercial — AutoLibre' }] }),
   component: SummaryView,
 })
@@ -52,10 +64,21 @@ function SummaryView() {
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
-  const setSearch = (next: Partial<ProspectSummarySearch>) =>
+  const setSearch = (next: Partial<ProspectSummarySearch & { sourcingUnit: 'week' | 'month' }>) =>
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
 
-  if (!data.available) return <ProspectsUnavailable missing={data.missing} />
+  const sourcingSection = (
+    <SourcingCountsSection data={data.sourcing} onUnit={(sourcingUnit) => setSearch({ sourcingUnit })} />
+  )
+
+  if (!data.available) {
+    return (
+      <>
+        {sourcingSection}
+        <ProspectsUnavailable missing={data.missing} />
+      </>
+    )
+  }
 
   const s = data.summary
   const hasRange = Boolean(search.prospectFrom || search.prospectTo)
@@ -82,6 +105,9 @@ function SummaryView() {
       />
 
       <SummaryBlocks summary={s} hasRange={hasRange} />
+
+      {/* No sigue a los filtros de contactos: es sobre las solicitudes de alta. */}
+      <div className="mt-8">{sourcingSection}</div>
 
       <section aria-labelledby="rs-due" className="mt-8">
         <h2 id="rs-due" className="mb-2 font-heading text-sm font-semibold">

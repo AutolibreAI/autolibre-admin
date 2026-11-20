@@ -304,6 +304,8 @@ export function ConversationList({
   nextCursor,
   loadingMore,
   onLoadMore,
+  onSelect,
+  emptyText = 'Todavía no hay conversaciones de WhatsApp.',
 }: {
   conversations: Array<WhatsAppConversation>
   activeId: string | undefined
@@ -311,25 +313,29 @@ export function ConversationList({
   nextCursor: string | null
   loadingMore: boolean
   onLoadMore: () => void
+  /**
+   * Con `onSelect` la fila es un botón (el panel flotante abre el hilo ADENTRO,
+   * sin navegar); sin él, un `<Link>` a `/whatsapp/:id` como siempre.
+   */
+  onSelect?: (conversationId: string) => void
+  emptyText?: string
 }) {
   if (conversations.length === 0) {
-    return <p className="p-4 text-sm text-muted-foreground">Todavía no hay conversaciones de WhatsApp.</p>
+    return <p className="p-4 text-sm text-muted-foreground">{emptyText}</p>
   }
+  const rowClass = (id: string) =>
+    cn(
+      'flex w-full gap-3 px-4 py-3 text-left hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring',
+      id === activeId && 'bg-muted',
+    )
   return (
     <div>
       <ul className="divide-y divide-border">
         {conversations.map((c) => {
           const state = effectiveReplyState(c, nowMs)
           return (
-            <li key={c.id}>
-              <Link
-                to="/whatsapp/$conversationId"
-                params={{ conversationId: c.id }}
-                className={cn(
-                  'flex gap-3 px-4 py-3 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring',
-                  c.id === activeId && 'bg-muted',
-                )}
-              >
+            <li key={c.id} className={cn(c.unread && 'bg-brand-soft/40')}>
+              <RowShell id={c.id} onSelect={onSelect} className={rowClass(c.id)}>
                 <span
                   className={cn('mt-1.5 size-2 shrink-0 rounded-full', REPLY_DOT[state] ?? 'bg-muted-foreground/40')}
                   title={REPLY_STATE_LABELS[state] ?? state}
@@ -370,7 +376,7 @@ export function ConversationList({
                     ) : null}
                   </div>
                 </div>
-              </Link>
+              </RowShell>
             </li>
           )
         })}
@@ -383,5 +389,31 @@ export function ConversationList({
         </div>
       ) : null}
     </div>
+  )
+}
+
+function RowShell({
+  id,
+  onSelect,
+  className,
+  children,
+}: {
+  id: string
+  onSelect?: (conversationId: string) => void
+  className: string
+  children: ReactNode
+}) {
+  if (onSelect) {
+    return (
+      <button type="button" onClick={() => onSelect(id)} className={className}>
+        {children}
+      </button>
+    )
+  }
+  return (
+    // `search` se conserva: la pestaña (`whatsappLine`) sigue al abrir un hilo.
+    <Link to="/whatsapp/$conversationId" params={{ conversationId: id }} search={true} className={className}>
+      {children}
+    </Link>
   )
 }

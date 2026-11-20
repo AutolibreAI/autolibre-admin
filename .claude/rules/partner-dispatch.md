@@ -182,3 +182,25 @@ sondeo como el de `/conocimiento` queda pendiente.
 `pnpm typecheck`. El recorrido real (borrador, aprobar, 202, reintentar con el mismo id, cada code)
 necesita el backend con la 0142 y `PARTNER_DISPATCH_ENABLED=true`. Contra una base sin la 0142 la
 tarjeta dice "falta desplegar" sin fetch; con el kill switch apagado, aprobar da el aviso neutro.
+
+## La lista como «Talleres candidatos», con plan y propuestas del mes (2026-11-20)
+
+Cada fila de Sugeridos y de Otros talleres se lee como en `PartnerCandidates`: nombre (link a la
+ficha), Aliado, modalidad remota, zona · horario, rubros que cubre como badges, km, WhatsApp y
+«Descartar». Y suma la línea del **plan**: plan efectivo, propuestas usadas este mes contra su tope y
+«Plan gratis: hay que cobrarle».
+
+- Lo que el borrador del backend no trae sale de **`dispatchPartnerFacts()`** (`partner-dispatch.repo.ts`,
+  `getDispatchPartnerFactsFn`): SQL de LECTURA sobre `partners` activos + `listPartnerPlans` +
+  `ops.partner_proposal_usage_monthly`. Es la excepción a «el único SQL es el guard»: sigue sin
+  tocar `partner_outreach`.
+- **Misma regla que `/partners/propuestas`**: `effectivePlans` (plan de la suscripción con acceso, si
+  no Gratis) y `capTone` (pasado del tope rojo, justo ámbar, Aliado nunca se marca). Si las dos
+  pantallas dijeran distinto, una estaría mal. Usadas = enviadas + retiradas, mes de Buenos Aires.
+- Llega por contexto (`FactsContext`) a las filas. Si falla la lectura, la tarjeta se muestra igual
+  sin esos datos (el loader hace `.catch(() => null)`).
+- La casilla ya no envuelve la fila: el nombre es un link a la ficha.
+
+**Seguimiento**: cada chat va en un `<details>` cerrado («Ver chat (N mensajes)»); a la vista
+quedan el taller, el estado y las fechas. Con varios talleres, los chats abiertos alargaban la ficha
+hasta tapar las propuestas.

@@ -84,6 +84,17 @@ export const whatsappConversationSchema = z.object({
     })
     .nullable(),
   updatedAt: z.string(),
+  /**
+   * Por cuál de NUESTROS números entró la conversación. **Todavía no existe en
+   * el backend** (`docs/pedido-backend-whatsapp-lineas.md`): opcional hasta
+   * que lo despliegue. Mientras falte, `conversationLine()` lo deduce.
+   */
+  line: z.string().optional(),
+  /**
+   * Pase a humano del bot de usuarios (fase siguiente, mismo pedido). Opcional
+   * y sin UI todavía: la estructura queda lista para marcar esas conversaciones.
+   */
+  handoffRequestedAt: z.string().nullable().optional(),
 })
 export type WhatsAppConversation = z.infer<typeof whatsappConversationSchema>
 
@@ -333,6 +344,73 @@ export function formatWindowLeft(expiresAt: string, nowMs: number): string {
 /** Orden estable de mensajes: `createdAt` y, a igualdad, `id`. */
 export function compareMessages(a: Pick<WhatsAppMessage, 'createdAt' | 'id'>, b: Pick<WhatsAppMessage, 'createdAt' | 'id'>) {
   return a.createdAt === b.createdAt ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.createdAt < b.createdAt ? -1 : 1
+}
+
+// ── Las dos líneas ──────────────────────────────────────────────────────────
+
+/**
+ * Las dos líneas de WhatsApp: **Proveedores** (la del despacho de pedidos a
+ * talleres) y **Usuarios** (el bot de recepción de pedidos y el pase a
+ * humano). Cada respuesta tiene que salir por la línea de su conversación —
+ * eso lo garantiza el BACKEND (el panel no elige el número de salida).
+ */
+export const WHATSAPP_LINES = ['proveedores', 'usuarios'] as const
+export type WhatsAppLine = (typeof WHATSAPP_LINES)[number]
+
+export const WHATSAPP_LINE_LABELS: Record<WhatsAppLine, string> = {
+  proveedores: 'Proveedores',
+  usuarios: 'Usuarios',
+}
+
+/** Search param de `/whatsapp` (calificado: nunca `line` pelado). */
+export const whatsappLineParam = z.enum(WHATSAPP_LINES).optional().catch(undefined)
+
+/** Lo que el backend vaya a mandar en `line`, mapeado a nuestras pestañas. */
+const BACKEND_LINE: Record<string, WhatsAppLine> = {
+  partners: 'proveedores',
+  providers: 'proveedores',
+  proveedores: 'proveedores',
+  users: 'usuarios',
+  usuarios: 'usuarios',
+}
+
+/**
+ * A qué pestaña va una conversación.
+ *
+ * ⚠ PROVISORIO (2026-11-20): `whatsapp_conversations` no guarda por cuál de
+ * nuestros números entró. Mientras el backend no mande `line`, si el número
+ * coincide con un proveedor (`partners` no vacío, el cruce lo hace el backend
+ * con el WhatsApp normalizado) va a Proveedores; si no, a Usuarios. El día que
+ * llegue `line`, ése manda y esta deducción se borra.
+ * → `docs/pedido-backend-whatsapp-lineas.md`
+ */
+export function conversationLine(c: Pick<WhatsAppConversation, 'line' | 'partners'>): WhatsAppLine {
+  const fromBackend = c.line ? BACKEND_LINE[c.line] : undefined
+  if (fromBackend) return fromBackend
+  return c.partners.length > 0 ? 'proveedores' : 'usuarios'
+}
+
+/** Conversaciones no leídas por pestaña, sobre lo cargado. */
+export function unreadByLine(conversations: ReadonlyArray<WhatsAppConversation>): Record<WhatsAppLine, number> {
+  const out: Record<WhatsAppLine, number> = { proveedores: 0, usuarios: 0 }
+  for (const c of conversations) if (c.unread) out[conversationLine(c)]++
+  return out
+}
+
+/**
+ * La pestaña con la que abre el panel: la que tiene no leídas; si las dos,
+ * Proveedores; si ninguna, Proveedores.
+ */
+export function defaultLine(unread: Record<WhatsAppLine, number>): WhatsAppLine {
+  if (unread.proveedores > 0) return 'proveedores'
+  if (unread.usuarios > 0) return 'usuarios'
+  return 'proveedores'
+}
+
+/** Orden de una pestaña: no leídas arriba, después por último mensaje. */
+export function compareUnreadFirst(a: WhatsAppConversation, b: WhatsAppConversation) {
+  if (a.unread !== b.unread) return a.unread ? -1 : 1
+  return compareConversations(a, b)
 }
 
 /** Orden de la lista: `lastMessageAt` desc, como el backend. */
