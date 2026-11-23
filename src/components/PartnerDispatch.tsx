@@ -26,6 +26,7 @@ import {
   type OutreachTone,
   type PartnerDispatchResult,
 } from '~/lib/partner-dispatch'
+import { isDirectedQuote, requestedPartnerNames, type QuoteRequestDetail } from '~/lib/quote-requests'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
 import { Checkbox } from '~/components/ui/checkbox'
@@ -69,7 +70,17 @@ import { cn } from '~/lib/utils'
  * `key` por pedido), así que un `router.invalidate()` después de un error o de
  * un éxito no se lleva el aviso — misma lección que `QuoteRequestActions`.
  */
-export function PartnerDispatch({ quoteRequestId, data }: { quoteRequestId: string; data: PartnerDispatchResult }) {
+export function PartnerDispatch({
+  quoteRequestId,
+  data,
+  detail,
+}: {
+  quoteRequestId: string
+  data: PartnerDispatchResult
+  /** Sólo para saber si es un pedido dirigido: cambia la pista de `missing_location`. */
+  detail: Pick<QuoteRequestDetail, 'requestedPartners'>
+}) {
+  const directedTo = isDirectedQuote(detail) ? requestedPartnerNames(detail) : null
   const router = useRouter()
   const [refreshing, setRefreshing] = useState(false)
   // El último resultado de una aprobación. Vive acá, no en el bloque de
@@ -126,6 +137,7 @@ export function PartnerDispatch({ quoteRequestId, data }: { quoteRequestId: stri
                 key={`${draftKey(data.draft.data)}#${refreshNonce}`}
                 quoteRequestId={quoteRequestId}
                 draft={data.draft.data}
+                directedTo={directedTo}
                 staleIds={notice?.kind === 'error' ? notice.staleIds : []}
                 onNotice={setNotice}
                 onRefresh={refresh}
@@ -221,12 +233,15 @@ function Warn({ children }: { children: ReactNode }) {
 function DraftSection({
   quoteRequestId,
   draft,
+  directedTo,
   staleIds,
   onNotice,
   onRefresh,
 }: {
   quoteRequestId: string
   draft: DispatchDraft
+  /** Los talleres que eligió la persona («A» y «B»), o `null` si el pedido es abierto. */
+  directedTo: string | null
   staleIds: Array<string>
   onNotice: (n: Notice | null) => void
   onRefresh: () => Promise<void>
@@ -318,7 +333,15 @@ function DraftSection({
   }
 
   const reasons = draft.readiness.reasons
-  const hints = reasons.map((r) => READINESS_REASON_HINTS[r]).filter((h): h is string => h !== undefined)
+  // Un pedido dirigido llega sin ubicación A PROPÓSITO (la app no la pide), pero
+  // el backend la exige igual para despachar: sólo pone primero al elegido.
+  const hints = reasons
+    .map((r) =>
+      r === 'missing_location' && directedTo !== null
+        ? `Es normal que no tenga ubicación: la persona eligió ${directedTo} desde la app y en ese caso la app no la pide. El despacho automático la exige igual, así que derivalo a mano desde «Talleres candidatos», o cargá la ubicación con «Corregir ubicación» (tarjeta Pedido).`
+        : READINESS_REASON_HINTS[r],
+    )
+    .filter((h): h is string => h !== undefined)
   const selectedNames = selectable.filter((c) => selected.includes(c.partnerId)).map((c) => c.name)
 
   return (

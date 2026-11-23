@@ -889,6 +889,36 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * vehículo vinculado. Lo completa el alta de la app o «Identificar vehículo».
    */
   requestVehicleCatalog: QuoteRequestVehicleCatalog
+  /**
+   * Los talleres que la persona eligió desde la ficha de cada uno en la app
+   * (`quote_request_partners`, el `requestedPartnerIds` del alta), en el orden
+   * en que los eligió. `[]` = pedido abierto, sin taller elegido; `null` = la
+   * base no tiene la tabla.
+   *
+   * Un pedido DIRIGIDO llega SIN ubicación a propósito: la app no la pide ni la
+   * manda cuando el pedido ya sale con su taller (la ubicación existe para saber
+   * por dónde buscar talleres, y acá no hay a quién buscar). → `isDirectedQuote`
+   */
+  requestedPartners: Array<QuoteRequestedPartner> | null
+}
+
+/** Un taller elegido por la persona desde su ficha en la app. */
+export interface QuoteRequestedPartner {
+  id: string
+  name: string
+  /** `active` · `paused` · `archived` (enum `partner_status`), crudo. */
+  status: string
+  coverageZone: string | null
+}
+
+/** ¿La persona eligió el taller desde la app? */
+export const isDirectedQuote = (d: Pick<QuoteRequestDetail, 'requestedPartners'>): boolean =>
+  (d.requestedPartners?.length ?? 0) > 0
+
+/** Los nombres de los talleres elegidos, para los avisos ("A y B"). */
+export function requestedPartnerNames(d: Pick<QuoteRequestDetail, 'requestedPartners'>): string {
+  const names = (d.requestedPartners ?? []).map((p) => `«${p.name}»`)
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} y ${names[names.length - 1]}`
 }
 
 /**

@@ -12,9 +12,11 @@ import {
 } from '~/lib/partners'
 import {
   AI_SERVICE_LOW_SCORE,
+  isDirectedQuote,
   quoteMapLocation,
   quotePublicCode,
   readableQuoteRequestError,
+  requestedPartnerNames,
   type QuoteRequestDetail,
 } from '~/lib/quote-requests'
 import { renderQuoteTemplate, whatsAppMessageUrl, type QuoteMessageTemplate } from '~/lib/quote-templates'
@@ -218,6 +220,12 @@ export function PartnerCandidates({
    * mismo campo de texto (`"CABA, Zona Norte"`) desaparecería justo cuando el
    * operador busca una de las suyas.
    */
+  const requestedIds = new Set((detail.requestedPartners ?? []).map((p) => p.id.toLowerCase()))
+  const directed = isDirectedQuote(detail)
+  // ¿Alguno de los elegidos quedó fuera de los candidatos de estos rubros?
+  const requestedOutside = (detail.requestedPartners ?? []).filter(
+    (p) => !candidates.some((c) => c.id.toLowerCase() === p.id.toLowerCase()),
+  )
   const visibleCandidates = candidates
     .filter((c) => {
       if (onlyFounding && c.tier !== 'founding') return false
@@ -231,7 +239,13 @@ export function PartnerCandidates({
       const zone = c.coverageZone.toLowerCase()
       return zoneFilter.some((z) => zone.includes(z.toLowerCase()))
     })
-    .sort(order === 'distance' || selectedCategorySlugs.length < 2 ? byDistance : byCoverage)
+    .sort((a, b) => {
+      // El taller que eligió la persona desde la app va PRIMERO, sea cual sea
+      // el orden: en un pedido dirigido es a quien hay que mandárselo.
+      const ra = requestedIds.has(a.id.toLowerCase())
+      if (ra !== requestedIds.has(b.id.toLowerCase())) return ra ? -1 : 1
+      return (order === 'distance' || selectedCategorySlugs.length < 2 ? byDistance : byCoverage)(a, b)
+    })
 
   // GPS; si no, el geocode del backend; si no, el punto viejo del panel (021,
   // sólo lectura). El MISMO punto con el que el loader pidió los candidatos.
@@ -408,7 +422,21 @@ export function PartnerCandidates({
               </div>
             ) : null}
 
+            {directed ? (
+              <p className="rounded-md border border-brand/30 bg-brand-soft px-3 py-2 text-xs leading-relaxed text-brand">
+                La persona eligió {requestedPartnerNames(detail)} desde la app
+                {requestedOutside.length === 0
+                  ? ': está primero en la lista, marcado «Elegido por la persona».'
+                  : `. ${requestedOutside.map((p) => p.name).join(', ')} no cubre los rubros elegidos acá: abrí su ficha desde la tarjeta Pedido para escribirle.`}
+                {detail.geocode.status === 'no_location'
+                  ? ' Que el pedido no tenga ubicación es normal en este caso (la app no la pide): sólo hace falta para buscar otros talleres.'
+                  : ''}
+              </p>
+            ) : null}
+
             {!pedidoHasLocation ? (
+              // Dirigido y sin ubicación: ya lo explica el aviso de arriba.
+              directed && detail.geocode.status === 'no_location' ? null : (
               <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
                 {detail.geocode.status === 'no_location'
                   ? 'Este pedido no tiene ubicación: no hay distancia que calcular. Cargala con «Corregir ubicación», en la tarjeta Pedido.'
@@ -416,6 +444,7 @@ export function PartnerCandidates({
                     ? 'No se pudo ubicar la dirección del pedido: corregila con «Corregir ubicación», en la tarjeta Pedido.'
                     : 'La dirección del pedido todavía no está ubicada en el mapa: mirá «Geocodificar» en la tarjeta Pedido.'}
               </p>
+              )
             ) : visibleCandidates.length > 0 && locatedShare < MIN_LOCATED_SHARE ? (
               <p className="rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
                 Sólo {located} de {visibleCandidates.length} candidatos tienen ubicación cargada — el
@@ -474,6 +503,7 @@ export function PartnerCandidates({
                     quoteRequestId={quoteRequestId}
                     publicNumber={publicNumber}
                     quoteMessage={quoteMessage}
+                    requested={requestedIds.has(c.id.toLowerCase())}
                   />
                 ))}
               </div>
@@ -491,6 +521,7 @@ export function PartnerCandidates({
                     quoteRequestId={quoteRequestId}
                     publicNumber={publicNumber}
                     quoteMessage={quoteMessage}
+                    requested={requestedIds.has(c.id.toLowerCase())}
                   />
                 ))}
               </div>
@@ -507,10 +538,13 @@ function CandidateRow({
   quoteRequestId,
   publicNumber,
   quoteMessage,
+  requested,
 }: {
   candidate: PartnerCandidate
   quoteRequestId: string
   publicNumber: number
+  /** La persona eligió este taller desde su ficha en la app. */
+  requested: boolean
   /**
    * El texto de la plantilla «Pedir cotización — red», ya renderizado para
    * este pedido. `null` si la plantilla todavía no llegó del loader (no
@@ -562,6 +596,9 @@ function CandidateRow({
             >
               {c.name}
             </Link>
+            {requested ? (
+              <Badge className="border-transparent bg-brand text-white">Elegido por la persona</Badge>
+            ) : null}
             {c.tier === 'founding' ? (
               <Badge variant="outline" className="border-brand/30 bg-brand-soft text-brand">
                 Aliado

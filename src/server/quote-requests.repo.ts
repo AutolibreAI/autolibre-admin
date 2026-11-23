@@ -24,6 +24,7 @@ import {
   type QuoteRequestStatusSummary,
   type QuoteRequestsAvailability,
   type QuoteAiClassification,
+  type QuoteRequestedPartner,
   type QuoteTimingAndParts,
   type QuoteRequestVehicleCatalog,
   type QuoteSortKey,
@@ -198,6 +199,39 @@ async function readOperatorServiceSlugs(id: string): Promise<Array<string> | nul
     [id],
   )
   return rows.map((r) => r.slug)
+}
+
+/**
+ * Los talleres que la persona eligió desde su ficha en la app
+ * (`quote_request_partners`, lo escribe SÓLO el alta del backend). La tabla no
+ * guarda el orden de elección; `raw_submission->'requestedPartnerIds'` sí (el
+ * controller del backend copia el body tal cual), así que se ordena por ahí.
+ * Sin el partner (borrado) la fila no sale. `null` sin la tabla.
+ */
+async function readRequestedPartners(id: string): Promise<Array<QuoteRequestedPartner> | null> {
+  const guard = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.quote_request_partners') is not null as ok`,
+  )
+  if (guard?.ok !== true) return null
+  const rows = await sql<{ id: string; name: string; status: string; coverage_zone: string | null }>(
+    `select p.id, p.name, p.status::text as status, p.coverage_zone
+       from quote_request_partners qrp
+       join partners p on p.id = qrp.partner_id
+       join quote_requests qr on qr.id = qrp.quote_request_id
+       left join lateral (
+         select o.ord
+           from jsonb_array_elements_text(
+                  case when jsonb_typeof(qr.raw_submission->'requestedPartnerIds') = 'array'
+                       then qr.raw_submission->'requestedPartnerIds' else '[]'::jsonb end
+                ) with ordinality as o(pid, ord)
+          where lower(o.pid) = lower(qrp.partner_id::text)
+          limit 1
+       ) o on true
+      where qrp.quote_request_id = $1
+      order by o.ord nulls last, qrp.created_at, p.name`,
+    [id],
+  )
+  return rows.map((r) => ({ id: r.id, name: r.name, status: r.status, coverageZone: r.coverage_zone }))
 }
 
 async function readAiClassification(id: string): Promise<QuoteAiClassification> {
@@ -1136,6 +1170,7 @@ export async function findQuoteRequestDetail(
   const operatorServiceSlugs = await readOperatorServiceSlugs(id)
   const timingAndParts = await readTimingAndParts(id)
   const requestVehicleCatalog = await readRequestVehicleCatalog(id)
+  const requestedPartners = await readRequestedPartners(id)
 
   return {
     ...mapListRow(r),
@@ -1163,6 +1198,7 @@ export async function findQuoteRequestDetail(
     aiClassification,
     timingAndParts,
     requestVehicleCatalog,
+    requestedPartners,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.

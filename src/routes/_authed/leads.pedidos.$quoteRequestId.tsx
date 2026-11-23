@@ -3,6 +3,7 @@ import { ArrowLeft, Globe, MessageCircle, Smartphone } from 'lucide-react'
 import {
   formatMinutes,
   formatPlainDay,
+  isDirectedQuote,
   parseInternalNotes,
   quoteCancellationReasonLabel,
   quotePartsSupplyLabel,
@@ -49,7 +50,9 @@ import { QuoteRequestsUnavailable } from '~/components/QuoteRequestsUnavailable'
 import { QuoteStatusBadge, QuoteVehicleWarnings, QuoteWhatsAppLink } from '~/components/QuoteRequestCells'
 import { QuoteTemplates } from '~/components/QuoteTemplates'
 import { QuoteVehicleProfileCard } from '~/components/QuoteVehicleProfileCard'
+import { Badge } from '~/components/ui/badge'
 import { Card, CardContent } from '~/components/ui/card'
+import { PARTNER_STATUS_LABELS, type PartnerStatus } from '~/lib/catalog'
 import { formatArs, formatDateTime, formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { ReactNode } from 'react'
@@ -399,6 +402,39 @@ function QuoteRequestScreen() {
         <Card>
           <CardContent className="space-y-4 pt-6">
             <SectionTitle>Pedido</SectionTitle>
+            {/* Pedido dirigido: la persona eligió el taller desde su ficha en la
+                app (`quote_request_partners`). Va primero porque cambia cómo se
+                lee el resto: no trae ubicación a propósito. */}
+            {isDirectedQuote(d) ? (
+              <Field label={d.requestedPartners!.length === 1 ? 'Taller elegido por la persona' : 'Talleres elegidos por la persona'}>
+                <div className="rounded-md border border-brand/30 bg-brand-soft px-3 py-2">
+                  <ul className="space-y-1">
+                    {d.requestedPartners!.map((p) => (
+                      <li key={p.id} className="flex flex-wrap items-center gap-1.5 text-sm">
+                        <Link
+                          to="/partners/$partnerId"
+                          params={{ partnerId: p.id }}
+                          className="font-medium text-brand hover:underline"
+                        >
+                          {p.name}
+                        </Link>
+                        {p.coverageZone ? <span className="text-xs text-muted-foreground">· {p.coverageZone}</span> : null}
+                        {p.status !== 'active' ? (
+                          <Badge variant="outline" className="border-status-yellow/30 bg-status-yellow-bg text-status-yellow">
+                            {PARTNER_STATUS_LABELS[p.status as PartnerStatus] ?? p.status}
+                          </Badge>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                    Lo pidió desde la ficha del taller en la app. En ese caso la app no pide la ubicación, así que es
+                    normal que no tenga zona: mandáselo a este taller. Si no responde o no puede, cargá la ubicación
+                    con «Corregir ubicación» para buscar otros.
+                  </p>
+                </div>
+              </Field>
+            ) : null}
             <Field label="Descripción">
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{d.description}</p>
             </Field>
@@ -437,7 +473,9 @@ function QuoteRequestScreen() {
                   </div>
                 </>
               ) : (
-                <span className="text-sm text-muted-foreground">Sin cargar</span>
+                <span className="text-sm text-muted-foreground">
+                  {isDirectedQuote(d) ? 'Sin cargar — pedido a un taller elegido, la app no la pide' : 'Sin cargar'}
+                </span>
               )}
               {/*
                 Estado del geocode del backend + «Geocodificar» + «Corregir
@@ -530,7 +568,7 @@ function QuoteRequestScreen() {
         talleres. Va antes de las propuestas: es de donde salen.
         → `.claude/rules/partner-dispatch.md`
       */}
-      <PartnerDispatch key={`dispatch-${d.id}`} quoteRequestId={d.id} data={dispatch} />
+      <PartnerDispatch key={`dispatch-${d.id}`} quoteRequestId={d.id} data={dispatch} detail={d} />
 
       <QuoteProposals
         key={`proposals-${d.id}`}

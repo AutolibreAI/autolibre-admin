@@ -162,6 +162,24 @@ catálogo NI descripción. «Editar datos» la escribe por SQL desde la migraci�
 **Radio: 5 km**, no 10 — `quotes.md` del backend dice 10 y quedó viejo; el controller dice "a 5 km o
 menos".
 
+## Pedido DIRIGIDO: sin ubicación a propósito (2026-11-23)
+
+Desde la ficha de un taller, la app manda el pedido con `requestedPartnerIds` y **sin ubicación**: la
+app no la pide porque ya hay taller (`MapQuoteDraftToCreateInput.usecase.ts` del mobile). El backend
+guarda los elegidos en `quote_request_partners` y el orden en `raw_submission->'requestedPartnerIds'`.
+El despacho los pone primero (`preferredPartnerIds`), pero `dispatch-readiness.policy.ts` **exige
+ubicación igual**: un dirigido sin ubicación queda en `needs_info` con `missing_location`.
+
+Hasta este cambio el panel no leía esa tabla: el primer dirigido (#1271) se vio como un pedido roto
+("no tiene ubicación, cargala") sin ningún rastro del taller elegido, y se marcó contactado sin
+mandárselo. Ahora `requestedPartners` del detalle (guard `to_regclass`, `null` sin la tabla) alimenta
+el campo «Taller elegido por la persona» de la tarjeta Pedido, la pista de `missing_location` de esta
+tarjeta y el badge «Elegido por la persona» (primero en la lista) de «Talleres candidatos».
+`isDirectedQuote` / `requestedPartnerNames` en `~/lib/quote-requests`.
+
+Pendiente del lado del backend, si se quiere despachar un dirigido sin ubicación: que la readiness no
+exija ubicación cuando todos los elegidos están en la selección.
+
 ## `descriptionReviewed`
 
 El backend exige `true`. La UI lo pide con una casilla obligatoria ("Revisé la descripción que va a
