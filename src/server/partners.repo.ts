@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 import { applicationLogoUrl } from '~/lib/application-logo'
 
 import { sql, sqlOne, withTransaction } from './db'
+import { sourcersByApplication, teamAvailable } from './team.repo'
 import {
   APPLICATION_PATCH_KEYS,
   type ApplicationEdits,
@@ -216,6 +217,17 @@ export async function listApplications(
 ): Promise<Array<ApplicationListItem>> {
   void opts.signal // `pg` no acepta signal; queda documentado el hueco.
 
+  // "Alta por" (035): el filtro sólo existe si la tabla existe — un SELECT a
+  // `ops.partner_application_sourcer` en una base sin la 035 explota al
+  // planificarse. Se compara por `::text` para que `'none'` no se castee a uuid.
+  const sourcerFilter =
+    search.applicationSourcer && (await teamAvailable())
+      ? `AND (CASE WHEN $4::text = 'none'
+                   THEN NOT EXISTS (SELECT 1 FROM ops.partner_application_sourcer s WHERE s.application_id = v_partner_application_queue.id)
+                   ELSE EXISTS (SELECT 1 FROM ops.partner_application_sourcer s
+                                 WHERE s.application_id = v_partner_application_queue.id AND s.member_id::text = $4::text)
+              END)`
+      : ''
   const rows = await sql<QueueRow>(
     `SELECT id, business_name, email, whatsapp, address, status, next_step,
             follow_up_date, declared_services, how_found, created_at,
@@ -227,8 +239,11 @@ export async function listApplications(
             )
         AND ($2::boolean OR NOT already_published)
         AND ($3::text IS NULL OR business_name ILIKE '%' || $3 || '%'
-                              OR email         ILIKE '%' || $3 || '%')`,
-    [search.status ?? null, search.published === 'show', search.q ?? null],
+                              OR email         ILIKE '%' || $3 || '%')
+        ${sourcerFilter}`,
+    sourcerFilter
+      ? [search.status ?? null, search.published === 'show', search.q ?? null, search.applicationSourcer]
+      : [search.status ?? null, search.published === 'show', search.q ?? null],
   )
 
   /**
@@ -261,6 +276,7 @@ export async function listApplications(
           [rows.map((r) => r.id)],
         )
   const declaredOtherById = new Map(otherRows.map((r) => [r.id, r.declared_other]))
+  const sourcers = await sourcersByApplication(rows.map((r) => r.id))
 
   return rows.map((r) => {
     return {
@@ -278,6 +294,7 @@ export async function listApplications(
       createdAt: r.created_at,
       alreadyPublished: r.already_published,
       resolved: summarize(r.declared_services, expanded),
+      sourcer: sourcers.get(r.id) ?? null,
     }
   })
 }
@@ -383,10 +400,11 @@ export async function findApplication(
 
   if (!row) return null
 
-  const [resolved, submittedBy, slugs] = await Promise.all([
+  const [resolved, submittedBy, slugs, sourcers] = await Promise.all([
     resolveDeclared(row.declared_services),
     findSubmittedBy(row.id),
     currentPartnerSlugs(row.partner_id ? [row.partner_id] : []),
+    sourcersByApplication([row.id]),
   ])
 
   return {
@@ -404,6 +422,7 @@ export async function findApplication(
     createdAt: row.created_at,
     alreadyPublished: row.already_published,
     resolved,
+    sourcer: sourcers.get(row.id) ?? null,
     logoUrl: applicationLogoUrl(row.logo_url),
     brandSpecialized: row.brand_specialized,
     declaredBrands: row.declared_brands,

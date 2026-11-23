@@ -5,7 +5,7 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  * a buscar para el marketplace (`ops.partner_prospect`, migración 024).
  * → `.claude/rules/partner-prospects.md`
  *
- * Cinco pestañas (Hoy · Contactos · Resumen · Altas · API Chasis). **Hoy va primero** y es adonde redirige la raíz: es lo
+ * Seis pestañas (Hoy · Contactos · Resumen · Altas · API Chasis · Equipo). **Hoy va primero** y es adonde redirige la raíz: es lo
  * primero que tiene que ver quien entra a trabajar (los seguimientos vencidos
  * y los del día). Contactos es el padrón entero con sus filtros.
  *
@@ -24,6 +24,8 @@ const TABS: ReadonlyArray<{ to: string; label: string }> = [
   { to: '/comercial/altas', label: 'Altas' },
   // Etapa 3 (2026-11-11): la venta de la API de datos vehiculares a agencias (migración 031).
   { to: '/comercial/api-chasis', label: 'API Chasis' },
+  // 2026-11-20 (migración 035): el catálogo del equipo, para «Alta por» y «Conseguido por».
+  { to: '/comercial/equipo', label: 'Equipo' },
 ]
 
 function ComercialLayout() {

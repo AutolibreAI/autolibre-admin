@@ -4,11 +4,12 @@ import {
   approvePartnerDispatchSchema,
   type ApprovedDispatch,
   type DispatchFetchResult,
+  type DispatchPartnerFactsResult,
   type PartnerDispatchResult,
 } from '~/lib/partner-dispatch'
 import { quoteRequestIdSchema } from '~/lib/quote-requests'
 import { approvePartnerDispatch, getPartnerDispatchDraft, listQuoteRequestOutreach } from '~/server/backend'
-import { partnerDispatchAvailability } from '~/server/partner-dispatch.repo'
+import { dispatchPartnerFacts, partnerDispatchAvailability } from '~/server/partner-dispatch.repo'
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 
@@ -56,3 +57,12 @@ export const approvePartnerDispatchFn = createServerFn({ method: 'POST' })
     if (!(await partnerDispatchAvailability({ signal: requestSignal() }))) throw new Error(PARTNER_DISPATCH_UNAVAILABLE)
     return approvePartnerDispatch(data.quoteRequestId, { dispatchId: data.dispatchId, partnerIds: data.partnerIds })
   })
+
+/**
+ * Plan, propuestas del mes y datos de contacto de los talleres activos, para
+ * mostrar el borrador como «Talleres candidatos» (2026-11-20). Sólo lectura.
+ * `adminMiddleware`: trae el WhatsApp de cada taller y su billing.
+ */
+export const getDispatchPartnerFactsFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<DispatchPartnerFactsResult> => dispatchPartnerFacts())

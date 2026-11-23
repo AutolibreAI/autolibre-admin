@@ -381,7 +381,11 @@ export async function quoteRequestsAvailability(
  * criterio que los umbrales de `ops.repo.ts`.
  */
 const uncontactedPredicate = (alias: string, param: string) =>
+  // Desde el 2026-11-20 sólo WhatsApp y web: un pedido de la app no se marca
+  // contactado (`quoteNeedsManualContact`, en `~/lib/quote-requests`). Se
+  // tocan juntos.
   `(${alias}status <> 'closed' and ${alias}contacted_at is null
+    and ${alias}channel <> 'app'
     and ${alias}created_at < now() - make_interval(hours => ${param}::int))`
 
 /**

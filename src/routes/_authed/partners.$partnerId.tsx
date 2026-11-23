@@ -4,6 +4,8 @@ import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { listPartnerClaimCodesFn, listPartnerMembersFn } from '~/fn/partner-members'
 import { listPartnerPlansFn } from '~/fn/partner-plans'
+import { getPartnerSourcerFn } from '~/fn/team'
+import { sourcerLabel } from '~/lib/team'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PublicProfileLink } from '~/components/PublicProfileLink'
 import { PartnerFicha } from '~/components/PartnerFicha'
@@ -18,7 +20,7 @@ import type { PartnerServicesView, ServiceItem } from '~/lib/catalog'
 export const Route = createFileRoute('/_authed/partners/$partnerId')({
   loader: async ({ params, abortController }) => {
     const signal = abortController.signal
-    const [view, members, claimCodes, plans] = await Promise.all([
+    const [view, members, claimCodes, plans, sourcer] = await Promise.all([
       getPartnerServicesView({ data: params, signal }).catch((cause: unknown) => {
         if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
         throw cause
@@ -30,10 +32,12 @@ export const Route = createFileRoute('/_authed/partners/$partnerId')({
       listPartnerClaimCodesFn({ data: params, signal }),
       // El plan (billing del backend), de sólo lectura. Sin las tablas: `{ available: false }`.
       listPartnerPlansFn({ data: params, signal }),
+      // "Alta por", heredado de la solicitud (`partners.application_id`, 035).
+      getPartnerSourcerFn({ data: params, signal }),
     ])
 
     if (!view) throw notFound()
-    return { ...view, members, claimCodes, plans }
+    return { ...view, members, claimCodes, plans, sourcer }
   },
 
   head: ({ loaderData }) => ({
@@ -123,7 +127,24 @@ function PartnerServicesEditor() {
       <PageHeader
         title={view.partner.name}
         subtitle={view.partner.coverageZone}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <>
+            {!view.sourcer.available ? null : view.sourcer.sourcer ? (
+              <span className="text-sm text-muted-foreground" title="Heredado de la solicitud de alta">
+                Alta por <strong className="font-medium text-foreground">{sourcerLabel(view.sourcer.sourcer)}</strong>
+              </span>
+            ) : view.partner.applicationId ? (
+              <Link
+                to="/solicitudes/$applicationId"
+                params={{ applicationId: view.partner.applicationId }}
+                className="text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Alta por: sin asignar
+              </Link>
+            ) : null}
+            <SsrTag>ssr: full</SsrTag>
+          </>
+        }
       />
       <PublicProfileLink status={view.partner.status} slug={view.partner.publicSlug} className="-mt-3 mb-4" />
 

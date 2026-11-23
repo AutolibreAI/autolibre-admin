@@ -1,6 +1,10 @@
-import { useReducer, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import { RefreshCw, Search, Send, Undo2, X } from 'lucide-react'
+import { MapPin, MessageCircle, RefreshCw, Search, Send, Undo2, X } from 'lucide-react'
+import { Badge } from '~/components/ui/badge'
+import { FREE_PLAN_CODE } from '~/lib/partner-plans'
+import { isRemoteModality, partnerWhatsAppUrl } from '~/lib/partners'
+import { quotePublicCode } from '~/lib/quote-requests'
 import { approvePartnerDispatchFn } from '~/fn/partner-dispatch'
 import {
   MAX_DISPATCH_SLOTS,
@@ -22,6 +26,8 @@ import {
   readinessStatusLabel,
   type DispatchCandidate,
   type DispatchDraft,
+  type DispatchPartnerFacts,
+  type DispatchPartnerFactsResult,
   type OutreachRow,
   type OutreachTone,
   type PartnerDispatchResult,
@@ -70,13 +76,27 @@ import { cn } from '~/lib/utils'
  * `key` por pedido), así que un `router.invalidate()` después de un error o de
  * un éxito no se lleva el aviso — misma lección que `QuoteRequestActions`.
  */
+/**
+ * Plan, propuestas del mes y contacto de cada taller (2026-11-20), para que la
+ * lista se lea como «Talleres candidatos». Contexto y no prop: lo leen las filas
+ * de las dos listas sin pasar por `DraftSection`. `null` = no se pudo leer.
+ */
+const FactsContext = createContext<{ facts: DispatchPartnerFactsResult | null; publicNumber: number }>({
+  facts: null,
+  publicNumber: 0,
+})
+
 export function PartnerDispatch({
   quoteRequestId,
+  publicNumber,
   data,
+  facts,
   detail,
 }: {
   quoteRequestId: string
+  publicNumber: number
   data: PartnerDispatchResult
+  facts: DispatchPartnerFactsResult | null
   /** Sólo para saber si es un pedido dirigido: cambia la pista de `missing_location`. */
   detail: Pick<QuoteRequestDetail, 'requestedPartners'>
 }) {
@@ -102,6 +122,7 @@ export function PartnerDispatch({
   }
 
   return (
+    <FactsContext.Provider value={{ facts, publicNumber }}>
     <Card className="mb-4">
       <CardContent className="space-y-4 pt-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -147,12 +168,14 @@ export function PartnerDispatch({
             )}
 
             <section className="space-y-2 border-t border-border pt-4">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Seguimiento</h3>
+              <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Seguimiento{data.outreach.ok && data.outreach.data.length > 0 ? ` (${formatInt(data.outreach.data.length)})` : ''}
+              </h3>
               {data.outreach.ok ? (
                 data.outreach.data.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Todavía no se despachó este pedido.</p>
                 ) : (
-                  <ul className="space-y-3">
+                  <ul className="space-y-2">
                     {data.outreach.data.map((row) => (
                       <li key={row.id}>
                         <OutreachBlock row={row} />
@@ -173,6 +196,7 @@ export function PartnerDispatch({
         )}
       </CardContent>
     </Card>
+    </FactsContext.Provider>
   )
 }
 
@@ -633,55 +657,149 @@ function CandidateRow({
   /** Esconderlo de la lista (del cliente, sin motivo). `null` = no se ofrece. */
   onDiscard: (() => void) | null
 }) {
+  const { facts, publicNumber } = useContext(FactsContext)
+  const f = facts?.byPartner[c.partnerId] ?? null
+  const remote = f ? isRemoteModality(f.modality) : false
+  const whatsAppUrl = f?.whatsapp ? partnerWhatsAppUrl(f.whatsapp, c.name, quotePublicCode(publicNumber)) : null
+
   return (
     <div
       className={cn(
-        'rounded-md border px-3 py-2',
+        'rounded-md border bg-card px-3 py-2.5',
         stale ? 'border-destructive/40' : 'border-border',
       )}
     >
-      <label className="flex items-start gap-2">
-        <Checkbox className="mt-0.5" checked={checked} disabled={disabled} onCheckedChange={(v) => onChange(v === true)} />
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-baseline gap-x-2">
-            <span className="text-sm font-medium">{c.name}</span>
-            <span className="text-xs tabular-nums text-muted-foreground">{formatDispatchDistance(c)}</span>
-            {stale ? <span className="text-xs text-destructive">ya no es candidato — actualizá</span> : null}
-          </span>
-          <span className="mt-0.5 block text-xs">
-            {c.coveredRubros.length > 0 ? (
-              <span className="text-muted-foreground">Cubre: {c.coveredRubros.join(', ')}</span>
-            ) : (
-              <span className="text-status-yellow">No cubre ningún rubro pedido</span>
-            )}
-            {c.coveredRubros.length > 0 && c.uncoveredRubros.length > 0 ? (
-              <span className="text-status-yellow"> · No cubre: {c.uncoveredRubros.join(', ')}</span>
+      <div className="flex items-start gap-2">
+        <Checkbox
+          className="mt-1"
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={(v) => onChange(v === true)}
+          aria-label={`Elegir ${c.name}`}
+        />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Link to="/partners/$partnerId" params={{ partnerId: c.partnerId }} className="font-medium text-brand hover:underline">
+              {c.name}
+            </Link>
+            {f?.tier === 'founding' ? (
+              <Badge variant="outline" className="border-brand/30 bg-brand-soft text-brand">
+                Aliado
+              </Badge>
             ) : null}
-          </span>
-        </span>
-        {onDiscard ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground"
-            onClick={(e) => {
-              // Dentro del <label>: sin esto el click también tildaría la casilla.
-              e.preventDefault()
-              onDiscard()
-            }}
+            {remote && f?.modality ? (
+              <Badge variant="outline" className="border-border text-muted-foreground">
+                {f.modality}
+              </Badge>
+            ) : null}
+            {stale ? <span className="text-xs text-destructive">ya no es candidato — actualizá</span> : null}
+          </div>
+          {f ? (
+            <div className="text-xs text-muted-foreground">
+              {f.coverageZone}
+              {f.hours ? ` · ${f.hours}` : ''}
+            </div>
+          ) : null}
+          {c.coveredRubros.length > 0 ? (
+            <div className="flex flex-wrap gap-1 pt-0.5">
+              {c.coveredRubros.map((r) => (
+                <Badge key={r} variant="outline" className="border-brand/30 bg-brand-soft text-brand">
+                  {r}
+                </Badge>
+              ))}
+              {c.uncoveredRubros.length > 0 ? (
+                <span className="self-center text-xs text-status-yellow">No cubre: {c.uncoveredRubros.join(', ')}</span>
+              ) : null}
+            </div>
+          ) : (
+            <div className="text-xs text-status-yellow">No cubre ningún rubro pedido</div>
+          )}
+          <PlanLine facts={f} />
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 text-xs tabular-nums',
+              c.distanceKm === null || c.distanceKm === undefined ? 'text-muted-foreground' : 'text-foreground',
+            )}
           >
-            <X className="size-3.5" aria-hidden />
-            Descartar
-          </Button>
-        ) : null}
-      </label>
+            <MapPin className="size-3" aria-hidden />
+            {formatDispatchDistance(c)}
+          </span>
+          <div className="flex items-center gap-1">
+            {whatsAppUrl ? (
+              <a
+                href={whatsAppUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-status-green/30 bg-status-green-bg px-2.5 text-xs text-status-green hover:brightness-95"
+              >
+                <MessageCircle className="size-3.5" aria-hidden />
+                WhatsApp
+              </a>
+            ) : null}
+            {onDiscard ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground"
+                onClick={onDiscard}
+              >
+                <X className="size-3.5" aria-hidden />
+                Descartar
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
       <details className="mt-1.5 pl-6 text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Ver el mensaje que recibe</summary>
         <p className="mt-1 whitespace-pre-wrap rounded-md border border-border bg-surface-2 px-3 py-2 text-sm leading-relaxed">
           {c.templatePreview.text}
         </p>
       </details>
+    </div>
+  )
+}
+
+/**
+ * El plan y las propuestas del mes, con la regla de `/partners/propuestas`
+ * (`capTone`): pasado del tope en rojo, justo en el tope en ámbar, un Aliado
+ * nunca se marca. Plan gratis → «hay que cobrarle».
+ */
+function PlanLine({ facts: f }: { facts: DispatchPartnerFacts | null }) {
+  if (!f) return null
+  if (!f.plan) {
+    return <div className="text-xs text-muted-foreground">Sin plan (la base no tiene el billing)</div>
+  }
+  const free = f.plan.code === FREE_PLAN_CODE
+  const used = f.usedThisMonth
+  const tone = f.capTone
+  const usage =
+    used === null
+      ? 'propuestas del mes: sin dato'
+      : f.plan.cap === null
+        ? `${formatInt(used)} propuestas este mes (sin tope)`
+        : `${formatInt(used)} de ${formatInt(f.plan.cap)} propuestas este mes`
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-xs">
+      <span className="rounded border border-border px-1.5 py-px text-muted-foreground">Plan {f.plan.name}</span>
+      <span
+        className={cn(
+          'tabular-nums',
+          tone === 'over' ? 'font-medium text-status-red' : tone === 'at' ? 'font-medium text-status-yellow' : 'text-muted-foreground',
+        )}
+      >
+        {usage}
+        {tone === 'over' ? ' · pasado del tope' : tone === 'at' ? ' · en el tope' : tone === 'founding' ? ' · Aliado, sin límite' : ''}
+      </span>
+      {free && tone !== 'founding' ? (
+        <span className="rounded border border-status-yellow/40 bg-status-yellow-bg px-1.5 py-px font-medium text-status-yellow">
+          Plan gratis: hay que cobrarle
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -743,6 +861,12 @@ function OutreachBlock({ row }: { row: OutreachRow }) {
           ))}
       </p>
       {row.messages.length > 0 ? (
+        // Plegado por default (2026-11-20): con varios talleres los chats
+        // abiertos alargaban la ficha hasta tapar las propuestas.
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+            Ver chat ({formatInt(row.messages.length)} {row.messages.length === 1 ? 'mensaje' : 'mensajes'})
+          </summary>
         <ol className="mt-2 space-y-1.5">
           {row.messages.map((m, i) => {
             const outbound = m.direction === 'outbound'
@@ -765,6 +889,7 @@ function OutreachBlock({ row }: { row: OutreachRow }) {
             )
           })}
         </ol>
+        </details>
       ) : null}
     </div>
   )

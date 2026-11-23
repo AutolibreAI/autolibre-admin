@@ -463,3 +463,35 @@ export function readablePartnerDispatchError(cause: unknown): ReadableDispatchEr
   if (e.status === 400) return plain(`El backend rechazó el pedido: «${e.message}».`)
   return plain(`El backend contestó ${e.status}: «${e.message}».`)
 }
+
+// ── Lo que el borrador no trae de cada taller (2026-11-20) ──────────────────
+
+/**
+ * Datos del taller que el borrador del backend no trae y que hacen falta para
+ * leer la lista como «Talleres candidatos»: zona, horario, Aliado, WhatsApp, y
+ * —lo que importa para cobrar— el plan efectivo y las propuestas usadas este
+ * mes contra su tope. Sale por SQL de lectura (`dispatchPartnerFacts`), con
+ * la MISMA regla que `/partners/propuestas` (`effectivePlans`, `capTone`):
+ * si las dos pantallas dijeran cosas distintas, una estaría mal.
+ */
+export interface DispatchPartnerFacts {
+  tier: string | null
+  coverageZone: string
+  hours: string | null
+  modality: string | null
+  whatsapp: string | null
+  /** Plan efectivo; `null` sin billing en la base («sin plan»). */
+  plan: { code: string; name: string; cap: number | null } | null
+  /** Propuestas usadas (enviadas + retiradas) en el mes calendario de Buenos Aires. `null` sin el conteo. */
+  usedThisMonth: number | null
+  /** `'over' | 'at' | 'under' | 'founding' | 'unlimited' | 'no_plan'` — `capTone` de `~/lib/partner-plans`. */
+  capTone: string
+}
+
+export interface DispatchPartnerFactsResult {
+  /** `YYYY-MM` del mes contado (hora de Buenos Aires). */
+  month: string
+  plansAvailable: boolean
+  usageAvailable: boolean
+  byPartner: Record<string, DispatchPartnerFacts>
+}

@@ -3,9 +3,17 @@ import { Link, useRouter } from '@tanstack/react-router'
 import { Camera, GripVertical, Lock } from 'lucide-react'
 import { closeQuoteRequestFn, markQuoteRequestAnsweredFn, markQuoteRequestContactedFn } from '~/fn/quote-requests'
 import {
-  QUOTE_REQUEST_STATUSES,
-  QUOTE_REQUEST_TRANSITIONS,
-  canMoveQuoteRequest,
+  QUOTE_BOARD_COLUMNS,
+  QUOTE_BOARD_COLUMN_HINTS,
+  QUOTE_BOARD_COLUMN_LABELS,
+  QUOTE_BOARD_COLUMN_STATUS,
+  QUOTE_PROMISED_PROPOSALS,
+  canDropOnBoardColumn,
+  isAutoContacted,
+  quoteBoardColumn,
+  quoteNeedsManualContact,
+  quoteProposalTotal,
+  type QuoteBoardColumn,
   quoteCancellationReasonLabel,
   quoteChannelLabel,
   quoteCloseReasonLabel,
@@ -59,31 +67,45 @@ import { cn } from '~/lib/utils'
  * está la ficha, que es adonde lleva el click en la tarjeta.
  */
 
-type Move = { row: QuoteRequestListItem; to: QuoteRequestStatus }
+/** `presetCount`: soltar en «Respondido · 2» precarga 2 propuestas (se puede cambiar). */
+type Move = { row: QuoteRequestListItem; to: QuoteRequestStatus; presetCount?: string }
+
+const PRESET_COUNT: Partial<Record<QuoteBoardColumn, string>> = {
+  answered_1: '1',
+  answered_2: '2',
+  answered_full: String(QUOTE_PROMISED_PROPOSALS),
+}
 type Flash = { kind: 'error' | 'done'; text: string } | null
 
 export function QuoteBoard({ rows }: { rows: ReadonlyArray<QuoteRequestListItem> }) {
   const [dragging, setDragging] = useState<QuoteRequestListItem | null>(null)
-  const [over, setOver] = useState<QuoteRequestStatus | null>(null)
+  const [over, setOver] = useState<QuoteBoardColumn | null>(null)
   const [move, setMove] = useState<Move | null>(null)
   // Vive acá y no en el recuadro: al confirmar, el recuadro se cierra y la
   // tarjeta se muda de columna, pero el "hecho" se tiene que seguir viendo.
   const [flash, setFlash] = useState<Flash>(null)
 
   // Agrupa respetando el orden que ya trae el listado (`sort`/`dir` de la URL).
-  const byStatus = new Map<string, Array<QuoteRequestListItem>>()
+  // La columna no es el estado crudo: ver `quoteBoardColumn` (app → contactado
+  // automático; respondido partido por cantidad de propuestas).
+  const byColumn = new Map<QuoteBoardColumn, Array<QuoteRequestListItem>>()
+  const unknown: Array<QuoteRequestListItem> = []
   for (const r of rows) {
-    const list = byStatus.get(r.status) ?? []
+    const col = quoteBoardColumn(r)
+    // Un estado que el espejo no conoce no tiene columna — se dice, no se esconde.
+    if (!col) {
+      unknown.push(r)
+      continue
+    }
+    const list = byColumn.get(col) ?? []
     list.push(r)
-    byStatus.set(r.status, list)
+    byColumn.set(col, list)
   }
-  // Un estado que el espejo no conoce no tiene columna — se dice, no se esconde.
-  const unknown = rows.filter((r) => !(QUOTE_REQUEST_STATUSES as ReadonlyArray<string>).includes(r.status))
 
-  function openMove(row: QuoteRequestListItem, to: QuoteRequestStatus) {
-    if (!canMoveQuoteRequest(row.status, to)) return
+  function openMove(row: QuoteRequestListItem, column: QuoteBoardColumn) {
+    if (!canDropOnBoardColumn(row, column)) return
     setFlash(null)
-    setMove({ row, to })
+    setMove({ row, to: QUOTE_BOARD_COLUMN_STATUS[column], presetCount: PRESET_COUNT[column] })
   }
 
   return (
@@ -98,15 +120,15 @@ export function QuoteBoard({ rows }: { rows: ReadonlyArray<QuoteRequestListItem>
       ) : null}
 
       <div className="overflow-x-auto pb-2">
-        <div className="grid min-w-[60rem] grid-cols-4 gap-3">
-          {QUOTE_REQUEST_STATUSES.map((status) => {
-            const cards = byStatus.get(status) ?? []
-            const accepts = dragging !== null && canMoveQuoteRequest(dragging.status, status)
-            const blocked = dragging !== null && dragging.status !== status && !accepts
+        <div className="grid min-w-[84rem] grid-cols-6 gap-3">
+          {QUOTE_BOARD_COLUMNS.map((status) => {
+            const cards = byColumn.get(status) ?? []
+            const accepts = dragging !== null && canDropOnBoardColumn(dragging, status)
+            const blocked = dragging !== null && quoteBoardColumn(dragging) !== status && !accepts
             return (
               <section
                 key={status}
-                aria-label={`${quoteStatusLabel(status)}: ${cards.length} pedidos`}
+                aria-label={`${QUOTE_BOARD_COLUMN_LABELS[status]}: ${cards.length} pedidos`}
                 onDragOver={(e) => {
                   if (!accepts) return
                   e.preventDefault()
@@ -135,15 +157,20 @@ export function QuoteBoard({ rows }: { rows: ReadonlyArray<QuoteRequestListItem>
                   blocked && 'opacity-50',
                 )}
               >
-                <header className="mb-2 flex items-baseline justify-between gap-2 px-1">
-                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    {quoteStatusLabel(status)}
-                  </h2>
-                  <span className="text-xs tabular-nums text-muted-foreground">{formatInt(cards.length)}</span>
+                <header className="mb-2 px-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      {QUOTE_BOARD_COLUMN_LABELS[status]}
+                    </h2>
+                    <span className="text-xs tabular-nums text-muted-foreground">{formatInt(cards.length)}</span>
+                  </div>
+                  {QUOTE_BOARD_COLUMN_HINTS[status] ? (
+                    <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground/80">{QUOTE_BOARD_COLUMN_HINTS[status]}</p>
+                  ) : null}
                 </header>
 
                 {blocked && dragging ? (
-                  <p className="mb-2 px-1 text-xs text-muted-foreground">{blockedReason(dragging.status, status)}</p>
+                  <p className="mb-2 px-1 text-xs text-muted-foreground">{blockedReason(dragging, status)}</p>
                 ) : null}
 
                 <div className="flex flex-1 flex-col gap-2">
@@ -200,9 +227,14 @@ export function QuoteBoard({ rows }: { rows: ReadonlyArray<QuoteRequestListItem>
 }
 
 /** Por qué una columna no acepta la tarjeta que se está arrastrando. */
-function blockedReason(from: string, to: string): string {
-  if (from === 'closed') return 'Un pedido cerrado no se mueve.'
-  if (from === 'received' && to === 'answered') return 'Primero hay que marcarlo contactado.'
+function blockedReason(row: QuoteRequestListItem, column: QuoteBoardColumn): string {
+  const to = QUOTE_BOARD_COLUMN_STATUS[column]
+  if (row.status === 'closed') return 'Un pedido cerrado no se mueve.'
+  if (!quoteNeedsManualContact(row.channel) && (to === 'contacted' || to === 'answered')) {
+    return 'Los pedidos de la app pasan a Respondido solos, al cargarles propuestas.'
+  }
+  if (row.status === 'answered' && to === 'answered') return 'La columna la decide la cantidad de propuestas.'
+  if (row.status === 'received' && to === 'answered') return 'Primero hay que marcarlo contactado.'
   return 'No se vuelve a un estado anterior.'
 }
 
@@ -219,10 +251,8 @@ function BoardCard({
   onDragStart: (e: DragEvent<HTMLElement>) => void
   onDragEnd: () => void
 }) {
-  const targets = (QUOTE_REQUEST_TRANSITIONS as Record<string, ReadonlyArray<QuoteRequestStatus> | undefined>)[
-    row.status
-  ] ?? []
-  const movable = targets.length > 0
+  const movable = QUOTE_BOARD_COLUMNS.some((c) => canDropOnBoardColumn(row, c))
+  const autoContacted = isAutoContacted(row)
   const cancelledByUser = row.closeReasonCode === 'cancelled_by_user'
 
   return (
@@ -287,8 +317,20 @@ function BoardCard({
       </p>
 
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        {row.uncontacted ? <span className="font-medium text-status-yellow">sin contactar</span> : null}
-        {row.responseCount !== null ? (
+        {autoContacted ? <span className="font-medium text-foreground">contactado automático (app)</span> : null}
+        {row.uncontacted && quoteNeedsManualContact(row.channel) ? (
+          <span className="font-medium text-status-yellow">sin contactar</span>
+        ) : null}
+        {row.status === 'answered' ? (
+          <span
+            className={cn(
+              'font-medium',
+              quoteProposalTotal(row) >= QUOTE_PROMISED_PROPOSALS ? 'text-status-green' : 'text-status-yellow',
+            )}
+          >
+            {formatInt(quoteProposalTotal(row))} de {QUOTE_PROMISED_PROPOSALS} propuestas
+          </span>
+        ) : row.responseCount !== null ? (
           <span className={cn(row.responseCount > 0 && 'font-medium text-foreground')}>
             {formatInt(row.responseCount)} {row.responseCount === 1 ? 'propuesta' : 'propuestas'}
           </span>
@@ -342,7 +384,7 @@ function TransitionDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // respondido
-  const [count, setCount] = useState('')
+  const [count, setCount] = useState(move.presetCount ?? '')
   // cerrar — `null` en outcome = «Sin preguntar», NO `no_response`
   const [reason, setReason] = useState<OperatorCloseReason | null>(null)
   const [outcome, setOutcome] = useState<QuoteRequestOutcome | null>(null)

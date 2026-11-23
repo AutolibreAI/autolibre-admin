@@ -4,13 +4,12 @@ import {
   Outlet,
   createFileRoute,
   redirect,
-  useRouterState,
 } from "@tanstack/react-router";
 import {
   useUnlockAudioOnInteraction,
-  useWhatsAppBackgroundPoll,
   useWhatsAppUnread,
 } from "~/components/WhatsAppNotifier";
+import { WhatsAppDock } from "~/components/WhatsAppDock";
 import { SignOutButton } from "@clerk/tanstack-react-start";
 import {
   Activity,
@@ -115,6 +114,14 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * como redirect acá.
    */
   { to: "/metricas", label: "Métricas", icon: BarChart3 },
+  /**
+   * `WhatsApp` va 2º desde el 2026-11-20 (antes, pegado a `Feedback`): se
+   * pasaban mensajes. Es lo único del menú que se CONTESTA, y lleva el total
+   * de conversaciones sin leer de las dos líneas (Proveedores y Usuarios).
+   * Además hay un botón flotante en todas las pantallas (`WhatsAppDock`).
+   * → `.claude/plans/whatsapp-inbox.md`
+   */
+  { to: "/whatsapp", label: "WhatsApp", icon: MessagesSquare },
   /**
    * `Actividad` cierra el bloque transversal, y va acá por el mismo motivo que
    * `Métricas`: no espeja ningún bounded context — los cruza a TODOS. Es el
@@ -223,13 +230,6 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
    * contador en la ficha del usuario. → `.claude/rules/feedback.md`
    */
   { to: "/feedback", label: "Feedback", icon: Megaphone },
-  /**
-   * `WhatsApp` va pegado a `Feedback`: las dos son "lo que nos escriben", y
-   * ésta además se contesta. Una conversación por número (talleres o no), con
-   * marca de leído compartida por el equipo. Por ahora contra un mock en
-   * desarrollo. → `.claude/plans/whatsapp-inbox.md`
-   */
-  { to: "/whatsapp", label: "WhatsApp", icon: MessagesSquare },
   /**
    * Las dos últimas son excepciones DECLARADAS a la regla de arriba: no espejan
    * un bounded context del backend porque el backend no tiene uno. Son operación
@@ -345,9 +345,8 @@ function UserFooter({ name, email }: { name: string; email: string }) {
 function AppShell() {
   const { user } = Route.useRouteContext();
   const [menuOpen, setMenuOpen] = useState(false);
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  // En /whatsapp sondea la bandeja; afuera, este sondeo de fondo (nunca los dos).
-  useWhatsAppBackgroundPoll(!pathname.startsWith("/whatsapp"));
+  // El sondeo de fondo de WhatsApp vive en `WhatsAppDock` (se pausa en
+  // /whatsapp y con el panel abierto: nunca dos sondeos a la vez).
   useUnlockAudioOnInteraction();
   const whatsappUnread = useWhatsAppUnread();
 
@@ -422,6 +421,9 @@ function AppShell() {
       <main className="min-w-0 flex-1 px-4 pb-16 pt-5 md:px-7 md:pt-6">
         <Outlet />
       </main>
+
+      {/* Todo el shell es sólo para admins (guard de arriba): el botón también. */}
+      <WhatsAppDock />
     </div>
   );
 }
