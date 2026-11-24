@@ -32,6 +32,7 @@ import {
 } from '~/server/quote-requests.repo'
 import { classifyQuoteRequest, requestQuoteRequestGeocode } from '~/server/backend'
 import { requestSignal } from '~/server/request'
+import { autoIdentifyIfCached } from '~/server/quote-vehicle-fill'
 import { quoteProposalsAvailability } from '~/server/quote-proposals.repo'
 import { adminMiddleware } from './middleware'
 import type {
@@ -208,7 +209,16 @@ export const createQuoteRequestFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .validator(createQuoteRequestSchema)
   .handler(
-    async ({ data, context }): Promise<{ id: string; publicNumber: number; geocodeRequested: boolean | null }> => {
+    async ({
+      data,
+      context,
+    }): Promise<{
+      id: string
+      publicNumber: number
+      geocodeRequested: boolean | null
+      extrasSaved: boolean
+      vehicleIdentified: Awaited<ReturnType<typeof autoIdentifyIfCached>>['identified'] | null
+    }> => {
       const signal = requestSignal()
       await assertQuoteRequestsAvailable(signal)
       await assertQuoteEditAvailable(signal)
@@ -217,7 +227,10 @@ export const createQuoteRequestFn = createServerFn({ method: 'POST' })
       // alta por SQL no pasa por su caso de uso. Sin zona no hay nada que pedir.
       const geocodeRequested = (data.locationAddress ?? '').trim() === '' ? null : await requestGeocodeQuietly(created.id)
       await classifyQuietly(created.id)
-      return { ...created, geocodeRequested }
+      // Con patente: identificarla sola SÓLO si ya está en el cache del backend
+      // (gratis). Una patente nueva se consulta desde la ficha, con un click.
+      const vehicleIdentified = (data.plate ?? '').trim() === '' ? null : (await autoIdentifyIfCached(created.id, context.user.id)).identified
+      return { ...created, geocodeRequested, vehicleIdentified }
     },
   )
 
@@ -234,7 +247,10 @@ export const updateQuoteRequestFn = createServerFn({ method: 'POST' })
     const signal = requestSignal()
     await assertQuoteRequestsAvailable(signal)
     await assertQuoteEditAvailable(signal)
-    return updateQuoteRequest(data, context.user.id, { signal })
+    const result = await updateQuoteRequest(data, context.user.id, { signal })
+    // Misma regla que el alta: sólo si la patente ya está en el cache (gratis).
+    if (data.plate.trim() !== '') await autoIdentifyIfCached(data.quoteRequestId, context.user.id)
+    return result
   })
 
 /**

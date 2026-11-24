@@ -80,6 +80,11 @@ export interface QuoteProposal {
   hours: string | null
   /** Slug vigente del perfil público; sólo para un partner `active`. */
   partnerSlug: string | null
+  /**
+   * Promedio de `partner_reviews` del partner (todas sus reseñas, no sólo las
+   * de este pedido). `null` = taller de afuera, sin reseñas, o base sin la tabla.
+   */
+  partnerRating: { average: number; count: number } | null
   /** `null` en las dos = "a confirmar". `0` = sin cargo. Con ítems, la suma de los obligatorios. */
   amountMin: number | null
   amountMax: number | null

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
-import { Check, Copy, History, MessageCircle, Pencil, Plus } from 'lucide-react'
+import { Check, Copy, History, ListOrdered, MessageCircle, Pencil, Plus } from 'lucide-react'
 import {
+  DEFAULT_PROPOSAL_ITEM_CONTENT,
+  PROPOSAL_ITEM_TEMPLATE_ID,
   TEMPLATE_VARIABLES,
   WHATSAPP_TEXT_MAX,
   quoteEntryContact,
@@ -16,7 +18,11 @@ import {
   type QuoteTemplateAudience,
 } from '~/lib/quote-templates'
 import { canonicalWhatsAppDigits } from '~/lib/partners'
-import { listQuoteMessageTemplateVersionsFn, saveQuoteMessageTemplateFn } from '~/fn/quote-message-templates'
+import {
+  getQuoteTemplatePreviewFn,
+  listQuoteMessageTemplateVersionsFn,
+  saveQuoteMessageTemplateFn,
+} from '~/fn/quote-message-templates'
 import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
@@ -88,7 +94,7 @@ export function QuoteTemplates({
   const router = useRouter()
   const [activeId, setActiveId] = useState(templates[0]?.id)
   const [copied, setCopied] = useState(false)
-  const [editing, setEditing] = useState<'active' | 'new' | null>(null)
+  const [editing, setEditing] = useState<'active' | 'new' | 'item' | null>(null)
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
@@ -104,10 +110,24 @@ export function QuoteTemplates({
     setExpanded(false)
   }, [activeId])
 
-  const active = templates.find((t) => t.id === activeId) ?? templates[0]
+  // El «Formato de cada propuesta» no es una pestaña: es el renglón de cada
+  // taller adentro de `{{presupuestos}}` (037). Sin versión guardada, la semilla.
+  const messageTemplates = templates.filter((t) => t.audience !== 'propuesta')
+  const itemTemplate: QuoteMessageTemplate = templates.find((t) => t.id === PROPOSAL_ITEM_TEMPLATE_ID) ?? {
+    id: PROPOSAL_ITEM_TEMPLATE_ID,
+    title: 'Formato de cada propuesta',
+    audience: 'propuesta',
+    content: DEFAULT_PROPOSAL_ITEM_CONTENT,
+    isCustomized: false,
+    currentVersionId: null,
+    updatedAt: null,
+  }
+  const itemContent = itemTemplate.content
+
+  const active = messageTemplates.find((t) => t.id === activeId) ?? messageTemplates[0]
   if (!active) return null
 
-  const text = renderQuoteTemplate(active, detail, entries)
+  const text = renderQuoteTemplate(active, detail, entries, itemContent)
   // Recorte a ojo: un mensaje de menos de ~6 líneas o ~320 caracteres ya
   // entra sin recortar, así que el toggle "ver más" no aparece para nada.
   const isLong = text.split('\n').length > 6 || text.length > 320
@@ -163,9 +183,9 @@ export function QuoteTemplates({
           </div>
         </div>
 
-        {templates.length > 1 ? (
+        {messageTemplates.length > 1 ? (
           <nav aria-label="Plantillas" className="mb-3 flex flex-wrap gap-1 border-b border-border">
-            {templates.map((t) => (
+            {messageTemplates.map((t) => (
               <button
                 key={t.id}
                 type="button"
@@ -196,6 +216,23 @@ export function QuoteTemplates({
             Esta persona tiene cuenta: estas mismas propuestas ya le llegaron a la app. Mandá este mensaje sólo si
             además hace falta por WhatsApp.
           </p>
+        ) : null}
+
+        {active.content.includes('{{presupuestos}}') ? (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>Cada propuesta sale con su propio formato.</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setEditing('item')}
+              className="h-7 gap-1.5 shadow-none"
+            >
+              <ListOrdered className="size-3.5" aria-hidden />
+              Formato de cada propuesta
+              {itemTemplate.isCustomized ? <span className="size-1.5 rounded-full bg-brand" aria-label="editado" /> : null}
+            </Button>
+          </div>
         ) : null}
 
         {active.id === 'presupuestos' && expired.length > 0 ? (
@@ -290,12 +327,13 @@ export function QuoteTemplates({
           if (!open) setEditing(null)
         }}
         mode={editing === 'new' ? 'create' : 'edit'}
-        template={editing === 'active' ? active : null}
+        template={editing === 'active' ? active : editing === 'item' ? itemTemplate : null}
         detail={detail}
         entries={entries}
+        itemContent={itemContent}
         onSaved={(saved) => {
           setEditing(null)
-          setActiveId(saved.id)
+          if (saved.audience !== 'propuesta') setActiveId(saved.id)
           void router.invalidate()
         }}
       />
@@ -312,6 +350,7 @@ function TemplateEditorSheet({
   template,
   detail,
   entries,
+  itemContent,
   onSaved,
 }: {
   open: boolean
@@ -321,6 +360,8 @@ function TemplateEditorSheet({
   template: QuoteMessageTemplate | null
   detail: QuoteRequestDetail
   entries: Array<QuoteMessageEntry>
+  /** El formato de cada propuesta vigente, para previsualizar `{{presupuestos}}`. */
+  itemContent: string
   onSaved: (template: QuoteMessageTemplate) => void
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -330,6 +371,16 @@ function TemplateEditorSheet({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [history, setHistory] = useState<Array<QuoteMessageTemplateVersion> | null>(null)
+  // Vista previa con OTRO pedido real (por su AL-n): el abierto no siempre
+  // tiene los datos que usa la plantilla.
+  const [previewCode, setPreviewCode] = useState('')
+  const [previewSource, setPreviewSource] = useState<{
+    code: string
+    detail: QuoteRequestDetail
+    entries: Array<QuoteMessageEntry>
+  } | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
 
   // Sembrar el form al abrir — no en cada render, para no pisar lo que el
   // operador está tipeando si `template` cambia de referencia sin que el
@@ -337,6 +388,7 @@ function TemplateEditorSheet({
   useEffect(() => {
     if (!open) return
     setError(null)
+    setPreviewError(null)
     if (mode === 'edit' && template) {
       setTitle(template.title)
       setAudience(template.audience)
@@ -382,7 +434,31 @@ function TemplateEditorSheet({
     })
   }
 
-  const preview = renderQuoteTemplate({ id: template?.id ?? 'preview', title, audience, content }, detail, entries)
+  const isItem = audience === 'propuesta'
+  const previewDetail = previewSource?.detail ?? detail
+  const previewEntries = previewSource?.entries ?? entries
+  // Editando el formato de cada propuesta, lo que se tipea ES el formato.
+  const preview = renderQuoteTemplate({ audience, content }, previewDetail, previewEntries, isItem ? content : itemContent)
+
+  async function loadPreview() {
+    const code = previewCode.trim()
+    if (code === '') {
+      setPreviewSource(null)
+      setPreviewError(null)
+      return
+    }
+    setPreviewBusy(true)
+    setPreviewError(null)
+    try {
+      const r = await getQuoteTemplatePreviewFn({ data: { code } })
+      if (!r) setPreviewError(`No hay un pedido ${code}.`)
+      else setPreviewSource({ code: quotePublicCode(r.detail.publicNumber), detail: r.detail, entries: r.entries })
+    } catch {
+      setPreviewError('No se pudo cargar ese pedido.')
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
 
   async function submit() {
     const parsed = saveQuoteMessageTemplateSchema.safeParse({
@@ -420,7 +496,9 @@ function TemplateEditorSheet({
           <div className="border-b border-border px-5 py-4 pr-10">
             <SheetTitle>{mode === 'create' ? 'Nueva plantilla' : `Editar «${template?.title}»`}</SheetTitle>
             <SheetDescription className="mt-0.5 leading-relaxed">
-              {mode === 'create'
+              {isItem
+                ? 'Cómo sale cada taller adentro de {{presupuestos}}. Guardar crea una versión nueva, para todos los pedidos. Una línea cuya variable no tiene dato se va entera.'
+                : mode === 'create'
                 ? 'Guardar crea la versión 1. Va a estar disponible en la ficha de cualquier pedido.'
                 : 'Guardar crea una versión nueva — vigente para todos los pedidos desde ahora. El historial de abajo queda intacto.'}
             </SheetDescription>
@@ -440,7 +518,7 @@ function TemplateEditorSheet({
                 </label>
                 <Input value={title} onChange={(e) => setTitle(e.currentTarget.value)} maxLength={120} className="text-sm" />
               </div>
-              <div className="space-y-1">
+              <div className={cn('space-y-1', isItem && 'hidden')}>
                 <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   A quién va
                 </label>
@@ -470,7 +548,9 @@ function TemplateEditorSheet({
                 <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Texto (con variables)
                 </label>
-                <span className="text-xs text-muted-foreground">Tiene que incluir {'{{codigo}}'}</span>
+                <span className="text-xs text-muted-foreground">
+                  {isItem ? 'Sin {{codigo}}: el mensaje que lo contiene ya lo lleva' : 'Tiene que incluir {{codigo}}'}
+                </span>
               </div>
               <Textarea
                 ref={textareaRef}
@@ -483,27 +563,66 @@ function TemplateEditorSheet({
 
             <div className="space-y-1.5">
               <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Variables — click para insertar
+                Variables disponibles — click para insertar
               </span>
-              <div className="flex flex-wrap gap-1.5">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Si una variable no tiene dato en el pedido, se borra la línea entera donde está.
+                {audience === 'taller'
+                  ? ' Para el taller no hay ninguna variable con nombre, teléfono, email ni dirección de la persona: AutoLibre nunca le pasa ese contacto.'
+                  : ''}
+              </p>
+              <ul className="divide-y divide-border rounded-md border border-border">
                 {TEMPLATE_VARIABLES[audience].map((v) => (
-                  <button
-                    key={v.key}
-                    type="button"
-                    title={v.label}
-                    onClick={() => insertVariable(v.key)}
-                    className="rounded border border-border bg-secondary px-2 py-1 font-mono text-xs text-foreground outline-none hover:border-brand/40 hover:text-brand focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {`{{${v.key}}}`}
-                  </button>
+                  <li key={v.key} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-2.5 py-1.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => insertVariable(v.key)}
+                      className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-foreground outline-none hover:border-brand/40 hover:text-brand focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {`{{${v.key}}}`}
+                    </button>
+                    <span className="text-muted-foreground">{v.label}</span>
+                    <span className="w-full truncate font-mono text-muted-foreground/80" title={v.example}>
+                      ej.: {v.example}
+                    </span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
 
             <div className="space-y-1.5">
-              <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Vista previa — con ESTE pedido
-              </span>
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Vista previa — con {previewSource ? previewSource.code : `este pedido (${quotePublicCode(detail.publicNumber)})`}
+                  {isItem ? ', su primera propuesta' : ''}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    aria-label="Ver la vista previa con otro pedido (AL-…)"
+                    placeholder="Otro pedido: AL-1234"
+                    value={previewCode}
+                    onChange={(e) => setPreviewCode(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void loadPreview()
+                      }
+                    }}
+                    className="h-7 w-36 font-mono text-xs shadow-none"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 shadow-none"
+                    disabled={previewBusy}
+                    onClick={() => void loadPreview()}
+                  >
+                    {previewBusy ? 'Cargando…' : previewCode.trim() === '' && previewSource ? 'Volver' : 'Ver'}
+                  </Button>
+                </div>
+              </div>
+              {previewError ? <p className="text-xs text-status-red">{previewError}</p> : null}
               <pre className="whitespace-pre-wrap rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-relaxed">
                 {preview}
               </pre>

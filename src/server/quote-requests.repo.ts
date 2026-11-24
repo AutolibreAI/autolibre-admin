@@ -1,6 +1,6 @@
 import '@tanstack/react-start/server-only'
 
-import { sql, sqlOne } from './db'
+import { sql, sqlOne, withTransaction } from './db'
 import { readQuoteGeocode } from './quote-geocode.repo'
 import { quoteResponsesAvailable } from './quote-responses.repo'
 import { quoteProposalsAvailability } from './quote-proposals.repo'
@@ -8,6 +8,7 @@ import { mapTaskRow, type TaskRow } from './users.repo'
 import { lookupDtc } from './dtc-catalog'
 import { METRICS_TZ, type GrowthUnit } from '~/lib/ops'
 import {
+  AI_SERVICE_LOW_SCORE,
   QUOTE_UNCONTACTED_AFTER_HOURS,
   type AddQuoteRequestInternalNoteInput,
   type CloseQuoteRequestInput,
@@ -26,6 +27,7 @@ import {
   type QuoteAiClassification,
   type QuoteRequestedPartner,
   type QuoteTimingAndParts,
+  type QuoteTemplateFacts,
   type QuoteRequestVehicleCatalog,
   type QuoteSortKey,
   type SetQuoteRequestRubrosInput,
@@ -344,6 +346,233 @@ async function readRequestVehicleCatalog(id: string): Promise<QuoteRequestVehicl
     [id],
   )
   return { available: true, vehicleCatalogId: row?.vehicle_catalog_id ?? null, label: row?.label ?? null }
+}
+
+// ── Migración 036: para cuándo, repuestos, origen y el vehículo identificado ──
+
+/** ¿Están los tres SP de la 036? Por firma, como la 028. */
+export async function quote036Available(): Promise<boolean> {
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regprocedure('ops.set_quote_request_timing_and_parts(uuid,uuid,text,text,text,text)') is not null
+        and to_regprocedure('ops.set_quote_request_vehicle_description(uuid,uuid,text,text,text)') is not null
+        and to_regprocedure('ops.set_quote_request_origin(uuid,uuid,text,text)') is not null as ok`,
+  )
+  return row?.ok === true
+}
+
+async function readOrigin(id: string, available: boolean): Promise<QuoteRequestDetail['origin']> {
+  if (!available) return { available: false }
+  const row = await sqlOne<{ origin: string }>(
+    `select origin from ops.quote_request_origin where quote_request_id = $1`,
+    [id],
+  )
+  return { available: true, origin: row?.origin ?? null }
+}
+
+const FUEL_LABELS: Record<string, string> = {
+  gasoline: 'Nafta',
+  diesel: 'Diésel',
+  cng: 'GNC',
+  electric: 'Eléctrico',
+  hybrid: 'Híbrido',
+}
+const TRANSMISSION_LABELS: Record<string, string> = { manual: 'Manual', automatic: 'Automática', cvt: 'CVT' }
+
+/**
+ * Lo que las plantillas necesitan y la ficha no trae por otro lado.
+ *
+ * - Servicios: la corrección del operador (0155) si la hay; si no, la IA (0124)
+ *   sin los dudosos (`AI_SERVICE_LOW_SCORE`). Mismo orden que lee el despacho.
+ * - Motor: el SPEC del vehículo VINCULADO (`vehicles` → `vehicle_catalog_specs`).
+ *   Un catálogo de pedido tiene varios specs y elegir uno sería adivinar.
+ * - Fotos: sólo `problem_photo`. Son privadas (URL firmada de 15 minutos), así
+ *   que la plantilla dice cuántas hay y nunca manda un link.
+ */
+async function readTemplateFacts(
+  id: string,
+  vehicleId: string | null,
+  operatorServiceSlugs: Array<string> | null,
+  ai: QuoteAiClassification,
+): Promise<QuoteTemplateFacts> {
+  let serviceNames: Array<string> = []
+  if (operatorServiceSlugs && operatorServiceSlugs.length > 0) {
+    const rows = await sql<{ name: string }>(
+      `select s.name
+         from quote_request_operator_services qos
+         join services s on s.id = qos.service_id
+        where qos.quote_request_id = $1
+        order by qos.position`,
+      [id],
+    )
+    serviceNames = rows.map((r) => r.name)
+  } else if (ai.available) {
+    serviceNames = ai.services.filter((s) => s.score >= AI_SERVICE_LOW_SCORE).map((s) => s.serviceName)
+  }
+
+  let motor: string | null = null
+  if (vehicleId) {
+    const spec = await sqlOne<{
+      engine: string | null
+      fuel_type: string | null
+      transmission: string | null
+      gear_count: number | null
+    }>(
+      `select nullif(btrim(coalesce(vcs.engine, '')), '') as engine,
+              vcs.fuel_type::text as fuel_type,
+              vcs.transmission::text as transmission,
+              vcs.gear_count
+         from vehicles v
+         join vehicle_catalog_specs vcs on vcs.id = v.vehicle_catalog_spec_id
+        where v.id = $1`,
+      [vehicleId],
+    )
+    if (spec) {
+      const gearbox = spec.transmission
+        ? `${TRANSMISSION_LABELS[spec.transmission] ?? spec.transmission}${spec.gear_count ? ` ${spec.gear_count} marchas` : ''}`
+        : null
+      const parts = [spec.engine, spec.fuel_type ? (FUEL_LABELS[spec.fuel_type] ?? spec.fuel_type) : null, gearbox]
+      const text = parts.filter((p): p is string => !!p).join(' · ')
+      motor = text === '' ? null : text
+    }
+  }
+
+  const files = await sqlOne<{ ok: boolean }>(`select to_regclass('public.quote_request_files') is not null as ok`)
+  const problemPhotoCount =
+    files?.ok === true
+      ? Number(
+          (
+            await sqlOne<{ n: number }>(
+              `select count(*)::int as n from quote_request_files where quote_request_id = $1 and purpose = 'problem_photo'`,
+              [id],
+            )
+          )?.n ?? 0,
+        )
+      : null
+
+  return { serviceNames, motor, problemPhotoCount }
+}
+
+/** `NISSAN NOTE ADVANCE` → `Nissan Note Advance`, con los tokens cortos (VW) y los que tienen números (1.6L, 8V) intactos. */
+function titleCaseVehicle(raw: string): string {
+  return raw
+    .split(/([\s-]+)/)
+    .map((t) =>
+      /^[\s-]+$/.test(t) || t.length <= 3 || /\d/.test(t) ? t : t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(),
+    )
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200)
+}
+
+/**
+ * El vehículo IDENTIFICADO de un pedido, como texto para `vehicle_description`.
+ *
+ * 1. El modelo de catálogo del pedido (`quote_requests.vehicle_catalog_id`,
+ *    lo resuelve «Identificar vehículo» o el alta de la app).
+ * 2. Si no hay catálogo (`not_found` no, pero `insufficient_data` sí: el
+ *    proveedor encontró la patente y no alcanzó para un modelo), lo que guardó
+ *    el cache del backend (`vehicle_plate_lookups`): marca, modelo y año.
+ *
+ * Sólo lectura. La patente se compara normalizada (mayúsculas, sin separadores),
+ * como la guarda el backend.
+ */
+export async function readVehicleSuggestion(
+  id: string,
+): Promise<{ text: string; source: 'catalog' | 'lookup' } | null> {
+  const guard = await sqlOne<{ has_catalog: boolean; has_lookups: boolean }>(
+    `select exists (select 1 from information_schema.columns
+                     where table_schema = 'public' and table_name = 'quote_requests'
+                       and column_name = 'vehicle_catalog_id') as has_catalog,
+            to_regclass('public.vehicle_plate_lookups') is not null as has_lookups`,
+  )
+  if (guard?.has_catalog) {
+    const row = await sqlOne<{ label: string | null }>(
+      `select nullif(concat_ws(' ', vc.brand, vc.model, vc.trim, vc.year::text), '') as label
+         from quote_requests qr
+         join vehicle_catalogs vc on vc.id = qr.vehicle_catalog_id
+        where qr.id = $1`,
+      [id],
+    )
+    if (row?.label) return { text: titleCaseVehicle(row.label), source: 'catalog' }
+  }
+  if (guard?.has_lookups) {
+    const row = await sqlOne<{ label: string | null }>(
+      `select nullif(concat_ws(' ',
+                vpl.payload->'data'->>'make',
+                vpl.payload->'data'->>'model',
+                vpl.payload->'data'->>'year'), '') as label
+         from quote_requests qr
+         join vehicle_plate_lookups vpl
+           on vpl.plate = upper(regexp_replace(coalesce(qr.plate, ''), '[^A-Za-z0-9]', '', 'g'))
+        where qr.id = $1
+          and jsonb_typeof(vpl.payload->'data') = 'object'`,
+      [id],
+    )
+    if (row?.label) return { text: titleCaseVehicle(row.label), source: 'lookup' }
+  }
+  return null
+}
+
+/** ¿La patente ya está en el cache POSITIVO del backend? Entonces identificarla no cuesta. */
+export async function plateIsCached(plate: string): Promise<boolean> {
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.vehicle_plate_lookups') is not null as ok`,
+  )
+  if (row?.ok !== true) return false
+  const hit = await sqlOne<{ hit: boolean }>(
+    `select exists (select 1 from vehicle_plate_lookups
+                     where plate = upper(regexp_replace($1, '[^A-Za-z0-9]', '', 'g'))) as hit`,
+    [plate],
+  )
+  return hit?.hit === true
+}
+
+/** La patente, el catálogo y el vehículo escrito del pedido, como están ahora. */
+export async function readQuoteVehicleState(
+  id: string,
+): Promise<{ plate: string | null; vehicleCatalogId: string | null; vehicleDescription: string | null; status: string } | null> {
+  const r = await sqlOne<{
+    plate: string | null
+    vehicle_catalog_id: string | null
+    vehicle_description: string | null
+    status: string
+  }>(
+    `select plate, vehicle_catalog_id, vehicle_description, status::text as status
+       from quote_requests where id = $1`,
+    [id],
+  )
+  return r
+    ? {
+        plate: r.plate,
+        vehicleCatalogId: r.vehicle_catalog_id,
+        vehicleDescription: r.vehicle_description,
+        status: r.status,
+      }
+    : null
+}
+
+/**
+ * Escribe `vehicle_description` sólo si su valor actual es `expected` (036):
+ * no pisa lo que alguien escribió a mano mientras tanto. SQL copiado LITERAL en
+ * la integración de `036_….test.sql` (`PREPARE p036_vehicle`).
+ */
+export async function setQuoteRequestVehicleDescription(
+  quoteRequestId: string,
+  actorId: string,
+  text: string,
+  expected: string | null,
+): Promise<{ vehicleDescription: string | null; changed: boolean }> {
+  const row = await sqlOne<{ r: { vehicle_description: string | null; changed: boolean } }>(
+    `SELECT ops.set_quote_request_vehicle_description(
+  p_quote_request_id => $1,
+  p_actor_id         => $2,
+  p_vehicle_text     => $3,
+  p_expected         => $4
+) AS r`,
+    [quoteRequestId, actorId, text, expected],
+  )
+  return { vehicleDescription: row?.r.vehicle_description ?? null, changed: row?.r.changed === true }
 }
 
 export async function quoteRequestsAvailability(
@@ -1175,6 +1404,10 @@ export async function findQuoteRequestDetail(
   const timingAndParts = await readTimingAndParts(id)
   const requestVehicleCatalog = await readRequestVehicleCatalog(id)
   const requestedPartners = await readRequestedPartners(id)
+  const templateFacts = await readTemplateFacts(id, r.vehicle_id, operatorServiceSlugs, aiClassification)
+  const has036 = await quote036Available()
+  const origin = await readOrigin(id, has036)
+  const suggestion = await readVehicleSuggestion(id)
 
   return {
     ...mapListRow(r),
@@ -1203,6 +1436,12 @@ export async function findQuoteRequestDetail(
     timingAndParts,
     requestVehicleCatalog,
     requestedPartners,
+    templateFacts,
+    origin,
+    timingWritable: has036 && timingAndParts.available,
+    vehicleSuggestion: suggestion
+      ? { ...suggestion, writable: has036 && textSource === 'column' }
+      : null,
     // `pg` ya parsea `jsonb` a objeto. Se re-serializa acá, en el servidor, para
     // que viaje como string: un `unknown` arbitrario no es un tipo de retorno
     // que el server function pueda garantizar serializable.
@@ -1390,13 +1629,18 @@ export async function createQuoteRequest(
   input: CreateQuoteRequestInput,
   actorId: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ id: string; publicNumber: number }> {
+): Promise<{ id: string; publicNumber: number; extrasSaved: boolean }> {
   void opts.signal
 
+  const extras = await quoteExtrasAvailability()
+
+  // Alta + para cuándo/repuestos + origen, en UNA transacción: un pedido a
+  // mano no queda creado sin su origen porque falló el segundo SP.
+  return withTransaction(async (client) => {
   // Los diez primeros parámetros son la integración de
   // `018_ops_editar_pedido.test.sql` (`PREPARE p018_create`); los tres de zona
   // son de la 019 y van al final, así que esa suite sigue resolviendo.
-  const row = await sqlOne<{ q: { id: string; public_number: number } }>(
+  const res = await client.query<{ q: { id: string; public_number: number } }>(
     `SELECT ops.create_quote_request(
        p_actor_id        => $1,
        p_channel         => $2,
@@ -1428,8 +1672,19 @@ export async function createQuoteRequest(
       blankToNull(input.locationProvince),
     ],
   )
+  const row = res.rows[0]
   if (!row) throw new Error('QUOTE_REQUEST_CREATE_FAILED')
-  return { id: row.q.id, publicNumber: toInt(row.q.public_number) }
+  const id = row.q.id
+  if (extras.timing && (input.timing || input.partsSupply))
+    await client.query(SET_TIMING_SQL, [id, actorId, input.timing ?? null, input.preferredDate ?? null, input.partsSupply ?? null])
+  if (extras.origin) await client.query(SET_ORIGIN_SQL, [id, actorId, input.origin])
+  return {
+    id,
+    publicNumber: toInt(row.q.public_number),
+    // Sin la 036 (o sin la 0143) el pedido se crea igual; la UI avisa qué no se guardó.
+    extrasSaved: extras.origin && (extras.timing || (!input.timing && !input.partsSupply)),
+  }
+  })
 }
 
 // ── Escritura: editar los datos de un pedido (migración 018) ────────────────
@@ -1529,7 +1784,58 @@ export async function updateQuoteRequest(
          ) AS q`,
         params,
       )
-  return toWriteResult(row?.q, input.quoteRequestId)
+  const result = toWriteResult(row?.q, input.quoteRequestId)
+
+  // Para cuándo, repuestos y origen (036). Van DESPUÉS del SP de la edición y
+  // no en su transacción: `update_quote_request` ya es una sentencia atómica
+  // con su log, y estos son reemplazos idempotentes con el suyo. Si fallan, el
+  // error sale igual y reintentar «Guardar» no duplica nada.
+  const touchesTiming = input.timing !== undefined || input.partsSupply !== undefined
+  if (touchesTiming || input.origin !== undefined) {
+    const extras = await quoteExtrasAvailability()
+    if (touchesTiming && !extras.timing) throw new Error('QUOTE_TIMING_UNAVAILABLE')
+    if (input.origin !== undefined && !extras.origin) throw new Error('QUOTE_TIMING_UNAVAILABLE')
+    await withTransaction(async (client) => {
+      if (touchesTiming)
+        await client.query(SET_TIMING_SQL, [
+          input.quoteRequestId,
+          actorId,
+          input.timing ?? null,
+          input.preferredDate ?? null,
+          input.partsSupply ?? null,
+        ])
+      if (input.origin !== undefined) await client.query(SET_ORIGIN_SQL, [input.quoteRequestId, actorId, input.origin])
+    })
+  }
+  return result
+}
+
+/** SQL copiado LITERAL en la integración de `036_….test.sql` (`PREPARE p036_timing`). */
+const SET_TIMING_SQL = `SELECT ops.set_quote_request_timing_and_parts(
+  p_quote_request_id => $1,
+  p_actor_id         => $2,
+  p_timing           => $3,
+  p_preferred_date   => $4,
+  p_parts_supply     => $5
+) AS r`
+
+/** SQL copiado LITERAL en la integración de `036_….test.sql` (`PREPARE p036_origin`). */
+const SET_ORIGIN_SQL = `SELECT ops.set_quote_request_origin(
+  p_quote_request_id => $1,
+  p_actor_id         => $2,
+  p_origin           => $3
+) AS r`
+
+/** Qué de la 036 se puede escribir en esta base: el origen (sólo la 036) y para cuándo (036 + 0143). */
+export async function quoteExtrasAvailability(): Promise<{ origin: boolean; timing: boolean }> {
+  const has036 = await quote036Available()
+  if (!has036) return { origin: false, timing: false }
+  const cols = await sqlOne<{ ok: boolean }>(
+    `select count(*) = 3 as ok from information_schema.columns
+      where table_schema = 'public' and table_name = 'quote_requests'
+        and column_name in ('timing', 'preferred_date', 'parts_supply')`,
+  )
+  return { origin: true, timing: cols?.ok === true }
 }
 
 // ── Vehículo vinculado: la tarjeta de sólo lectura de la ficha ─────────────

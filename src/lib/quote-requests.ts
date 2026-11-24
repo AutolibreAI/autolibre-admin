@@ -162,6 +162,33 @@ export const QUOTE_REQUEST_PARTS_SUPPLY_LABELS: Record<QuoteRequestPartsSupply, 
 /** Tolerante: un valor que el espejo no conoce sale tal cual, no en blanco. */
 const labelOf = (labels: Record<string, string>, value: string): string => labels[value] ?? value
 
+/**
+ * De dónde vino un pedido cargado a mano (036). En inglés en la base, como el
+ * resto del dominio; la etiqueta es la del equipo.
+ */
+export const QUOTE_REQUEST_ORIGINS = [
+  'meta_ads',
+  'instagram_organic',
+  'flyer',
+  'partner',
+  'workshop',
+  'word_of_mouth',
+  'other',
+] as const
+export type QuoteRequestOrigin = (typeof QUOTE_REQUEST_ORIGINS)[number]
+
+export const QUOTE_REQUEST_ORIGIN_LABELS: Record<QuoteRequestOrigin, string> = {
+  meta_ads: 'Pauta de Meta',
+  instagram_organic: 'Instagram orgánico',
+  flyer: 'Flyer',
+  partner: 'Partner',
+  workshop: 'Taller',
+  word_of_mouth: 'Boca a boca',
+  other: 'Otro',
+}
+
+export const quoteOriginLabel = (v: string) => labelOf(QUOTE_REQUEST_ORIGIN_LABELS, v)
+
 export const quoteTimingLabel = (v: string) => labelOf(QUOTE_REQUEST_TIMING_LABELS, v)
 export const quotePartsSupplyLabel = (v: string) => labelOf(QUOTE_REQUEST_PARTS_SUPPLY_LABELS, v)
 
@@ -676,6 +703,13 @@ export function readableQuoteRequestDataError(raw: string): string {
     return 'Para cargar la ubicación hace falta la dirección o zona (la localidad sola no alcanza).'
   if (raw.includes('LOCATION_ADDRESS_TOO_LONG')) return 'La dirección tiene hasta 300 caracteres.'
   if (raw.includes('INVALID_CHANNEL')) return 'Ese canal no existe en la base. Recargá la pantalla.'
+  if (raw.includes('QUOTE_TIMING_UNAVAILABLE'))
+    return 'Los datos del pedido se guardaron, pero «para cuándo», «repuestos» y «origen» necesitan la migración 036 en esta base.'
+  if (raw.includes('PREFERRED_DATE_REQUIRED')) return 'Elegiste «Tiene una fecha»: falta la fecha.'
+  if (raw.includes('PREFERRED_DATE_ONLY_WITH_DATE')) return 'La fecha va sólo con «Tiene una fecha».'
+  if (raw.includes('INVALID_PREFERRED_DATE')) return 'Esa fecha no es válida.'
+  if (raw.includes('INVALID_TIMING') || raw.includes('INVALID_PARTS_SUPPLY') || raw.includes('INVALID_ORIGIN'))
+    return 'Ese valor no existe en la base. Recargá la pantalla.'
   return readableQuoteRequestError(raw)
 }
 
@@ -700,6 +734,31 @@ const plateField = z
  * no en blanco); antes vivía en `ops.quote_request_vehicle_text` (018).
  */
 const vehicleTextField = z.string().trim().max(200, 'El vehículo tiene hasta 200 caracteres.')
+
+/**
+ * Para cuándo y repuestos (backend 0143), cargados a mano (036). `null` =
+ * "no lo dijo". `preferredDate` es `YYYY-MM-DD` y va sólo con `timing = date`
+ * (`chk_quote_requests_preferred_date_iff_date`): el SP lo vuelve a validar.
+ */
+const timingFields = {
+  timing: z.enum(QUOTE_REQUEST_TIMINGS).nullable().optional(),
+  preferredDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha va como AAAA-MM-DD.')
+    .nullable()
+    .optional(),
+  partsSupply: z.enum(QUOTE_REQUEST_PARTS_SUPPLIES).nullable().optional(),
+}
+
+function checkTimingDate(
+  d: { timing?: string | null; preferredDate?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (d.timing === 'date' && !d.preferredDate)
+    ctx.addIssue({ code: 'custom', path: ['preferredDate'], message: 'Falta la fecha.' })
+  if (d.timing !== 'date' && d.preferredDate)
+    ctx.addIssue({ code: 'custom', path: ['preferredDate'], message: 'La fecha va sólo con «Tiene una fecha».' })
+}
 
 /**
  * El payload de `ops.create_quote_request` (012, firma nueva en la 018) —
@@ -737,7 +796,11 @@ export const createQuoteRequestSchema = z.object({
   locationProvince: z.string().trim().max(200).optional(),
   /** Nota de auditoría en `ops.action_log`, no `quote_requests.internal_notes`. */
   note: z.string().trim().max(280).optional(),
-})
+  /** Para cuándo y repuestos (0143, se escriben con la 036). Vacío = no lo dijo. */
+  ...timingFields,
+  /** De dónde vino (036). Obligatorio en el alta a mano. */
+  origin: z.enum(QUOTE_REQUEST_ORIGINS, { error: 'Elegí de dónde vino el pedido.' }),
+}).superRefine(checkTimingDate)
 export type CreateQuoteRequestInput = z.infer<typeof createQuoteRequestSchema>
 
 /**
@@ -765,7 +828,14 @@ export const updateQuoteRequestSchema = z.object({
   plate: plateField,
   vehicleText: vehicleTextField,
   declaredAmount: z.number().min(0).max(9_999_999_999.99).nullable(),
-})
+  /**
+   * Para cuándo, repuestos y origen (036). Ausentes = no se tocan (una base
+   * sin la 036, o un formulario viejo); presentes = reemplazo completo, y
+   * `null` borra.
+   */
+  ...timingFields,
+  origin: z.enum(QUOTE_REQUEST_ORIGINS).nullable().optional(),
+}).superRefine(checkTimingDate)
 export type UpdateQuoteRequestInput = z.infer<typeof updateQuoteRequestSchema>
 
 // ── Tipos de salida ─────────────────────────────────────────────────────────
@@ -1003,7 +1073,33 @@ export interface QuoteRequestDetail extends QuoteRequestListItem {
    * por dónde buscar talleres, y acá no hay a quién buscar). → `isDirectedQuote`
    */
   requestedPartners: Array<QuoteRequestedPartner> | null
+  /** Lo que las plantillas de mensaje necesitan y la ficha no trae por otro lado. */
+  templateFacts: QuoteTemplateFacts
+  /**
+   * De dónde vino un pedido cargado a mano (`ops.quote_request_origin`, 036).
+   * `available: false` = la base no tiene la 036.
+   */
+  origin: { available: false } | { available: true; origin: string | null }
+  /** ¿Se pueden cargar «para cuándo» y repuestos? (0143 del backend + 036). */
+  timingWritable: boolean
+  /**
+   * El vehículo que identificó «Identificar vehículo», como texto para
+   * `vehicle_description`: el modelo de catálogo del pedido o, si no hay, lo
+   * que devolvió el proveedor de patentes (cache del backend). `null` = nada
+   * identificado. `writable` = la base tiene la 036 para guardarlo.
+   */
+  vehicleSuggestion: { text: string; source: 'catalog' | 'lookup'; writable: boolean } | null
 }
+
+export interface QuoteTemplateFacts {
+  /** Los servicios del pedido: los que corrigió el operador; si no hay, los de la IA (sin los dudosos). */
+  serviceNames: Array<string>
+  /** Motor · combustible · caja del vehículo VINCULADO (sólo pedidos de la app). */
+  motor: string | null
+  /** Fotos del problema (`purpose = problem_photo`). `null` = la base no tiene la tabla. */
+  problemPhotoCount: number | null
+}
+
 
 /** Un taller elegido por la persona desde su ficha en la app. */
 export interface QuoteRequestedPartner {

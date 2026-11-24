@@ -9,6 +9,7 @@ import {
   quotePartsSupplyLabel,
   quoteTimingLabel,
   quoteChannelLabel,
+  quoteOriginLabel,
   quoteCloseReasonLabel,
   quoteMapLocation,
   quoteOutcomeLabel,
@@ -284,7 +285,7 @@ function QuoteRequestScreen() {
 
       <PageHeader
         title={`${quotePublicCode(d.publicNumber)} · Pedido de presupuesto`}
-        subtitle={`Por ${quoteChannelLabel(d.channel)}${d.enteredManually ? ' · cargado a mano' : ''} · recibido ${formatDateTime(d.createdAt)} UTC · actualizado ${formatDateTime(d.updatedAt)} UTC`}
+        subtitle={`Por ${quoteChannelLabel(d.channel)}${d.enteredManually ? ` · cargado a mano${d.origin.available && d.origin.origin ? ` (origen: ${quoteOriginLabel(d.origin.origin)})` : ''}` : ''} · recibido ${formatDateTime(d.createdAt)} UTC · actualizado ${formatDateTime(d.updatedAt)} UTC`}
         actions={
           <div className="flex items-center gap-2">
             {d.editAvailable ? (

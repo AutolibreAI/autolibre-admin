@@ -1440,3 +1440,38 @@ Relevado el 2026-11-11 contra `public.partners`: lo único editable que le falta
 `updated_at` y la 007. Rojo sin la 029 (aborta: la función no existe), **27/27** con ella, incluida
 la integración con el SQL exacto del repo por `PREPARE` sin tipos. No corrida en DEV ni aplicada en
 ninguna base: la aplica el `vercel-build` del próximo deploy de `main`.
+
+---
+
+# Migración 036 — para cuándo, repuestos, origen y el vehículo identificado
+
+Alcance: `migrations/036_ops_pedido_cuando_repuestos_origen_vehiculo.sql` (+ `.test.sql`),
+`quote036Available` / `quoteExtrasAvailability` / `readVehicleSuggestion` /
+`setQuoteRequestVehicleDescription` / `SET_TIMING_SQL` / `SET_ORIGIN_SQL` de
+`src/server/quote-requests.repo.ts`, `src/server/quote-vehicle-fill.ts`, `src/fn/quote-vehicle.ts`.
+Tarjetas de Trello T73NyHFN (A) y bMtiAAQZ (B), 2026-11-24.
+
+- **El grep dio negativo** (backend @ 8180a83): `AdminQuoteRequestController` no tiene camino para
+  `timing`, `preferred_date`, `parts_supply` ni `vehicle_description`.
+- **Tres SP con firma NUEVA; ninguno toca `create_quote_request` ni `update_quote_request`.** El alta
+  los llama en la MISMA transacción (`withTransaction`): un pedido a mano no queda sin origen porque
+  falló el segundo SP. La edición los llama después del SP de la 018/028 (reemplazos idempotentes).
+- `set_quote_request_timing_and_parts`: reemplazo completo de las tres columnas de la 0143, con
+  `text` y cast en el cuerpo (como la 011), y `chk_quote_requests_preferred_date_iff_date` traducido
+  a `PREFERRED_DATE_REQUIRED` / `PREFERRED_DATE_ONLY_WITH_DATE`.
+- `set_quote_request_vehicle_description(…, p_expected)`: **compare-and-set**. Escribe sólo si el
+  valor actual es el que vio el operador (NULL = vacío); si no, `VEHICLE_DESCRIPTION_CHANGED` y no
+  pisa. Mismo texto = no-op sin log.
+- `ops.quote_request_origin` (tabla nuestra, sin FK): `raw_submission->>'source'` ya está tomada
+  (`admin_manual_entry`) y `quote_requests` no tiene `source`/`medium`/`campaign`.
+- Suite: **32/32** en PGlite (aborta en rojo sin la 036), con la integración por `PREPARE` sin tipos.
+  NO aplicada en ninguna base.
+
+# Migración 037 — «Formato de cada propuesta»
+
+`chk_ops_qmtv_audience` suma `propuesta`; `chk_ops_qmtv_has_codigo` no la exige para esa audiencia;
+`chk_ops_qmtv_proposal_key`: `propuesta` ⇔ clave `propuesta_item` (hay un solo formato).
+`save_quote_message_template` CREATE OR REPLACE con la firma EXACTA de la 017 (sin sobrecarga) y
+`PROPOSAL_TEMPLATE_KEY`. Suite **9/9** en PGlite; la de la 017 da lo mismo con o sin la 037 (19/21:
+sus casos 23/24 ordenan `action_log` por `created_at` adentro de la transacción — trampa conocida,
+no de la 037). NO aplicada en ninguna base.

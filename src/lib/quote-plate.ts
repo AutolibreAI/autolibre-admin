@@ -191,3 +191,59 @@ export function readableQuotePlateError(cause: unknown): ReadableQuotePlateError
   if (e.status >= 500) return retry('El backend falló. Reintentá en un rato con la misma patente: no duplica nada.')
   return fix(`El backend contestó ${e.status}${e.message ? `: «${e.message}»` : ''}. No se guardó nada.`)
 }
+
+// ── El vehículo identificado entra al pedido (tarjeta T73NyHFN, migración 036) ──
+
+/**
+ * Qué pasó con `vehicle_description` después de identificar.
+ *
+ * - `filled`: estaba vacío y se completó solo.
+ * - `same`: ya decía eso.
+ * - `kept`: tenía algo escrito a mano y NO se pisó: la ficha ofrece «Usar este vehículo».
+ * - `none`: no hay nada identificado que usar (sin catálogo ni dato del proveedor).
+ * - `unavailable`: la base no tiene la 036.
+ * - `failed`: no se pudo escribir; la carga manual sigue como siempre.
+ */
+export type QuoteVehicleFillApplied = 'filled' | 'same' | 'kept' | 'none' | 'unavailable' | 'failed'
+
+export interface QuoteVehicleFill {
+  applied: QuoteVehicleFillApplied
+  /** El texto identificado, o `null` si no hay. */
+  suggestion: string | null
+}
+
+export function readableVehicleFill(fill: QuoteVehicleFill | null): string | null {
+  if (!fill || !fill.suggestion) return null
+  switch (fill.applied) {
+    case 'filled':
+      return `Se completó «Vehículo (según la persona)» con «${fill.suggestion}».`
+    case 'same':
+      return null
+    case 'kept':
+      return `Ya había un vehículo escrito a mano y no se pisó. Si conviene, usá «Usar este vehículo» (${fill.suggestion}).`
+    case 'unavailable':
+      return `Identificado: ${fill.suggestion}. Falta aplicar la migración 036 para guardarlo en el pedido.`
+    case 'failed':
+      return `Identificado: ${fill.suggestion}, pero no se pudo guardar en el pedido. Cargalo a mano en «Editar datos».`
+    case 'none':
+      return null
+  }
+}
+
+export const applyQuoteVehicleSuggestionSchema = z
+  .object({
+    quoteRequestId: z.uuid(),
+    /** El vehículo escrito que veía el operador: si cambió, no se pisa. */
+    expected: z.string().max(400).nullable(),
+  })
+  .strict()
+export type ApplyQuoteVehicleSuggestionInput = z.infer<typeof applyQuoteVehicleSuggestionSchema>
+
+export function readableApplyVehicleError(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause)
+  if (raw.includes('VEHICLE_DESCRIPTION_CHANGED'))
+    return 'El vehículo escrito cambió mientras mirabas la ficha. Se recargó: revisalo y volvé a tocar «Usar este vehículo».'
+  if (raw.includes('NO_VEHICLE_SUGGESTION')) return 'Ya no hay un vehículo identificado para usar. Recargá la ficha.'
+  if (raw.includes('QUOTE_VEHICLE_FILL_UNAVAILABLE')) return 'Falta aplicar la migración 036 en esta base.'
+  return readableQuoteRequestError(raw)
+}

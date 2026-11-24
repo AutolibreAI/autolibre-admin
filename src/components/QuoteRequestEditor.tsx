@@ -5,8 +5,19 @@ import {
   quoteChannelLabel,
   readableQuoteRequestDataError,
   type QuoteRequestDetail,
+  type QuoteRequestOrigin,
+  type QuoteRequestPartsSupply,
+  type QuoteRequestTiming,
 } from '~/lib/quote-requests'
 import { updateQuoteRequestFn } from '~/fn/quote-requests'
+import {
+  EMPTY_TIMING,
+  QuoteOriginField,
+  QuoteTimingFields,
+  timingIncomplete,
+  timingPayload,
+  type QuoteTimingState,
+} from '~/components/QuoteTimingFields'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -51,6 +62,8 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
   const [vehicleText, setVehicleText] = useState('')
   const [description, setDescription] = useState('')
   const [declaredAmount, setDeclaredAmount] = useState('')
+  const [timing, setTiming] = useState<QuoteTimingState>(EMPTY_TIMING)
+  const [origin, setOrigin] = useState<QuoteRequestOrigin | ''>('')
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,6 +80,17 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
     setVehicleText(detail.vehicleText ?? '')
     setDescription(detail.description)
     setDeclaredAmount(detail.declaredAmount === null ? '' : String(detail.declaredAmount))
+    const t = detail.timingAndParts
+    setTiming(
+      t.available
+        ? {
+            timing: (t.timing ?? '') as QuoteRequestTiming | '',
+            preferredDate: t.preferredDate ?? '',
+            partsSupply: (t.partsSupply ?? '') as QuoteRequestPartsSupply | '',
+          }
+        : EMPTY_TIMING,
+    )
+    setOrigin(detail.origin.available ? ((detail.origin.origin ?? '') as QuoteRequestOrigin | '') : '')
     setError(null)
   }
 
@@ -76,7 +100,10 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
   }
 
   const canSave =
-    contactPhone.trim() !== '' && description.trim() !== '' && (!plateRequired || plate.trim() !== '')
+    contactPhone.trim() !== '' &&
+    description.trim() !== '' &&
+    (!plateRequired || plate.trim() !== '') &&
+    (!detail.timingWritable || !timingIncomplete(timing))
 
   async function save() {
     if (!canSave || inFlight.current) return
@@ -101,6 +128,9 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
           plate,
           vehicleText,
           declaredAmount: amount,
+          // Sin la 036 (o sin la 0143) no viajan: el servidor no los toca.
+          ...(detail.timingWritable ? timingPayload(timing) : {}),
+          ...(detail.origin.available && detail.enteredManually ? { origin: origin === '' ? null : origin } : {}),
         },
       })
       await router.invalidate()
@@ -222,6 +252,23 @@ export function QuoteRequestEditor({ detail }: { detail: QuoteRequestDetail }) {
                 hint="Lo que dice que le cotizaron en otro lado. Se asume ARS."
               />
             </Group>
+
+            {detail.timingWritable ? (
+              <Group title="Para cuándo y repuestos">
+                <QuoteTimingFields idPrefix="qre" value={timing} onChange={setTiming} disabled={busy} />
+                {detail.channel === 'app' ? (
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    En un pedido de la app esto lo contestó la persona: cambialo sólo si te lo corrigió.
+                  </p>
+                ) : null}
+              </Group>
+            ) : null}
+
+            {detail.origin.available && detail.enteredManually ? (
+              <Group title="Origen">
+                <QuoteOriginField id="qre-origin" value={origin} onChange={setOrigin} disabled={busy} />
+              </Group>
+            ) : null}
 
             <Group title="Zona">
               <div className="flex gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-sm">

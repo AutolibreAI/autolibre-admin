@@ -97,6 +97,8 @@ interface ProposalRow {
   resolved_phone: string | null
   resolved_hours: string | null
   partner_slug: string | null
+  rating_avg: string | null
+  rating_count: number | null
   amount_min: string | null
   amount_max: string | null
   currency: string
@@ -139,6 +141,10 @@ function mapProposal(r: ProposalRow): QuoteProposal {
     phone: r.resolved_phone,
     hours: r.resolved_hours,
     partnerSlug: r.partner_slug,
+    partnerRating:
+      r.rating_count !== null && Number(r.rating_count) > 0 && r.rating_avg !== null
+        ? { average: Number(r.rating_avg), count: Number(r.rating_count) }
+        : null,
     // `numeric` llega como string. `toNum` preserva el null: "a confirmar" ≠ "sin cargo".
     amountMin: toNum(r.amount_min),
     amountMax: toNum(r.amount_max),
@@ -192,6 +198,15 @@ export async function listQuoteProposals(
          ) end as partner_slug`
       : `null::text as partner_slug`
 
+  // `partner_reviews` (backend) puede no estar: mismo guard. Se cuentan TODAS
+  // las reseñas del partner (estrellas), no sólo los comentarios aprobados.
+  const reviews = await sqlOne<{ ok: boolean }>(`select to_regclass('public.partner_reviews') is not null as ok`)
+  const ratingColumns =
+    reviews?.ok === true
+      ? `(select round(avg(r.stars)::numeric, 1) from partner_reviews r where r.partner_id = pa.id) as rating_avg,
+         (select count(*)::int from partner_reviews r where r.partner_id = pa.id) as rating_count`
+      : `null::numeric as rating_avg, null::int as rating_count`
+
   const [proposalRows, sendRows, request] = await Promise.all([
     sql<ProposalRow>(
       `select p.id, p.send_id, p.position, p.partner_id,
@@ -203,6 +218,7 @@ export async function listQuoteProposals(
               nullif(btrim(coalesce(pa.whatsapp, p.provider_phone, '')), '') as resolved_phone,
               nullif(btrim(coalesce(pa.hours, '')), '') as resolved_hours,
               ${slugColumn},
+              ${ratingColumns},
               p.amount_min, p.amount_max, p.currency::text as currency, p.items,
               p.description, p.internal_notes,
               to_char(p.valid_until, 'YYYY-MM-DD') as valid_until,

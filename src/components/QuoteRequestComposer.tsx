@@ -5,9 +5,18 @@ import {
   QUOTE_REQUEST_CHANNELS,
   quoteChannelLabel,
   readableCreateQuoteRequestError,
+  type QuoteRequestOrigin,
 } from '~/lib/quote-requests'
 import { createQuoteRequestFn } from '~/fn/quote-requests'
 import { AppUserSearch } from '~/components/QuoteUserLinker'
+import {
+  EMPTY_TIMING,
+  QuoteOriginField,
+  QuoteTimingFields,
+  timingIncomplete,
+  timingPayload,
+  type QuoteTimingState,
+} from '~/components/QuoteTimingFields'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
@@ -72,6 +81,10 @@ export function QuoteRequestComposer() {
   const [locationAddress, setLocationAddress] = useState('')
   const [locationLocality, setLocationLocality] = useState('')
   const [locationProvince, setLocationProvince] = useState('')
+  const [timing, setTiming] = useState<QuoteTimingState>(EMPTY_TIMING)
+  const [origin, setOrigin] = useState<QuoteRequestOrigin | ''>('')
+  // Avisos que viven afuera del panel (el pedido ya se creó).
+  const [vehicleNote, setVehicleNote] = useState<string | null>(null)
 
   // Vincular a una cuenta (de ejemplo, ~/mocks/quote-user-link): se aplica
   // recién después de crear el pedido, con el id que devuelve el alta.
@@ -88,7 +101,8 @@ export function QuoteRequestComposer() {
   const zoneIncomplete =
     locationAddress.trim() === '' && (locationLocality.trim() !== '' || locationProvince.trim() !== '')
 
-  const canSubmit = contactPhone.trim() !== '' && description.trim() !== '' && !zoneIncomplete
+  const canSubmit =
+    contactPhone.trim() !== '' && description.trim() !== '' && !zoneIncomplete && origin !== '' && !timingIncomplete(timing)
 
   function reset() {
     setChannel('whatsapp')
@@ -102,6 +116,8 @@ export function QuoteRequestComposer() {
     setLocationAddress('')
     setLocationLocality('')
     setLocationProvince('')
+    setTiming(EMPTY_TIMING)
+    setOrigin('')
     setLinkUser(null)
     setPickingUser(false)
     setError(null)
@@ -119,6 +135,7 @@ export function QuoteRequestComposer() {
     setBusy(true)
     setError(null)
     setGeocodeWarning(null)
+    setVehicleNote(null)
 
     try {
       const amount = declaredAmount.trim() === '' ? undefined : Number(declaredAmount)
@@ -140,6 +157,8 @@ export function QuoteRequestComposer() {
           locationAddress: locationAddress.trim() === '' ? undefined : locationAddress.trim(),
           locationLocality: locationLocality.trim() === '' ? undefined : locationLocality.trim(),
           locationProvince: locationProvince.trim() === '' ? undefined : locationProvince.trim(),
+          ...timingPayload(timing),
+          origin: origin as QuoteRequestOrigin,
         },
       })
 
@@ -159,6 +178,12 @@ export function QuoteRequestComposer() {
           `AL-${created.publicNumber} creado, pero no se pudo pedir la geocodificación; usá «Geocodificar» en la ficha.`,
         )
       }
+      if (!created.extrasSaved)
+        setVehicleNote(
+          `AL-${created.publicNumber} creado, pero «para cuándo», «repuestos» u «origen» no se guardaron: falta la migración 036 en esta base.`,
+        )
+      else if (created.vehicleIdentified === 'resolved')
+        setVehicleNote(`AL-${created.publicNumber}: el vehículo se identificó solo por la patente (ya estaba consultada).`)
       void router.invalidate()
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : String(cause)
@@ -171,6 +196,11 @@ export function QuoteRequestComposer() {
 
   return (
     <div className="flex flex-col items-end gap-1">
+    {vehicleNote ? (
+      <p role="status" className="max-w-xs text-right text-xs leading-relaxed text-muted-foreground">
+        {vehicleNote}
+      </p>
+    ) : null}
     {geocodeWarning ? (
       <p role="status" className="max-w-xs text-right text-xs leading-relaxed text-status-yellow">
         {geocodeWarning}
@@ -444,6 +474,10 @@ export function QuoteRequestComposer() {
                 </p>
               ) : null}
             </section>
+
+            <QuoteTimingFields idPrefix="qrc" value={timing} onChange={setTiming} disabled={busy} />
+
+            <QuoteOriginField id="qrc-origin" value={origin} onChange={setOrigin} disabled={busy} required />
 
             <section className="space-y-1.5">
               <label

@@ -604,6 +604,11 @@ Reglas que salen de esto y no son negociables:
    **Al 2026-11-20 la 035 («Alta por» y el catálogo del equipo, `ops.team_member`) dio 42/42 en una
    réplica PGlite (`tmp/run-035.mjs`) — NO aplicada en ninguna base.** Sin ella no hay selector ni
    columna de «Alta por» y Equipo dice qué falta → `.claude/rules/team-sourcing.md`.
+   **Al 2026-11-24 la 036 (para cuándo, repuestos, origen y el vehículo identificado de un pedido)
+   dio 32/32 y la 037 («Formato de cada propuesta») 9/9 en réplicas PGlite — NO aplicadas en
+   ninguna base.** Sin la 036 la ficha y «Cargar pedido» no guardan esos datos (y lo dicen); sin la
+   037 el formato de cada propuesta usa la semilla y no se puede guardar → `.claude/rules/leads.md`
+   (tarjetas T73NyHFN y bMtiAAQZ), `ops-write-actions.md`.
    **Corregido el 2026-11-02: en producción están aplicadas de la 001 a la 024**, todas
    (`ops.schema_migrations`, `doadmin`, puerto 25060). Todos los "NO aplicada" de arriba (010 a 024)
    quedaron viejos para producción; para DEV no se relevó. Lo mismo con

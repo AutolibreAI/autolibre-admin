@@ -2,7 +2,6 @@ import { z } from 'zod'
 import { quotePublicCode, type QuoteRequestDetail } from '~/lib/quote-requests'
 import { formatAmount, formatQuoteAmount } from '~/lib/quote-responses'
 import type { QuoteProposal } from '~/lib/quote-proposals'
-import { formatDate } from '~/lib/format'
 import { partnerProfileUrl } from '~/lib/partners'
 import { toWhatsAppAR } from '~/lib/whatsapp-ar'
 
@@ -55,7 +54,19 @@ import { toWhatsAppAR } from '~/lib/whatsapp-ar'
  * (`.claude/rules/leads.md`) — y la patente tampoco hace falta para cotizar.
  */
 
-export type QuoteTemplateAudience = 'persona' | 'taller'
+/**
+ * `propuesta` no es un mensaje entero: es el renglón de CADA taller dentro de
+ * `{{presupuestos}}` («Formato de cada propuesta», migración 037). Hay uno
+ * solo, con la clave `PROPOSAL_ITEM_TEMPLATE_ID`, y no lleva `{{codigo}}` (el
+ * mensaje que lo contiene ya lo lleva).
+ */
+export type QuoteTemplateAudience = 'persona' | 'taller' | 'propuesta'
+
+/** Las audiencias de un mensaje entero: las que se ofrecen en «Nueva plantilla». */
+export const MESSAGE_AUDIENCES = ['persona', 'taller'] as const
+
+/** La clave fija del «Formato de cada propuesta» (037: `chk_ops_qmtv_proposal_key`). */
+export const PROPOSAL_ITEM_TEMPLATE_ID = 'propuesta_item'
 
 export interface QuoteTemplate {
   id: string
@@ -83,6 +94,8 @@ Tenemos registrado:
 * {{patente}} + {{vehiculo_completo}}
 * {{pedido}}
 * {{zona}}
+* Para cuándo: {{cuando}}
+* Repuestos: {{repuestos}}
 
 Ya estamos trabajando, cualquier duda o correccion avisanos!`,
   },
@@ -113,10 +126,15 @@ Cualquier otra cosa que necesites avisá y esperamos tu feedback!`,
 Tenemos un usuario que necesita:
 
 * {{vehiculo_taller}}
+* Motor: {{motor}}
 * {{pedido}}
+* Servicios: {{servicios}}
 {{localidad}}
+* Para cuándo: {{cuando}}
+* Repuestos: {{repuestos}}
+* {{fotos}}
 
-¿Lo podés tomar? ¿Cuándo podrías hacerlo y qué costo estimás?`,
+¿Lo podés tomar? ¿Cuándo podrías hacerlo, qué costo estimás y hasta cuándo vale ese precio?`,
   },
   {
     id: 'cotizacion_nuevo',
@@ -126,10 +144,38 @@ Tenemos un usuario que necesita:
 Tenemos un usuario que necesita lo siguiente (pedido {{codigo}}):
 
 * {{vehiculo_taller}}
+* Motor: {{motor}}
 * {{pedido}}
+* Servicios: {{servicios}}
 {{localidad}}
+* Para cuándo: {{cuando}}
+* Repuestos: {{repuestos}}
+* {{fotos}}
 
-¿Les interesaría el trabajo? ¿Cuándo lo pueden hacer? ¿Pueden estimar costo?`,
+¿Les interesaría el trabajo? ¿Cuándo lo pueden hacer? ¿Pueden estimar costo y hasta cuándo vale?`,
+  },
+  {
+    id: PROPOSAL_ITEM_TEMPLATE_ID,
+    title: 'Formato de cada propuesta',
+    audience: 'propuesta',
+    /**
+     * Reproduce el bloque que antes armaba el código (`responsesBlock`), más
+     * la calificación. Cada renglón se va solo si su variable no tiene dato.
+     * `{{telefono_taller}}` sólo tiene valor cuando el número NO se pudo
+     * convertir en link de WhatsApp: los dos renglones nunca salen juntos.
+     */
+    content: `{{numero}}. {{taller}}
+⭐ Te lo recomendamos: {{recomendacion}}
+📍 {{direccion_taller}}
+💬 WhatsApp: {{whatsapp_taller}}
+📞 {{telefono_taller}}
+🕘 {{horario_taller}}
+🔗 Perfil: {{perfil_taller}}
+Calificación: {{calificacion}}
+💵 {{monto}}
+{{items}}
+📅 Vigente hasta el {{valido_hasta}}
+{{detalle_propuesta}}`,
   },
 ]
 
@@ -139,7 +185,9 @@ Tenemos un usuario que necesita lo siguiente (pedido {{codigo}}):
  * conversaciones encima — corre en tiempo de módulo para que agregar una
  * plantilla nueva sin el placeholder rompa fuerte, no en silencio.
  */
-const templatesWithoutCodigo = QUOTE_TEMPLATES.filter((t) => !t.content.includes('{{codigo}}'))
+const templatesWithoutCodigo = QUOTE_TEMPLATES.filter(
+  (t) => t.audience !== 'propuesta' && !t.content.includes('{{codigo}}'),
+)
 if (templatesWithoutCodigo.length > 0) {
   throw new Error(
     `QUOTE_TEMPLATES sin {{codigo}}: ${templatesWithoutCodigo.map((t) => t.id).join(', ')}`,
@@ -182,22 +230,60 @@ export interface QuoteMessageTemplateVersion {
  * persona). Validar por audiencia da un error más preciso que validar contra
  * la unión de las dos listas.
  */
-export const TEMPLATE_VARIABLES: Record<QuoteTemplateAudience, ReadonlyArray<{ key: string; label: string }>> = {
+export interface TemplateVariable {
+  key: string
+  label: string
+  /** Cómo se ve, para el editor. Inventado a propósito: no es un pedido real. */
+  example: string
+}
+
+/**
+ * Las variables del PEDIDO que valen igual para la persona y para el taller.
+ * Ninguna trae contacto de la persona (nombre, teléfono, email, dirección):
+ * AutoLibre nunca le pasa el contacto del cliente al taller.
+ */
+const SHARED_REQUEST_VARIABLES: ReadonlyArray<TemplateVariable> = [
+  { key: 'cuando', label: 'Para cuándo lo necesita', example: 'Lo antes posible · Esta semana · 05/12' },
+  { key: 'repuestos', label: 'Quién pone los repuestos', example: 'Los pone el taller' },
+  { key: 'servicios', label: 'Los servicios del pedido (los del operador; si no hay, los de la IA)', example: 'Frenos, Alineación y balanceo' },
+  { key: 'motor', label: 'Motor, combustible y caja del vehículo vinculado (sólo pedidos de la app)', example: '1.6 · Nafta · Manual 5 marchas' },
+  { key: 'fotos', label: 'Cuántas fotos del problema hay (sin link: son privadas)', example: 'Hay 2 fotos del problema' },
+]
+
+export const TEMPLATE_VARIABLES: Record<QuoteTemplateAudience, ReadonlyArray<TemplateVariable>> = {
   persona: [
-    { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio' },
-    { key: 'patente', label: 'Patente tipeada por la persona' },
-    { key: 'vehiculo', label: 'El auto, frase corta ("el Nissan Note (PNZ450)")' },
-    { key: 'vehiculo_completo', label: 'El auto completo, o un aviso si falta' },
-    { key: 'pedido', label: 'La descripción del pedido' },
-    { key: 'zona', label: 'La zona de la persona (localidad y provincia, nunca la dirección exacta)' },
-    { key: 'intro', label: 'El párrafo de presupuestos, redactado según la cantidad' },
-    { key: 'presupuestos', label: 'El bloque numerado con las propuestas cargadas del pedido' },
+    { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio', example: 'AL-1234' },
+    { key: 'nombre', label: 'El nombre de la persona del pedido', example: 'Laura' },
+    { key: 'patente', label: 'Patente tipeada por la persona', example: 'AB123CD' },
+    { key: 'vehiculo', label: 'El auto, frase corta', example: 'el Nissan Note (AB123CD)' },
+    { key: 'vehiculo_completo', label: 'El auto completo, o un aviso si falta', example: 'NISSAN NOTE ADVANCE 1.6 2019' },
+    { key: 'pedido', label: 'La descripción del pedido', example: 'Ruido al frenar' },
+    { key: 'zona', label: 'La zona (localidad y provincia, nunca la dirección exacta)', example: 'Olivos, Buenos Aires' },
+    ...SHARED_REQUEST_VARIABLES,
+    { key: 'intro', label: 'El párrafo de presupuestos, redactado según la cantidad', example: 'Ya tenemos respuesta de dos talleres…' },
+    { key: 'presupuestos', label: 'Las propuestas activas, cada una con el «Formato de cada propuesta»', example: '1. Taller Norte…' },
   ],
   taller: [
-    { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio' },
-    { key: 'vehiculo_taller', label: 'El auto completo (marca, modelo, versión, año), sin patente' },
-    { key: 'pedido', label: 'La descripción del pedido' },
-    { key: 'localidad', label: 'La línea de zona — desaparece entera sin dato' },
+    { key: 'codigo', label: 'Código del pedido (AL-1234) — obligatorio', example: 'AL-1234' },
+    { key: 'vehiculo_taller', label: 'El auto completo (marca, modelo, versión, año), sin patente', example: 'Nissan Note Advance 1.6 2019' },
+    { key: 'pedido', label: 'La descripción del pedido', example: 'Ruido al frenar' },
+    { key: 'localidad', label: 'La línea de zona — desaparece entera sin dato', example: '* Zona: Olivos' },
+    ...SHARED_REQUEST_VARIABLES,
+  ],
+  propuesta: [
+    { key: 'numero', label: 'El número de la propuesta en el mensaje', example: '1' },
+    { key: 'taller', label: 'El nombre del taller', example: 'Taller Norte' },
+    { key: 'recomendacion', label: 'El motivo, sólo en la recomendada', example: 'Es el que más rápido te atiende' },
+    { key: 'direccion_taller', label: 'La dirección del taller', example: 'Av. Maipú 1234, Olivos' },
+    { key: 'whatsapp_taller', label: 'Link de WhatsApp del taller (wa.me/549…)', example: 'https://wa.me/5491123456789?text=…' },
+    { key: 'telefono_taller', label: 'El teléfono crudo, SÓLO si no se pudo armar el link de WhatsApp', example: '4791-2345' },
+    { key: 'horario_taller', label: 'Los horarios del taller (sólo del directorio)', example: 'Lun a vie 8 a 18' },
+    { key: 'perfil_taller', label: 'El perfil público del taller en la web', example: 'https://autolibre.ai/proveedores/taller-norte' },
+    { key: 'calificacion', label: 'Promedio de reseñas — se va si no tiene', example: '4,6 ★ (12 reseñas)' },
+    { key: 'monto', label: 'El precio, o el rango', example: '$ 80.000 a $ 95.000' },
+    { key: 'items', label: 'El desglose de la propuesta, con los opcionales aparte', example: '   • Pastillas: $ 45.000' },
+    { key: 'valido_hasta', label: 'Hasta cuándo vale el precio', example: '05/12/2026' },
+    { key: 'detalle_propuesta', label: 'El párrafo que escribió el operador', example: 'Cambio de pastillas delanteras…' },
   ],
 }
 
@@ -227,11 +313,18 @@ export const saveQuoteMessageTemplateSchema = z
   .object({
     templateKey: z.string().trim().min(1).max(60).optional(),
     title: z.string().trim().min(1, 'Falta el título.').max(120),
-    audience: z.enum(['persona', 'taller']),
+    audience: z.enum(['persona', 'taller', 'propuesta']),
     content: z.string().trim().min(1, 'Falta el texto del mensaje.').max(4000),
   })
   .superRefine((d, ctx) => {
-    if (!d.content.includes('{{codigo}}')) {
+    if ((d.audience === 'propuesta') !== (d.templateKey === PROPOSAL_ITEM_TEMPLATE_ID)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['audience'],
+        message: 'El formato de cada propuesta es uno solo y no se puede crear otro ni mudar una plantilla ahí.',
+      })
+    }
+    if (d.audience !== 'propuesta' && !d.content.includes('{{codigo}}')) {
       ctx.addIssue({
         code: 'custom',
         path: ['content'],
@@ -263,7 +356,11 @@ export function readableQuoteMessageTemplateError(cause: unknown): string {
   if (raw.includes(QUOTE_MESSAGE_TEMPLATES_UNAVAILABLE))
     return 'Falta aplicar la migración 017 en esta base (pnpm db:migrate). No se aplicó nada.'
   if (raw.includes('TITLE_REQUIRED')) return 'Falta el título.'
+  if (raw.includes('INVALID_AUDIENCE: propuesta'))
+    return 'Falta aplicar la migración 037 en esta base: todavía no se puede guardar el formato de cada propuesta.'
   if (raw.includes('INVALID_AUDIENCE')) return 'Esa audiencia no existe. Recargá la pantalla.'
+  if (raw.includes('PROPOSAL_TEMPLATE_KEY'))
+    return 'El formato de cada propuesta es uno solo: no se puede crear otro ni mudar una plantilla ahí.'
   if (raw.includes('CONTENT_REQUIRED')) return 'Falta el texto del mensaje.'
   if (raw.includes('MISSING_CODIGO_PLACEHOLDER'))
     return 'El mensaje tiene que incluir {{codigo}} en algún lugar.'
@@ -274,13 +371,6 @@ export function readableQuoteMessageTemplateError(cause: unknown): string {
   return 'No pudimos guardar. No se aplicó nada — es una sola operación en la base.'
 }
 
-/**
- * Placeholders cuya LÍNEA entera desaparece cuando no hay dato, en vez de
- * dejar un renglón como "Zona: " vacío — mismo criterio que los renglones
- * 📍📞 de `responsesBlock()`, sólo que ahí se arman a mano y acá el template
- * es texto estático con `{{placeholders}}`. Ver `renderQuoteTemplate()`.
- */
-const OPTIONAL_LINE_KEYS: ReadonlySet<string> = new Set(['localidad'])
 
 // ── Piezas del render ───────────────────────────────────────────────────────
 
@@ -300,7 +390,7 @@ function titleCaseModel(raw: string): string {
   return raw
     .split(/([\s-]+)/)
     .map((token) =>
-      /^[\s-]+$/.test(token) || token.length <= 3
+      /^[\s-]+$/.test(token) || token.length <= 3 || /\d/.test(token)
         ? token
         : token.charAt(0).toUpperCase() + token.slice(1).toLowerCase(),
     )
@@ -406,12 +496,17 @@ function zoneValue(detail: QuoteRequestDetail): string {
  */
 function workshopVehiclePhrase(detail: QuoteRequestDetail): string {
   if (detail.catalogLabel) return titleCaseModel(detail.catalogLabel)
-  return detail.vehicleText ?? '[marca modelo versión año]'
+  if (detail.vehicleText) return detail.vehicleText
+  // El modelo que identificó «Identificar vehículo» (tarjeta T73NyHFN), aunque
+  // todavía no se haya pasado a `vehicle_description`.
+  const rc = detail.requestVehicleCatalog
+  if (rc?.available && rc.label) return titleCaseModel(rc.label)
+  return '[marca modelo versión año]'
 }
 
 /**
  * `null` acá NO cae en un corchete: la línea entera de zona desaparece (ver
- * `OPTIONAL_LINE_KEYS`). Es a propósito — un taller sin zona igual puede
+ * `applyTemplate`). Es a propósito — un taller sin zona igual puede
  * cotizar, así que forzarlo a completar un corchete de zona sería pedirle al
  * operador que invente un dato que no tiene.
  */
@@ -451,6 +546,13 @@ export interface QuoteMessageEntry {
   detail: string
   /** Sólo en la recomendada: el motivo, que es lo que lee la persona. */
   recommendationReason: string | null
+  /** Promedio de `partner_reviews` del taller. `null` = taller de afuera, sin reseñas, o base sin la tabla. */
+  rating: QuotePartnerRating | null
+}
+
+export interface QuotePartnerRating {
+  average: number
+  count: number
 }
 
 /**
@@ -473,6 +575,7 @@ export function proposalToMessageEntry(p: QuoteProposal): QuoteMessageEntry {
     expired: p.expired,
     detail: p.description,
     recommendationReason: p.isRecommended ? p.recommendationReason : null,
+    rating: p.partnerRating,
   }
 }
 
@@ -543,64 +646,169 @@ export function quoteEntryContact(entry: QuoteMessageEntry, quoteCode: string | 
   return { kind: 'whatsapp', url: `https://wa.me/${r.digits}?text=${encoded}` }
 }
 
-function responsesBlock(entries: ReadonlyArray<QuoteMessageEntry>, quoteCode: string | null = null): string {
+// ── El motor de render ──────────────────────────────────────────────────────
+
+/**
+ * Reemplaza `{{variables}}` en `content` con `values`, con la regla de las
+ * plantillas desde el 2026-11-24 (tarjeta bMtiAAQZ):
+ *
+ * - **Una variable sin dato (`''`) se lleva su LÍNEA entera**, no sólo el
+ *   hueco: "* Para cuándo: " sin nada al lado se lee como un error nuestro.
+ *   Se decide ANTES de reemplazar, línea por línea (después del reemplazo una
+ *   línea vacía es indistinguible de una que nunca tuvo dato).
+ * - Después se juntan las líneas en blanco dobles que hayan quedado.
+ * - Una variable que no está en `values` queda tal cual entre llaves —
+ *   visible y buscable— en vez de desaparecer en silencio. Es también lo que
+ *   pasa con una variable de otra audiencia: `values` se arma POR audiencia,
+ *   así que un `{{nombre}}` en una plantilla para el taller nunca se completa.
+ *
+ * Las variables viejas que avisan con un `[corchete]` (`{{patente}}`,
+ * `{{vehiculo_completo}}`…) no devuelven `''`: su línea se queda, con el aviso.
+ */
+export function applyTemplate(content: string, values: Readonly<Record<string, string>>): string {
+  const lines = content.split('\n').filter((line) => {
+    for (const m of line.matchAll(/\{\{(\w+)\}\}/g)) {
+      const key = m[1]!
+      if (Object.prototype.hasOwnProperty.call(values, key) && values[key]!.trim() === '') return false
+    }
+    return true
+  })
+  return lines
+    .map((line) =>
+      line.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? values[key]! : match,
+      ),
+    )
+    .join('\n')
+    .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n')
+}
+
+/** Deja en `values` sólo las variables de esa audiencia: lo demás queda entre llaves. */
+function forAudience(values: Record<string, string>, audience: QuoteTemplateAudience): Record<string, string> {
+  const allowed = new Set(TEMPLATE_VARIABLES[audience].map((v) => v.key))
+  return Object.fromEntries(Object.entries(values).filter(([k]) => allowed.has(k)))
+}
+
+/** `2026-12-05` → `05/12`, sin pasar por `Date` (correría un día). */
+function dayMonth(day: string): string {
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(day)
+  return m ? `${m[2]}/${m[1]}` : day
+}
+
+/** `2026-12-05` → `05/12/2026`. */
+function fullDay(day: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : day
+}
+
+/** `{{cuando}}`: lo que dijo la persona (0143), o lo que cargó el operador (036). */
+export function quoteTimingValue(detail: Pick<QuoteRequestDetail, 'timingAndParts'>): string {
+  const t = detail.timingAndParts
+  if (!t.available || !t.timing) return ''
+  if (t.timing === 'asap') return 'Lo antes posible'
+  if (t.timing === 'this_week') return 'Esta semana'
+  if (t.timing === 'date') return t.preferredDate ? dayMonth(t.preferredDate) : ''
+  return t.timing
+}
+
+/** `{{repuestos}}`. Las etiquetas son las del mensaje, no las de la ficha. */
+export function quotePartsValue(detail: Pick<QuoteRequestDetail, 'timingAndParts'>): string {
+  const t = detail.timingAndParts
+  if (!t.available || !t.partsSupply) return ''
+  if (t.partsSupply === 'workshop') return 'Los pone el taller'
+  if (t.partsSupply === 'customer') return 'Los lleva el cliente'
+  return t.partsSupply
+}
+
+function photosValue(n: number | null): string {
+  if (!n) return ''
+  return n === 1 ? 'Hay 1 foto del problema' : `Hay ${n} fotos del problema`
+}
+
+/** `4,6 ★ (12 reseñas)`. Sin reseñas, `''`: la línea se va. */
+export function formatPartnerRating(rating: QuotePartnerRating | null): string {
+  if (!rating || rating.count <= 0) return ''
+  const avg = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(rating.average)
+  return `${avg} ★ (${rating.count} ${rating.count === 1 ? 'reseña' : 'reseñas'})`
+}
+
+/** `{{items}}`: los obligatorios y, aparte, los opcionales con su precio. */
+function itemsValue(entry: QuoteMessageEntry): string {
+  const required = entry.items.filter((it) => !it.optional)
+  const optional = entry.items.filter((it) => it.optional)
+  const lines: Array<string> = []
+  for (const it of required) lines.push(`   • ${it.label}: ${formatItemAmount(it.amount, entry.currency)}`)
+  if (optional.length > 0) {
+    lines.push('➕ Opcionales:')
+    for (const it of optional) lines.push(`   • ${it.label}: ${formatItemAmount(it.amount, entry.currency)}`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Las variables de UNA propuesta. El contacto del taller va como link
+ * `wa.me` (normalizado por `toWhatsAppAR`, el mismo del resto del panel); si
+ * el número no se puede normalizar, `{{whatsapp_taller}}` queda vacío y el
+ * número crudo sale por `{{telefono_taller}}`.
+ *
+ * La nota interna de la propuesta NO es una variable: es para el operador.
+ */
+export function proposalTemplateValues(
+  entry: QuoteMessageEntry,
+  position: number,
+  quoteCode: string | null,
+): Record<string, string> {
+  const contact = quoteEntryContact(entry, quoteCode)
+  return {
+    numero: String(position),
+    taller: entry.name,
+    recomendacion: entry.recommendationReason ?? '',
+    direccion_taller: entry.address ?? '',
+    whatsapp_taller: contact?.kind === 'whatsapp' ? contact.url : '',
+    telefono_taller: contact?.kind === 'phone' ? contact.phone : '',
+    horario_taller: entry.hours ?? '',
+    perfil_taller: entry.partnerSlug ? partnerProfileUrl(entry.partnerSlug) : '',
+    calificacion: formatPartnerRating(entry.rating),
+    monto: formatQuoteAmount(entry) ?? '',
+    items: itemsValue(entry),
+    valido_hasta: entry.validUntil ? fullDay(entry.validUntil) : '',
+    detalle_propuesta: entry.detail,
+  }
+}
+
+/** El contenido del «Formato de cada propuesta» de semilla (si nadie lo editó). */
+export const DEFAULT_PROPOSAL_ITEM_CONTENT: string = QUOTE_TEMPLATES.find((t) => t.id === PROPOSAL_ITEM_TEMPLATE_ID)!.content
+
+/**
+ * `{{presupuestos}}`: cada propuesta ACTIVA y vigente, con el formato de cada
+ * propuesta. Una vencida no entra (`splitQuoteMessageEntries`).
+ */
+function responsesBlock(
+  entries: ReadonlyArray<QuoteMessageEntry>,
+  quoteCode: string | null,
+  itemContent: string,
+): string {
   const { included } = splitQuoteMessageEntries(entries)
   if (included.length === 0) return '[todavía no hay propuestas cargadas en el pedido]'
-
   return included
-    .map((r, i) => {
-      const lines = [`${i + 1}. ${r.name}`]
-      // La recomendada lo dice con el MISMO motivo que la persona lee en la app.
-      if (r.recommendationReason) lines.push(`⭐ Te lo recomendamos: ${r.recommendationReason}`)
-      if (r.address) lines.push(`📍 ${r.address}`)
-      const contact = quoteEntryContact(r, quoteCode)
-      if (contact?.kind === 'whatsapp') lines.push(`💬 WhatsApp: ${contact.url}`)
-      else if (contact) lines.push(`📞 ${contact.phone}`)
-      if (r.hours) lines.push(`🕘 ${r.hours}`)
-      // El perfil público del taller en la web (pedido del 2026-10-27), para que
-      // la persona vea más del taller que lo que entra en el mensaje. Sólo con
-      // slug: un taller de afuera no tiene perfil, y uno pausado da 404.
-      if (r.partnerSlug) lines.push(`🔗 Perfil: ${partnerProfileUrl(r.partnerSlug)}`)
-      const amount = formatQuoteAmount(r)
-      if (amount) lines.push(`💵 ${amount}`)
-      // El desglose (022): los obligatorios debajo del total que suman; los
-      // opcionales aparte, con su precio, para que la persona elija. Un
-      // presupuesto sin ítems sale igual que antes.
-      const required = r.items.filter((it) => !it.optional)
-      const optional = r.items.filter((it) => it.optional)
-      for (const it of required) lines.push(`   • ${it.label}: ${formatItemAmount(it.amount, r.currency)}`)
-      if (optional.length > 0) {
-        lines.push('➕ Opcionales:')
-        for (const it of optional) lines.push(`   • ${it.label}: ${formatItemAmount(it.amount, r.currency)}`)
-      }
-      // `formatDate` y no el `YYYY-MM-DD` crudo: es un mensaje para una
-      // persona, no una celda de tabla. Es el MISMO formateador que el resto
-      // del panel (locale y zona pineados), así que la fecha se lee igual en
-      // la tarjeta y en el WhatsApp.
-      if (r.validUntil) lines.push(`📅 Vigente hasta el ${formatDate(`${r.validUntil}T00:00:00.000Z`)}`)
-      lines.push(r.detail)
-      return lines.join('\n')
-    })
+    .map((entry, i) => applyTemplate(itemContent, proposalTemplateValues(entry, i + 1, quoteCode)).trim())
     .join('\n\n')
 }
 
 /**
- * Reemplaza los `{{placeholders}}` de una plantilla con los datos DE ESE
- * pedido. Un placeholder sin valor en `values` se deja tal cual entre llaves
- * — visible y buscable — en vez de desaparecer en silencio.
- *
- * `entries` es opcional y por defecto vacío: la plantilla de Apertura no las
- * usa, y así el llamador que sólo quiere ésa no depende de una consulta más.
+ * Todas las variables de un pedido, para cualquier audiencia. Quien renderiza
+ * filtra por audiencia (`forAudience`).
  */
-export function renderQuoteTemplate(
-  template: QuoteTemplate,
+export function quoteTemplateValues(
   detail: QuoteRequestDetail,
   entries: ReadonlyArray<QuoteMessageEntry> = [],
-): string {
+  itemContent: string = DEFAULT_PROPOSAL_ITEM_CONTENT,
+): Record<string, string> {
   const { included } = splitQuoteMessageEntries(entries)
-
-  const values: Record<string, string> = {
-    codigo: quotePublicCode(detail.publicNumber),
+  const code = quotePublicCode(detail.publicNumber)
+  return {
+    codigo: code,
+    nombre: detail.contactName?.trim() ?? '',
     patente: plateValue(detail),
     vehiculo: vehiclePhrase(detail),
     vehiculo_completo: fullVehicleValue(detail),
@@ -608,25 +816,37 @@ export function renderQuoteTemplate(
     pedido: detail.description,
     zona: zoneValue(detail),
     localidad: localityValue(detail),
+    cuando: quoteTimingValue(detail),
+    repuestos: quotePartsValue(detail),
+    servicios: detail.templateFacts.serviceNames.join(', '),
+    motor: detail.templateFacts.motor ?? '',
+    fotos: photosValue(detail.templateFacts.problemPhotoCount),
     intro: introSentence(included.length, vehiclePhrase(detail), detail.description),
-    presupuestos: responsesBlock(entries, quotePublicCode(detail.publicNumber)),
+    presupuestos: responsesBlock(entries, code, itemContent),
   }
+}
 
-  // Una línea cuyo ÚNICO contenido es un placeholder de `OPTIONAL_LINE_KEYS`
-  // desaparece entera cuando ese placeholder resolvió a ''. No se puede
-  // decidir después del reemplazo (una línea vacía es indistinguible de una
-  // que nunca tuvo dato), así que se filtra ANTES, línea por línea.
-  const lines = template.content.split('\n').filter((line) => {
-    const trimmed = line.trim()
-    const match = /^\{\{(\w+)\}\}$/.exec(trimmed)
-    if (!match) return true
-    const key = match[1]!
-    return !(OPTIONAL_LINE_KEYS.has(key) && !values[key])
-  })
-
-  return lines
-    .map((line) => line.replace(/\{\{(\w+)\}\}/g, (match, key: string) => values[key] ?? match))
-    .join('\n')
+/**
+ * Una plantilla, completada con los datos DE ESE pedido.
+ *
+ * `entries` es opcional y por defecto vacío: la plantilla de Apertura no las
+ * usa, y así el llamador que sólo quiere ésa no depende de una consulta más.
+ * `itemContent` es el «Formato de cada propuesta» vigente (semilla si nadie
+ * lo editó). Una plantilla `propuesta` se previsualiza con la primera
+ * propuesta del pedido.
+ */
+export function renderQuoteTemplate(
+  template: Pick<QuoteTemplate, 'audience' | 'content'>,
+  detail: QuoteRequestDetail,
+  entries: ReadonlyArray<QuoteMessageEntry> = [],
+  itemContent: string = DEFAULT_PROPOSAL_ITEM_CONTENT,
+): string {
+  if (template.audience === 'propuesta') {
+    const first = splitQuoteMessageEntries(entries).included[0]
+    if (!first) return '[este pedido no tiene propuestas activas para mostrar cómo queda]'
+    return applyTemplate(template.content, proposalTemplateValues(first, 1, quotePublicCode(detail.publicNumber))).trim()
+  }
+  return applyTemplate(template.content, forAudience(quoteTemplateValues(detail, entries, itemContent), template.audience))
 }
 
 // ── Mandarlo por WhatsApp ───────────────────────────────────────────────────

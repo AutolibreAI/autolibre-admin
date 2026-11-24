@@ -1,9 +1,10 @@
 import { createServerFn } from '@tanstack/react-start'
-import { identifyQuotePlateSchema, type QuotePlateResult } from '~/lib/quote-plate'
+import { identifyQuotePlateSchema, type QuotePlateResult, type QuoteVehicleFill } from '~/lib/quote-plate'
 import { QUOTE_REQUESTS_UNAVAILABLE } from '~/lib/quote-requests'
 import { identifyQuoteRequestVehicleByPlate } from '~/server/backend'
 import { quoteRequestsAvailability } from '~/server/quote-requests.repo'
 import { requestSignal } from '~/server/request'
+import { fillVehicleDescription } from '~/server/quote-vehicle-fill'
 import { adminMiddleware } from './middleware'
 
 /**
@@ -19,9 +20,13 @@ import { adminMiddleware } from './middleware'
 export const identifyQuoteRequestVehicleFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .validator(identifyQuotePlateSchema)
-  .handler(async ({ data }): Promise<QuotePlateResult> => {
+  .handler(async ({ data, context }): Promise<QuotePlateResult & { vehicleFill: QuoteVehicleFill }> => {
     const signal = requestSignal()
     const availability = await quoteRequestsAvailability({ signal })
     if (!availability.available) throw new Error(`${QUOTE_REQUESTS_UNAVAILABLE}:${availability.reason}`)
-    return identifyQuoteRequestVehicleByPlate(data.quoteRequestId, data.plate, { signal })
+    const result = await identifyQuoteRequestVehicleByPlate(data.quoteRequestId, data.plate, { signal })
+    // Tarjeta T73NyHFN: lo identificado entra a `vehicle_description` si estaba
+    // vacío; si tenía algo escrito a mano, no se pisa (`kept`). Nunca tira.
+    const vehicleFill = await fillVehicleDescription(data.quoteRequestId, context.user.id)
+    return { ...result, vehicleFill }
   })

@@ -1658,3 +1658,47 @@ dijo» (cliente viejo, landing, pedido cargado a mano). Sólo lectura: lo escrib
     2, y completo con `QUOTE_PROMISED_PROPOSALS` = 3. Sirve para perseguir los que no llegaron a las
     tres prometidas. Entre esas tres columnas no hay arrastre: la cantidad decide.
   - Soltar en «Respondido · 2» precarga 2 en la cantidad del recuadro (se puede cambiar).
+
+### El vehículo identificado entra al pedido (tarjeta T73NyHFN) — desde el 2026-11-24
+
+`QuotePlateIdentifier` + `src/server/quote-vehicle-fill.ts` + migración 036.
+
+- La patente del pedido precarga «Identificar vehículo» (y lo sigue si cambia).
+- Después de identificar, lo identificado va a `vehicle_description` **sólo si estaba vacío**
+  (SP con `p_expected = null`). Con texto a mano no se pisa: la tarjeta ofrece «Usar este
+  vehículo», que manda lo que veía el operador como `expected` y el servidor re-deriva el texto
+  (no viaja del cliente). `vehicle_catalog_id` lo sigue guardando el backend.
+- Qué se usa como texto (`readVehicleSuggestion`): el catálogo del pedido; si no hay (p. ej.
+  `insufficient_data`), marca + modelo + año del cache del backend (`vehicle_plate_lookups`).
+- **Identificación automática al guardar, sólo si es GRATIS.** El proveedor de patentes factura cada
+  consulta; el backend cachea los positivos sin vencimiento (`CachedVehicleDataProvider`). El alta y
+  «Editar datos» identifican solos únicamente si la patente ya está en `vehicle_plate_lookups`
+  (`plateIsCached`). Una patente nueva NO se consulta sola: queda precargada para el click.
+- Nada de esto bloquea: errores de backend o de escritura vuelven como estado, nunca como excepción.
+
+### Variables nuevas de plantillas (tarjeta bMtiAAQZ) — desde el 2026-11-24
+
+`~/lib/quote-templates` (`applyTemplate`, `quoteTemplateValues`, `proposalTemplateValues`),
+`QuoteTemplates.tsx`, migraciones 036 (cargar los datos) y 037 (formato por propuesta).
+
+- **Una variable sin dato se lleva su línea entera** y después se juntan las líneas en blanco dobles.
+  Las variables viejas que avisan con `[corchete]` siguen avisando (no devuelven `''`).
+- Nuevas del pedido (persona y taller): `{{cuando}}`, `{{repuestos}}`, `{{servicios}}` (operador,
+  si no IA sin dudosos), `{{motor}}` (spec del vehículo VINCULADO: sólo app), `{{fotos}}` (sólo la
+  cantidad: las fotos son privadas, URL firmada de 15 min; nunca un link). Sólo persona: `{{nombre}}`.
+- **Privacidad**: `values` se filtra por audiencia; una variable de persona en una plantilla de
+  taller queda entre llaves y nunca se completa. Ninguna variable de taller trae contacto.
+- `{{presupuestos}}` arma cada propuesta con el «Formato de cada propuesta» (audiencia `propuesta`,
+  clave `propuesta_item`, 037): `{{numero}}`, `{{taller}}`, `{{recomendacion}}`,
+  `{{direccion_taller}}`, `{{whatsapp_taller}}` (wa.me con `toWhatsAppAR`), `{{telefono_taller}}`
+  (sólo si no se pudo armar el link), `{{horario_taller}}`, `{{perfil_taller}}`,
+  `{{calificacion}}` (`partner_reviews`, todas las del partner; 0 filas en producción al
+  2026-11-24), `{{monto}}`, `{{items}}`, `{{valido_hasta}}`, `{{detalle_propuesta}}`. La semilla
+  reproduce el bloque de siempre + la calificación.
+- El editor lista las variables de cada audiencia con un ejemplo y previsualiza con este pedido o
+  con otro por su `AL-n` (`getQuoteTemplatePreviewFn`).
+- «Cargar pedido» pide Para cuándo (con fecha), Repuestos y **Origen (obligatorio)**; «Editar
+  datos» los edita (origen sólo en pedidos cargados a mano). `valid_until` de las propuestas ya
+  estaba en el formulario («Vigente hasta (opcional)»).
+- Tests: `tests/quote-templates.test.ts` (node --test, con un hook que resuelve `~/`).
+- `partner_outreach` (template de Meta) no se tocó.
