@@ -53,7 +53,7 @@ export function canDeclareOutcomeOnBehalf(f: QuoteUserFlowFacts): boolean {
 /**
  * Flujo incompleto: con cuenta, respondido y sin `user_outcome`. Es a quién hay
  * que llamar. Se excluyen los cancelados por la persona: ahí no hay nada que
- * declarar (el backend lo rechaza con 409).
+ * declarar (el backend lo rechaza con 400 `INVALID_STATE_TRANSITION`).
  */
 export function hasIncompleteUserFlow(f: QuoteUserFlowFacts & { userOutcome: string | null }): boolean {
   return canDeclareOutcomeOnBehalf(f) && f.userOutcome === null
@@ -225,8 +225,9 @@ export function parseQuoteUserFlowError(cause: unknown): QuoteUserFlowErrorInfo 
  * Qué hace la UI con el error:
  * - `retry`: reintentar manda EXACTAMENTE lo mismo (timeout, 5xx). Las dos
  *   escrituras dejan un valor fijo, así que repetirlas no duplica nada.
- * - `reload`: el pedido cambió (cerrado, propuesta retirada, ya no admite la
- *   declaración); se relee la ficha.
+ * - `reload`: el pedido cambió (400 `INVALID_STATE_TRANSITION`: cerrado o ya
+ *   no admite la declaración; 404: propuesta retirada o pedido sin cuenta;
+ *   409 `CONFLICT`: carrera con otra escritura); se relee la ficha.
  * - `fix`: hay que corregir algo o no hay nada que reintentar.
  */
 export type QuoteUserFlowErrorAction = 'retry' | 'reload' | 'fix'
@@ -258,8 +259,18 @@ function commonError(raw: string, e: QuoteUserFlowErrorInfo | null, endpoint: st
       text: `El backend desplegado todavía no tiene esta acción (${endpoint}). Hay que desplegarlo. No se guardó nada.`,
       action: 'fix',
     }
-  if (e.status === 404 && e.code === 'QUOTE_REQUEST_NOT_FOUND')
-    return { text: 'Este pedido ya no existe en el backend. Recargá la pantalla.', action: 'reload' }
+  // 404 `NOT_FOUND`: el pedido no existe o NO tiene cuenta (el backend no los distingue).
+  if (e.status === 404 && e.code === 'NOT_FOUND')
+    return {
+      text: 'El backend no encuentra este pedido con una cuenta de AutoLibre (no existe o no tiene cuenta). No se guardó nada: se recargó la ficha.',
+      action: 'reload',
+    }
+  // 409 `CONFLICT`: sólo la carrera de dos escrituras simultáneas sobre el pedido.
+  if (e.status === 409)
+    return {
+      text: 'Otro cambio se aplicó al pedido al mismo tiempo. No se guardó nada: se recargó la ficha, revisala y volvé a intentar.',
+      action: 'reload',
+    }
   if (e.status >= 500)
     return {
       text: 'El backend falló. Puede que haya quedado guardado: reintentá, se manda exactamente lo mismo y no duplica nada.',
@@ -284,9 +295,9 @@ export function readableSelectProposalError(cause: unknown): ReadableQuoteUserFl
       text: 'Esa propuesta ya no está activa en el pedido (la retiraron mientras tanto). No se guardó nada: se recargó la ficha.',
       action: 'reload',
     }
-  if (e.status === 409)
+  if (e.status === 400 && e.code === 'INVALID_STATE_TRANSITION')
     return {
-      text: 'El pedido está cerrado (o se cerró mientras tanto): ya no se puede elegir una propuesta. Se recargó la ficha.',
+      text: 'El pedido está cerrado (o se cerró mientras tanto): ya no se puede elegir una propuesta. No se guardó nada: se recargó la ficha.',
       action: 'reload',
     }
   if (e.status === 400)
@@ -306,7 +317,7 @@ export function readableDeclareOutcomeError(cause: unknown): ReadableQuoteUserFl
   const common = commonError(raw, e, 'POST /admin/quote-requests/:id/user-outcome')
   if (common || !e) return common
 
-  if (e.status === 409)
+  if (e.status === 400 && e.code === 'INVALID_STATE_TRANSITION')
     return {
       text: 'Este pedido no admite declarar el resultado: todavía no tiene respuesta del equipo, o la persona lo canceló desde la app. No se guardó nada: se recargó la ficha.',
       action: 'reload',

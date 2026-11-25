@@ -358,9 +358,10 @@ async function backendError(
   /**
    * Modo `quoteUserFlow` — opt-in, lo usan sólo las dos acciones de «Completar
    * en nombre de la persona» (elegir la propuesta y declarar si fue). Mismo
-   * formato que `quotePlate`: el 404 tiene dos codes (`QUOTE_REQUEST_NOT_FOUND`
-   * / `QUOTE_PROPOSAL_NOT_FOUND`) más el «Cannot PUT|POST» del backend sin
-   * desplegar, y el 409 dice "el pedido no admite esto". Lo lee
+   * formato que `quotePlate`: el 404 tiene dos codes (`NOT_FOUND` = pedido
+   * inexistente o sin cuenta / `QUOTE_PROPOSAL_NOT_FOUND`) más el «Cannot
+   * PUT|POST» del backend sin desplegar; el 400 `INVALID_STATE_TRANSITION`
+   * dice "el pedido no admite esto" y el 409 `CONFLICT` es sólo una carrera. Lo lee
    * `parseQuoteUserFlowError` de `~/lib/quote-user-flow`.
    */
   if (opts.quoteUserFlow) {

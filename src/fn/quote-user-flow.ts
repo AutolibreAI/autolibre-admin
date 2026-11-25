@@ -20,7 +20,7 @@ import { adminMiddleware } from './middleware'
  * a nombre de una persona) y el guard de `quote_requests` ANTES del fetch.
  *
  * Ni la cuenta, ni el estado, ni `answered_at` se re-chequean acá: los decide
- * el backend atómico con la escritura (409). La UI ni ofrece lo que rebota
+ * el backend atómico con la escritura (400 `INVALID_STATE_TRANSITION`; sin cuenta, 404 `NOT_FOUND`). La UI ni ofrece lo que rebota
  * (`canSelectProposalOnBehalf` / `canDeclareOutcomeOnBehalf`), pero chequearlo
  * de nuevo por SQL sería una carrera más, no una garantía.
  *
