@@ -344,8 +344,8 @@ export const quoteRequestSearchSchema = z.object({
   /** Sólo abiertos, sin `contacted_at`, con más de `QUOTE_UNCONTACTED_AFTER_HOURS`. */
   quoteUncontacted: z.coerce.boolean().catch(false).default(false),
   /**
-   * Flujo de la persona incompleto: con cuenta, respondido, sin `user_outcome`
-   * y no cancelado por ella — a quién hay que llamar para completar en su
+   * Flujo de la persona incompleto: respondido, sin `user_outcome` y no
+   * cancelado por ella, con cuenta o sin ella (desde 2026-11-25) — a quién hay que llamar para completar en su
    * nombre (`~/lib/quote-user-flow`, `hasIncompleteUserFlow`, mismo corte).
    * Incluye los cerrados por el operador: ahí también se puede declarar.
    */

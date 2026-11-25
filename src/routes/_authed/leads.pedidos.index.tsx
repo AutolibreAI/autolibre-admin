@@ -273,7 +273,7 @@ function Pedidos() {
               )
             }
           >
-            Flujo incompleto (con cuenta, sin decir si fue)
+            Flujo incompleto (respondido, sin decir si fue)
           </Chip>
         </FilterGroup>
 
