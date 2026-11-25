@@ -1,5 +1,5 @@
 import { TargetActionField } from '~/components/TargetActionField'
-import { setSendTargetMock } from '~/mocks/notification-targets'
+import { setNotificationTargetFn } from '~/fn/notification-targets'
 import type { EffectAction } from '~/lib/notification-effect'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -249,8 +249,15 @@ export function BroadcastComposer({
         readError = readableBroadcastError(cause)
       }
 
-      // El envío salió: recién ahí el objetivo queda atado a SU broadcastId.
-      setSendTargetMock(id, target)
+      // El envío salió: recién ahí el objetivo queda atado a SU broadcastId (ops, 040).
+      // Si no se pudo guardar, el envío igual salió: se avisa en `readError`.
+      if (target) {
+        try {
+          await setNotificationTargetFn({ data: { kind: 'envio', refId: id, action: target } })
+        } catch {
+          readError = (readError ? `${readError} ` : '') + 'No se pudo guardar el objetivo: cargalo en «Efecto».'
+        }
+      }
 
       setResult({ broadcastId: id, selected, scheduledAt: scheduledAt ?? null, summary, readError })
 

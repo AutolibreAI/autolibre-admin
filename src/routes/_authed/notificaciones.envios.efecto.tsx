@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { getSendTargetMock, setSendTargetMock } from '~/mocks/notification-targets'
+import { getSendTargetsFn, setNotificationTargetFn } from '~/fn/notification-targets'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { getNotificationEffect, listNotificationCampaigns } from '~/fn/notifications'
@@ -48,7 +48,12 @@ import type { EffectAction, NotificationEffect } from '~/lib/notification-effect
  */
 export const Route = createFileRoute('/_authed/notificaciones/envios/efecto')({
   ssr: 'data-only',
-  loader: ({ abortController }) => listNotificationCampaigns({ data: {}, signal: abortController.signal }),
+  loader: async ({ abortController }) => {
+    const signal = abortController.signal
+    const campaigns = await listNotificationCampaigns({ data: {}, signal })
+    const targets = await getSendTargetsFn({ data: { broadcastIds: campaigns.map((c) => c.broadcastId) }, signal })
+    return { campaigns, targets }
+  },
   head: () => ({ meta: [{ title: 'Envíos · Efecto — AutoLibre' }] }),
   component: EffectPage,
 })
@@ -57,7 +62,7 @@ const pct = (v: number | null) => (v === null ? '—' : `${v.toFixed(1).replace(
 const pts = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1).replace('.', ',')}`
 
 function EffectPage() {
-  const campaigns = Route.useLoaderData()
+  const { campaigns, targets } = Route.useLoaderData()
   const sent = campaigns.filter((c) => c.sentAt !== null)
 
   return (
@@ -76,11 +81,13 @@ function EffectPage() {
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
-      <MockBanner
-        items={[
-          'Todos los números son reales. Lo único que falta en el backend es GUARDAR la acción objetivo de cada envío: se carga en el formulario del envío («Objetivo») o acá por fila, y se pierde al recargar.',
-        ]}
-      />
+      {!targets.available && (
+        <MockBanner
+          items={[
+            'Todos los números son reales. Falta aplicar la migración 040 para GUARDAR el objetivo de cada envío: hasta entonces se elige acá por fila y se pierde al recargar.',
+          ]}
+        />
+      )}
 
       {sent.length === 0 ? (
         <div className="rounded-lg border border-border bg-card px-6 py-16 text-center text-sm text-muted-foreground">
@@ -107,7 +114,7 @@ function EffectPage() {
             </TableHeader>
             <TableBody>
               {sent.map((c) => (
-                <EffectRow key={c.broadcastId} campaign={c} />
+                <EffectRow key={c.broadcastId} campaign={c} saved={targets.targets[c.broadcastId] ?? null} canSave={targets.available} />
               ))}
             </TableBody>
           </Table>
@@ -135,14 +142,24 @@ function EffectPage() {
   )
 }
 
-function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
-  const [saved] = useState(() => getSendTargetMock(c.broadcastId))
-  const [action, setActionState] = useState<EffectAction>(() => saved ?? guessAction(c))
+function EffectRow({
+  campaign: c,
+  saved,
+  canSave,
+}: {
+  campaign: CampaignListItem
+  saved: { action: EffectAction; source: 'envio' | 'programado' } | null
+  canSave: boolean
+}) {
+  const [action, setActionState] = useState<EffectAction>(() => saved?.action ?? guessAction(c))
   const [fromSend, setFromSend] = useState(saved !== null)
+  const [saveError, setSaveError] = useState(false)
   const setAction = (next: EffectAction) => {
     setActionState(next)
-    setSendTargetMock(c.broadcastId, next)
     setFromSend(true)
+    setSaveError(false)
+    if (canSave)
+      setNotificationTargetFn({ data: { kind: 'envio', refId: c.broadcastId, action: next } }).catch(() => setSaveError(true))
   }
   const [effect, setEffect] = useState<NotificationEffect | null>(null)
   const [error, setError] = useState(false)
@@ -201,8 +218,15 @@ function EffectRow({ campaign: c }: { campaign: CampaignListItem }) {
           </SelectContent>
         </Select>
         <p className="mt-1 text-xs italic text-muted-foreground">
-          {fromSend ? 'Objetivo cargado (de ejemplo, en memoria)' : 'Deducido del texto'}
+          {!fromSend
+            ? 'Deducido del texto (elegí uno para guardarlo)'
+            : !canSave
+              ? 'Elegido acá (no se guarda: falta la 040)'
+              : saved?.source === 'programado' && saved.action === action
+                ? 'Heredado de la regla'
+                : 'Objetivo guardado'}
         </p>
+        {saveError ? <p className="mt-1 text-xs text-destructive">No se pudo guardar el objetivo.</p> : null}
         {error ? <p className="mt-1 text-xs text-destructive">No pudimos calcularlo.</p> : null}
         {effect && !effect.available ? (
           <p className="mt-1 text-xs text-muted-foreground">Esta base no tiene pedidos.</p>

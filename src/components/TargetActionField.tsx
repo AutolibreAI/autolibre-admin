@@ -9,8 +9,8 @@ const NONE = 'none'
  * haga. Las opciones son EXACTAMENTE las que mide la pantalla de efecto
  * (`EFFECT_ACTIONS`): un objetivo que no se puede medir no tiene a dónde ir.
  *
- * Hoy se guarda en memoria (`~/mocks/notification-targets`) y lo dice: no hay
- * columna en el backend todavía.
+ * Se guarda en `ops.notification_target` (migración 040); los envíos de una
+ * regla lo heredan.
  */
 export function TargetActionField({
   id,

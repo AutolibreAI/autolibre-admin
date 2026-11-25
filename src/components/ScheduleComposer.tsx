@@ -10,7 +10,7 @@ import {
 } from '~/components/ScheduleForm'
 import { TargetActionField } from '~/components/TargetActionField'
 import { Button } from '~/components/ui/button'
-import { setScheduleTargetMock } from '~/mocks/notification-targets'
+import { setNotificationTargetFn } from '~/fn/notification-targets'
 import type { EffectAction } from '~/lib/notification-effect'
 import {
   Sheet,
@@ -68,7 +68,7 @@ export function ScheduleComposer() {
         },
       })
       // Cada envío que dispare la regla hereda este objetivo.
-      setScheduleTargetMock(result.id, target)
+      if (target) await setNotificationTargetFn({ data: { kind: 'programado', refId: result.id, action: target } })
       setCreated({ id: result.id, name: result.name })
       void router.invalidate()
     } catch (cause) {

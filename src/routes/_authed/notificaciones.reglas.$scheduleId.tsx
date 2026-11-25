@@ -13,7 +13,7 @@ import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { ScheduleForm, scheduleFormReady, type ScheduleFormValues } from '~/components/ScheduleForm'
 import { TargetActionField } from '~/components/TargetActionField'
 import { Button } from '~/components/ui/button'
-import { getScheduleTargetMock, setScheduleTargetMock } from '~/mocks/notification-targets'
+import { getScheduleTargetFn, setNotificationTargetFn } from '~/fn/notification-targets'
 import type { EffectAction } from '~/lib/notification-effect'
 import { Badge } from '~/components/ui/badge'
 
@@ -40,7 +40,8 @@ export const Route = createFileRoute('/_authed/notificaciones/reglas/$scheduleId
     })
 
     if (!schedule) throw notFound()
-    return schedule
+    const target = await getScheduleTargetFn({ data: { scheduleId: schedule.id }, signal: abortController.signal })
+    return { ...schedule, target: target.action }
   },
   head: ({ loaderData }) => ({
     meta: [{ title: `${loaderData?.name ?? 'Regla'} — AutoLibre` }],
@@ -72,8 +73,8 @@ function ScheduleDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
-  /** Mock en memoria: la columna no existe todavía. Los envíos de la regla lo heredan. */
-  const [target, setTarget] = useState<EffectAction | null>(() => getScheduleTargetMock(schedule.id))
+  /** `ops.notification_target` (040). Los envíos de la regla lo heredan. */
+  const [target, setTarget] = useState<EffectAction | null>(() => schedule.target)
 
   async function save() {
     if (!scheduleFormReady(values) || busy) return
@@ -96,7 +97,7 @@ function ScheduleDetailPage() {
           excludeInternal: values.excludeInternal,
         },
       })
-      setScheduleTargetMock(schedule.id, target)
+      await setNotificationTargetFn({ data: { kind: 'programado', refId: schedule.id, action: target } })
       await router.invalidate()
       setSaved(true)
     } catch (cause) {

@@ -80,6 +80,11 @@ cabecera · la extensión sólo con confirmación de la persona.
   `POST /notifications/broadcast` acepte `targetAction` y lo guarde, y que las reglas lo lleven
   para que **cada envío que disparan lo herede**. Al 06/11/26 `notification_sends` no existe en
   producción ni en el backend; el panel lo guarda en un mock en memoria.
+  **Resuelto en el panel el 25/11/26, sin backend:** el objetivo del envío puntual y de las reglas
+  del panel se guarda en `ops.notification_target` (migración 040 del panel), y cada envío de una
+  regla lo hereda por la corrida (`batch_id` → regla). Del backend ya no hace falta nada para esto;
+  sólo si algún día las **automatizaciones** (hoy mock) o las reglas de vencimiento del backend
+  necesitan objetivo.
 - [ ] Opcional: `notifications.read_at` (hoy se sabe si la leyó, nunca cuándo) y los eventos de
   Brevo (aperturas y clics del mail).
 
