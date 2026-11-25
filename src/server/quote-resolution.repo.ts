@@ -3,7 +3,7 @@ import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
 import { quoteProposalsAvailability } from './quote-proposals.repo'
 import { notDuplicatePredicate } from './quote-requests.repo'
-import { QUOTE_USER_FLOW_COLUMNS, quoteUserFlowProvenanceAvailable } from './quote-user-flow.repo'
+import { QUOTE_USER_FLOW_COLUMNS, quoteUserFlowColumnsAvailability } from './quote-user-flow.repo'
 import { AI_SERVICE_LOW_SCORE } from '~/lib/quote-requests'
 import type {
   QuoteResolutionPartnerOption,
@@ -29,9 +29,9 @@ import { userOutcomeReporter, type QuoteUserFlowSource } from '~/lib/quote-user-
  *
  * - propuestas (0120–0122): `quoteProposalsAvailability()` — NO `to_regclass`,
  *   producción tuvo la tabla vieja;
- * - procedencia, fecha del trabajo y autor (0169):
- *   `quoteUserFlowProvenanceAvailable()`, con los nombres de
- *   `QUOTE_USER_FLOW_COLUMNS` (la única fuente);
+ * - procedencia, fecha del trabajo y autor (0169), y aparte el motivo y la
+ *   observación de «No fue»: `quoteUserFlowColumnsAvailability()`, con los
+ *   nombres de `QUOTE_USER_FLOW_COLUMNS` (la única fuente);
  * - servicios del operador (0155), rubros de `ops` (013/016) y servicios de la
  *   IA (0124): `to_regclass` / `information_schema`, como la ficha.
  *
@@ -45,15 +45,16 @@ const toIso = (v: unknown): string | null =>
 interface Pieces {
   proposals: boolean
   userFlow: boolean
+  notHired: boolean
   operatorServices: boolean
   rubros: boolean
   ai: boolean
 }
 
 async function availablePieces(): Promise<Pieces> {
-  const [proposals, userFlow, tables] = await Promise.all([
+  const [proposals, userFlowColumns, tables] = await Promise.all([
     quoteProposalsAvailability(),
-    quoteUserFlowProvenanceAvailable(),
+    quoteUserFlowColumnsAvailability(),
     sqlOne<{ operator_services: boolean; rubros: boolean; ai: boolean }>(
       `select to_regclass('public.quote_request_operator_services') is not null as operator_services,
               to_regclass('ops.quote_request_rubro') is not null as rubros,
@@ -65,7 +66,8 @@ async function availablePieces(): Promise<Pieces> {
   ])
   return {
     proposals,
-    userFlow,
+    userFlow: userFlowColumns.provenance,
+    notHired: userFlowColumns.notHired,
     operatorServices: tables?.operator_services === true,
     rubros: tables?.rubros === true,
     ai: tables?.ai === true,
@@ -125,6 +127,9 @@ function selectPieces(p: Pieces): { columns: string; joins: string } {
     : `null::text as outcome_source, null::uuid as declared_by,
        null::text as declared_by_name, null::text as declared_by_email, null::text as performed_on`
   const flowJoins = p.userFlow ? `left join users ob on ob.id = qr.${c.outcomeDeclaredBy}` : ''
+  const notHired = p.notHired
+    ? `qr.${c.notHiredReason}::text as not_hired_reason, qr.${c.notHiredNote} as not_hired_note`
+    : `null::text as not_hired_reason, null::text as not_hired_note`
 
   return {
     columns: `,
@@ -132,7 +137,8 @@ function selectPieces(p: Pieces): { columns: string; joins: string } {
       ${rubros} as op_rubros,
       ${ai} as ai_services,
       ${proposals},
-      ${flow}`,
+      ${flow},
+      ${notHired}`,
     joins: `${proposalJoins}\n${flowJoins}`,
   }
 }
@@ -176,6 +182,8 @@ interface ResolutionRow {
   declared_by_name: string | null
   declared_by_email: string | null
   performed_on: string | null
+  not_hired_reason: string | null
+  not_hired_note: string | null
   status: string
   close_reason_code: string | null
   closed_at: Date | string | null
@@ -211,6 +219,8 @@ function mapRow(r: ResolutionRow, userFlowAvailable: boolean): QuoteResolutionRo
     selectedProviderName: r.selected_provider_name,
     selectedPartnerId: r.selected_partner_id,
     performedOn: r.performed_on,
+    notHiredReason: r.not_hired_reason,
+    notHiredNote: r.not_hired_note,
     reporter: userOutcomeReporter({
       hasValue: r.user_outcome !== null,
       hasAccount: r.has_account,
@@ -232,6 +242,7 @@ export interface QuoteResolutionListing {
   truncated: boolean
   proposalsAvailable: boolean
   userFlowAvailable: boolean
+  notHiredAvailable: boolean
 }
 
 /**
@@ -263,6 +274,14 @@ export async function listQuoteResolution(
 
   if (search.resOutcome === 'unasked') where.push('outcome is null')
   else if (search.resOutcome !== 'all') where.push(`outcome = ${param(search.resOutcome)}`)
+
+  // Sin la migración del motivo, el filtro se ignora (la pantalla no lo ofrece).
+  // Cualquier valor acota a «No fue»: un motivo sólo existe ahí.
+  if (pieces.notHired && search.resNotHiredReason !== 'all') {
+    where.push(`user_outcome = 'not_hired'`)
+    if (search.resNotHiredReason === 'none') where.push('not_hired_reason is null')
+    else where.push(`not_hired_reason = ${param(search.resNotHiredReason)}`)
+  }
 
   // Sin propuestas en la base no hay taller elegido que filtrar: se ignora (la
   // pantalla no ofrece el filtro), en vez de vaciar la lista.
@@ -325,6 +344,7 @@ export async function listQuoteResolution(
     truncated: rows.length > opts.limit,
     proposalsAvailable: pieces.proposals,
     userFlowAvailable: pieces.userFlow,
+    notHiredAvailable: pieces.notHired,
   }
 }
 

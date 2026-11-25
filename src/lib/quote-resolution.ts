@@ -12,7 +12,12 @@ import {
   quoteUserOutcomeLabel,
   type QuoteRequestsAvailability,
 } from '~/lib/quote-requests'
-import { userOutcomeReporterLabel, type UserOutcomeReporter } from '~/lib/quote-user-flow'
+import {
+  QUOTE_NOT_HIRED_REASONS,
+  quoteNotHiredReasonLabel,
+  userOutcomeReporterLabel,
+  type UserOutcomeReporter,
+} from '~/lib/quote-user-flow'
 
 /**
  * «Resolución de pedidos» — `/leads/pedidos/resolucion`. Una fila por pedido
@@ -43,6 +48,14 @@ export type QuoteResolutionUserOutcomeFilter = (typeof QUOTE_RESOLUTION_USER_OUT
  * Taller elegido: `all`, `none` (sin propuesta elegida), `external` (la
  * elegida es de un taller de afuera del directorio) o el uuid de un partner.
  */
+/**
+ * Motivo de «No fue»: `all`, `none` («Sin motivo»: dijo que no fue y no hay
+ * motivo cargado) o uno del enum. Cualquiera distinto de `all` acota a
+ * `user_outcome = 'not_hired'`: un motivo sólo existe con «No fue».
+ */
+export const QUOTE_RESOLUTION_NOT_HIRED_REASON_FILTERS = ['all', 'none', ...QUOTE_NOT_HIRED_REASONS] as const
+export type QuoteResolutionNotHiredReasonFilter = (typeof QUOTE_RESOLUTION_NOT_HIRED_REASON_FILTERS)[number]
+
 export const QUOTE_RESOLUTION_PARTNER_SPECIAL = ['all', 'none', 'external'] as const
 
 /** Cada clave mapea a una expresión cerrada en `SORT_COLUMNS` de `quote-resolution.repo.ts`. */
@@ -66,6 +79,7 @@ export const quoteResolutionSearchSchema = z.object({
   resUserOutcome: z.enum(QUOTE_RESOLUTION_USER_OUTCOME_FILTERS).catch('all').default('all'),
   /** `unasked` = el equipo todavía no registró resultado. */
   resOutcome: z.enum(QUOTE_OUTCOME_FILTERS).catch('all').default('all'),
+  resNotHiredReason: z.enum(QUOTE_RESOLUTION_NOT_HIRED_REASON_FILTERS).catch('all').default('all'),
   resPartner: z.union([z.enum(QUOTE_RESOLUTION_PARTNER_SPECIAL), z.uuid()]).catch('all').default('all'),
   /** Día del pedido, en hora de Buenos Aires, inclusive. Un valor mal formado se descarta. */
   resFrom: z.string().regex(DAY).optional().catch(undefined),
@@ -109,6 +123,10 @@ export interface QuoteResolutionRow {
   selectedPartnerId: string | null
   /** `YYYY-MM-DD`, sólo con «Fue» declarado por el equipo. */
   performedOn: string | null
+  /** Motivo de «No fue» (valor crudo del enum). `null` = sin motivo o sin la migración. */
+  notHiredReason: string | null
+  /** Observación de «No fue». */
+  notHiredNote: string | null
   reporter: UserOutcomeReporter
   status: string
   closeReasonCode: string | null
@@ -138,6 +156,8 @@ export type QuoteResolutionResult =
       proposalsAvailable: boolean
       /** Sin la 0169 del backend no hay fecha del trabajo ni quién informó. */
       userFlowAvailable: boolean
+      /** Sin la migración del motivo de «No fue» no hay motivo ni observación (ni filtro). */
+      notHiredAvailable: boolean
     }
 
 export const QUOTE_RESOLUTION_SERVICES_SOURCE_LABELS: Record<QuoteResolutionServicesSource, string> = {
@@ -167,6 +187,8 @@ export function quoteResolutionCsv(rows: ReadonlyArray<QuoteResolutionRow>, publ
     'Propuestas activas',
     'Resultado según el cliente',
     'Resultado según el equipo',
+    'Motivo (no fue)',
+    'Observación',
     'Taller elegido',
     'Fecha del trabajo',
     'Quién informó',
@@ -188,6 +210,8 @@ export function quoteResolutionCsv(rows: ReadonlyArray<QuoteResolutionRow>, publ
     r.activeProposals,
     r.userOutcome ? quoteUserOutcomeLabel(r.userOutcome) : 'No declaró',
     r.outcome ? quoteOutcomeLabel(r.outcome) : 'Sin registrar',
+    r.notHiredReason ? quoteNotHiredReasonLabel(r.notHiredReason) : null,
+    r.notHiredNote,
     r.selectedProviderName,
     r.performedOn,
     userOutcomeReporterLabel(r.reporter),

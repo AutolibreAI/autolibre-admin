@@ -25,7 +25,12 @@ import {
   type QuoteResolutionSearch,
   type QuoteResolutionSortKey,
 } from '~/lib/quote-resolution'
-import { userOutcomeReporterLabel } from '~/lib/quote-user-flow'
+import {
+  QUOTE_NOT_HIRED_REASONS,
+  QUOTE_NOT_HIRED_REASON_LABELS,
+  quoteNotHiredReasonLabel,
+  userOutcomeReporterLabel,
+} from '~/lib/quote-user-flow'
 import { exportQuoteResolutionFn, listQuoteResolutionFn } from '~/fn/quote-resolution'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup, RangeFilter } from '~/components/Filters'
@@ -109,7 +114,7 @@ function ResolutionPage() {
     )
   }
 
-  const { rows, truncated, partnerOptions, proposalsAvailable, userFlowAvailable } = result
+  const { rows, truncated, partnerOptions, proposalsAvailable, userFlowAvailable, notHiredAvailable } = result
 
   const setSearch = (next: Partial<QuoteResolutionSearch>) =>
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
@@ -129,13 +134,16 @@ function ResolutionPage() {
         taller, entrá a la ficha. Fechas en hora de Buenos Aires.
       </p>
 
-      {!proposalsAvailable || !userFlowAvailable ? (
+      {!proposalsAvailable || !userFlowAvailable || !notHiredAvailable ? (
         <p className="mb-4 rounded-md border border-status-yellow/30 bg-status-yellow-bg px-3 py-2 text-xs leading-relaxed text-status-yellow">
           {!proposalsAvailable
             ? 'Esta base no tiene las propuestas del backend (0120–0122): sin cantidad de propuestas ni taller elegido. '
             : ''}
           {!userFlowAvailable
-            ? 'Esta base no tiene la migración 0169 del backend: sin fecha del trabajo ni quién informó el resultado.'
+            ? 'Esta base no tiene la migración 0169 del backend: sin fecha del trabajo ni quién informó el resultado. '
+            : ''}
+          {!notHiredAvailable
+            ? 'Esta base no tiene la migración del motivo de «No fue» del backend: sin motivo ni observación (ni su filtro).'
             : ''}
         </p>
       ) : null}
@@ -145,6 +153,7 @@ function ResolutionPage() {
         setSearch={setSearch}
         partnerOptions={partnerOptions}
         proposalsAvailable={proposalsAvailable}
+        notHiredAvailable={notHiredAvailable}
       />
 
       {rows.length === 0 ? (
@@ -163,6 +172,8 @@ function ResolutionPage() {
                 <Sort label="Propuestas" sortKey="proposals" search={search} align="right" firstClick="desc" />
                 <Sort label="Resultado según el cliente" sortKey="userOutcome" search={search} />
                 <Sort label="Resultado según el equipo" sortKey="outcome" search={search} />
+                <TableHead>Motivo (no fue)</TableHead>
+                <TableHead>Observación</TableHead>
                 <Sort label="Taller elegido" sortKey="partner" search={search} />
                 <Sort label="Fecha del trabajo" sortKey="performedOn" search={search} firstClick="desc" />
                 <TableHead>Quién informó</TableHead>
@@ -216,11 +227,13 @@ function Filters({
   setSearch,
   partnerOptions,
   proposalsAvailable,
+  notHiredAvailable,
 }: {
   search: QuoteResolutionSearch
   setSearch: (next: Partial<QuoteResolutionSearch>) => void
   partnerOptions: Array<QuoteResolutionPartnerOption>
   proposalsAvailable: boolean
+  notHiredAvailable: boolean
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-end gap-5">
@@ -265,6 +278,36 @@ function Filters({
           Sin registrar
         </Chip>
       </FilterGroup>
+
+      {/*
+        Motivo de «No fue». Cualquier opción distinta de «Todos» acota a «No fue»
+        (un motivo sólo existe ahí); «Sin motivo» = no fue y no se cargó motivo.
+        Sin la migración no se ofrece y el servidor lo ignora.
+      */}
+      {notHiredAvailable ? (
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Motivo (no fue)
+          </span>
+          <Select
+            value={search.resNotHiredReason}
+            onValueChange={(v) => setSearch({ resNotHiredReason: v as QuoteResolutionSearch['resNotHiredReason'] })}
+          >
+            <SelectTrigger className="h-8 w-56" aria-label="Motivo (no fue)">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="none">Sin motivo</SelectItem>
+              {QUOTE_NOT_HIRED_REASONS.map((r) => (
+                <SelectItem key={r} value={r}>
+                  {QUOTE_NOT_HIRED_REASON_LABELS[r]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       {/* Sin propuestas en la base no hay taller elegido: el filtro no se ofrece y el servidor lo ignora. */}
       {proposalsAvailable ? (
@@ -426,6 +469,14 @@ function ResolutionRow({ row: r }: { row: QuoteResolutionRow }) {
 
       <TableCell className="whitespace-nowrap">
         {r.outcome ? quoteOutcomeLabel(r.outcome) : <Muted>Sin registrar</Muted>}
+      </TableCell>
+
+      <TableCell className="whitespace-nowrap">
+        {r.notHiredReason ? quoteNotHiredReasonLabel(r.notHiredReason) : <Muted />}
+      </TableCell>
+
+      <TableCell className="max-w-[16rem]">
+        {r.notHiredNote ? <p className="line-clamp-3 whitespace-pre-wrap text-xs">{r.notHiredNote}</p> : <Muted />}
       </TableCell>
 
       <TableCell className="max-w-[12rem]">
