@@ -181,6 +181,34 @@ llamándose `responseCount` y el sort `responses`, por compatibilidad de links.
 2d red vs afuera) sale de `ops.quote_request_response` (`metricas.md`), así que desde esta fecha deja de
 crecer. Pasarla a `quote_request_proposals` es trabajo aparte.
 
+## Completar el flujo de la persona en su nombre (2026-11-25, rama `feat/quotes-operator-completes-user-flow`)
+
+El equipo llama a la persona y carga desde la ficha los dos pasos que dejó sin hacer en la app.
+Alcance: `src/lib/quote-user-flow.ts` (reglas, payloads, errores — testeado en
+`tests/quote-user-flow.test.ts`), `src/server/quote-user-flow.repo.ts`, `src/fn/quote-user-flow.ts`,
+`src/components/QuoteUserFlow.tsx`, el modo `{ quoteUserFlow: true }` de `backendError`.
+
+- **Elegir**: «Marcar como elegida por el usuario» en cada propuesta activa no elegida →
+  `PUT /admin/quote-requests/:id/selected-proposal` `{proposalId}`. Sólo con cuenta y sin cerrar.
+- **Declarar si fue**: tarjeta «¿Fue al taller?» → `POST /admin/quote-requests/:id/user-outcome`
+  `{outcome, performedOn?}`. Fue / No fue / Todavía no; con «Fue», la fecha real es obligatoria
+  (min = día del pedido, max = hoy, en hora de Buenos Aires). Con cuenta, con `answered_at` y no
+  cancelado por la persona — **sí** con el pedido cerrado por el operador.
+- **Reseñar en su nombre: NUNCA.** No hay ni va a haber acción para eso.
+- **Sin cuenta: ninguna acción.** Se cierran como siempre (`ops.close_quote_request` + nota). Un
+  taller que no estaba entre las propuestas va en nota interna, no se modela.
+- **Procedencia**: «Cargado por el equipo (admin, fecha)» vs «Declarado por la persona en la app»,
+  junto a la elegida, al resultado (estado y tarjeta) y en el recorrido. Columnas del backend
+  **con nombres tentativos**, centralizados en `QUOTE_USER_FLOW_COLUMNS` del repo: si cambian, se
+  cambia ese objeto. Sin ellas en la base (guard por `information_schema`, mismo patrón que
+  `quoteProposalsAvailability`) la ficha anda y dice «falta la migración del backend». Una fila con
+  dato y sin fuente es anterior a la migración: se lee como la persona (era el único camino).
+- **Listado**: chip «Flujo incompleto» en `/leads/pedidos` (Atención) — mismo corte que
+  `hasIncompleteUserFlow`; prenderlo pasa el estado a «Todos».
+- Relación con `QuoteClosureCard` / `/leads/pedidos/cierres` (b2c5e45, mocks): aquel diseña un cierre
+  más rico (con quién, monto, disputa). Esto no lo conecta ni lo borra: carga los dos datos que ya
+  existen, que son los que esa tarjeta lee como «lo real».
+
 ## Cómo verificar un cambio acá
 
 `pnpm typecheck`. El recorrido real (enviar, precargar, corregir, retirar,
