@@ -34,6 +34,8 @@ import {
   getVehicleDistribution,
 } from '~/fn/ops'
 import { getQuoteRequestSeriesFn } from '~/fn/quote-requests'
+import { getQuoteOriginWeeklyFn } from '~/fn/quote-origins'
+import { quoteSourceLabel, sourceOrder, type QuoteOriginWeekly } from '~/lib/quote-origins'
 import { getVehicleLocationBreakdownFn } from '~/fn/vehicles'
 import { VehicleLocationSection } from '~/components/VehicleLocationBreakdown'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
@@ -105,6 +107,7 @@ export const Route = createFileRoute('/_authed/metricas/')({
       locations,
       channels,
       activeUsers,
+      origins,
     ] = await Promise.all([
       getOpsPulse({ signal }),
       getUsageAdoption({ signal }),
@@ -119,6 +122,7 @@ export const Route = createFileRoute('/_authed/metricas/')({
       getVehicleLocationBreakdownFn({ signal }),
       getChannelPeople({ data: deps, signal }),
       getActiveUsersSeries({ data: deps, signal }),
+      getQuoteOriginWeeklyFn({ signal }),
     ])
     return {
       pulse,
@@ -134,6 +138,7 @@ export const Route = createFileRoute('/_authed/metricas/')({
       locations,
       channels,
       activeUsers,
+      origins,
     }
   },
 
@@ -175,6 +180,7 @@ function MetricasPage() {
     locations,
     channels,
     activeUsers,
+    origins,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -333,6 +339,7 @@ function MetricasPage() {
         </p>
 
         <div className="space-y-2">
+          <QuoteOriginBlock data={origins} />
           <MetricBlock
             title="Dónde están radicados"
             hint={`${formatInt(locations.totalVehicles)} autos activos`}
@@ -1193,5 +1200,65 @@ function ChannelPeopleTable({ data }: { data: ChannelPeople }) {
         </Table>
       </div>
     </section>
+  )
+}
+
+/**
+ * Pedidos por origen, por semana (tarjeta «Trazabilidad»). El origen sólo lo
+ * declara quien carga un pedido a mano (036); lo que entró solo va por canal,
+ * aparte. → `~/server/quote-origins.repo`
+ */
+function QuoteOriginBlock({ data }: { data: QuoteOriginWeekly }) {
+  if (!data.available) return null
+  const sources = [...new Set(data.rows.map((r) => r.source))].sort((a, b) => sourceOrder(a) - sourceOrder(b) || a.localeCompare(b))
+  const weeks = [...new Set(data.rows.map((r) => r.week))].sort().reverse()
+  const cell = new Map(data.rows.map((r) => [`${r.week}|${r.source}`, r.count]))
+  const total = data.rows.reduce((s, r) => s + r.count, 0)
+  const dm = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`
+  return (
+    <MetricBlock title="Pedidos por origen, por semana" hint={`${formatInt(total)} pedidos en las últimas 12 semanas`}>
+      <p className="mb-2 text-xs text-muted-foreground">
+        El origen lo elige quien carga el pedido a mano («Cargar pedido»). Lo que entró solo por la app, la web o WhatsApp
+        no declara origen y va por canal. Sin duplicados ni pruebas. Semana de lunes a domingo, hora de Buenos Aires.
+        {!data.originAvailable && ' Falta la migración 036: todo lo cargado a mano sale «sin origen».'}
+      </p>
+      {weeks.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Sin pedidos en el período.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                <th className="py-1 pr-3 font-medium">Semana del</th>
+                {sources.map((src) => (
+                  <th key={src} className="py-1 pr-3 text-right font-medium">
+                    {quoteSourceLabel(src)}
+                  </th>
+                ))}
+                <th className="py-1 text-right font-medium">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {weeks.map((w) => (
+                <tr key={w} className="border-b border-border last:border-0">
+                  <td className="py-1 pr-3 tabular-nums">{dm(w)}</td>
+                  {sources.map((src) => {
+                    const n = cell.get(`${w}|${src}`) ?? 0
+                    return (
+                      <td key={src} className={cn('py-1 pr-3 text-right tabular-nums', n === 0 && 'text-muted-foreground')}>
+                        {n}
+                      </td>
+                    )
+                  })}
+                  <td className="py-1 text-right font-medium tabular-nums">
+                    {sources.reduce((a, src) => a + (cell.get(`${w}|${src}`) ?? 0), 0)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </MetricBlock>
   )
 }
