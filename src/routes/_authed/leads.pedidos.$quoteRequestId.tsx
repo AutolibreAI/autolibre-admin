@@ -40,6 +40,9 @@ import { QuoteUserLinker } from '~/components/QuoteUserLinker'
 import { whatsappOptInMock } from '~/mocks/quote-whatsapp-opt-in'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
+import { MarkProposalSelectedButton, QuoteUserFlowProvenanceLine, QuoteUserOutcomeCard } from '~/components/QuoteUserFlow'
+import { getQuoteUserFlowProvenanceFn } from '~/fn/quote-user-flow'
+import type { QuoteUserFlowProvenance } from '~/lib/quote-user-flow'
 import { PartnerDispatch } from '~/components/PartnerDispatch'
 import { getDispatchPartnerFactsFn, getPartnerDispatchFn } from '~/fn/partner-dispatch'
 import { familiesOfServices } from '~/lib/quote-services'
@@ -130,6 +133,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
         proposals: { available: false as const },
         dispatch: { available: false as const },
         dispatchFacts: null,
+        userFlow: { available: false } as QuoteUserFlowProvenance,
       }
 
     // Los presupuestos viejos de `ops` ya no tienen tarjeta (2026-10-27): se
@@ -145,7 +149,9 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
     // en una base sin ellas vuelven `{ available: false }`, nunca un 500.
     // El despacho por WhatsApp (0142) va por HTTP y devuelve borrador y
     // seguimiento como resultados propios: nunca tira, así que no frena la ficha.
-    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals, dispatch, dispatchFacts] = await Promise.all([
+    // La procedencia de la elección y del resultado (quién los cargó): sin las
+    // columnas del backend vuelve `{ available: false }`, nunca un 500.
+    const [catalog, zones, responses, partnerOptions, templates, vehicleProfile, photos, proposals, dispatch, dispatchFacts, userFlow] = await Promise.all([
       getServiceCatalog({ signal }),
       listPartnerZonesFn({ signal }),
       listQuoteResponsesFn({ data: params, signal }),
@@ -160,6 +166,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       // Plan y propuestas del mes de cada taller, para la lista del despacho.
       // Si falla, la tarjeta se muestra igual sin esos datos.
       getDispatchPartnerFactsFn({ signal }).catch(() => null),
+      getQuoteUserFlowProvenanceFn({ data: params, signal }),
     ])
 
     // Precedencia (`.claude/rules/leads.md` / el plan §5, trampa 6): el search
@@ -209,6 +216,7 @@ export const Route = createFileRoute('/_authed/leads/pedidos/$quoteRequestId')({
       proposals,
       dispatch,
       dispatchFacts,
+      userFlow,
     }
   },
 
@@ -241,6 +249,7 @@ function QuoteRequestScreen() {
     proposals,
     dispatch,
     dispatchFacts,
+    userFlow,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -278,6 +287,11 @@ function QuoteRequestScreen() {
   // El mensaje «Presupuestos» sale de las propuestas activas, las MISMAS que
   // se ven en la tarjeta de abajo (y en la app, si la persona tiene cuenta).
   const messageEntries = activeProposals.map(proposalToMessageEntry)
+  // La elegida (activa o retirada), para la procedencia y para «¿Fue al taller?».
+  const selectedProposal =
+    proposals.available && proposals.selectedProposalId
+      ? [...proposals.active, ...proposals.withdrawn].find((p) => p.id === proposals.selectedProposalId) ?? null
+      : null
 
   return (
     <>
@@ -555,6 +569,12 @@ function QuoteRequestScreen() {
                   <span className="text-muted-foreground">No declaró</span>
                 )}
               </span>
+              <QuoteUserFlowProvenanceLine
+                provenance={userFlow}
+                step="outcome"
+                hasValue={d.userOutcome !== null}
+                at={d.userOutcomeAt}
+              />
             </Field>
           </div>
         </CardContent>
@@ -605,6 +625,33 @@ function QuoteRequestScreen() {
         hasUser={d.userId !== null}
         channel={d.channel}
         status={d.status}
+        renderSelectAction={(p) => (
+          <MarkProposalSelectedButton
+            quoteRequestId={d.id}
+            proposal={p}
+            facts={d}
+            currentSelection={selectedProposal}
+          />
+        )}
+        selectionProvenance={
+          <QuoteUserFlowProvenanceLine
+            provenance={userFlow}
+            step="selection"
+            hasValue={selectedProposal !== null}
+            at={proposals.available ? proposals.selectedAt : null}
+          />
+        }
+      />
+
+      {/*
+        «¿Fue al taller?»: el resultado de la persona con quién lo cargó, y
+        «Declarar si fue» en su nombre. Sólo con cuenta. → `~/components/QuoteUserFlow`
+      */}
+      <QuoteUserOutcomeCard
+        key={`user-outcome-${d.id}`}
+        detail={d}
+        provenance={userFlow}
+        selectedProposal={selectedProposal}
       />
 
       <QuoteClosureCard key={`closure-${d.id}`} detail={d} proposals={proposals} />
@@ -644,7 +691,7 @@ function QuoteRequestScreen() {
           <CardContent className="pt-6">
             <SectionTitle>Recorrido</SectionTitle>
             <p className="mb-3 mt-1 text-xs text-muted-foreground">Horas en UTC.</p>
-            <Timeline detail={d} />
+            <Timeline detail={d} userFlow={userFlow} />
           </CardContent>
         </Card>
 
@@ -690,7 +737,7 @@ interface TimelineEvent {
  * haber pasado por `answered`. Un paso sin fecha no aparece — no se inventa
  * cuándo pasó.
  */
-function Timeline({ detail: d }: { detail: QuoteRequestDetail }) {
+function Timeline({ detail: d, userFlow }: { detail: QuoteRequestDetail; userFlow: QuoteUserFlowProvenance }) {
   const events: Array<TimelineEvent> = [
     { at: d.createdAt, label: 'Pedido recibido', body: `por ${quoteChannelLabel(d.channel)}` },
   ]
@@ -708,7 +755,10 @@ function Timeline({ detail: d }: { detail: QuoteRequestDetail }) {
   if (d.userOutcomeAt) {
     events.push({
       at: d.userOutcomeAt,
-      label: 'La persona declaró el resultado',
+      label:
+        userFlow.available && userFlow.outcome.source === 'operator'
+          ? 'El equipo cargó el resultado en nombre de la persona'
+          : 'La persona declaró el resultado',
       body: d.userOutcome ? quoteUserOutcomeLabel(d.userOutcome) : undefined,
     })
   }
