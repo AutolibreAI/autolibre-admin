@@ -189,14 +189,15 @@ Alcance: `src/lib/quote-user-flow.ts` (reglas, payloads, errores — testeado en
 `src/components/QuoteUserFlow.tsx`, el modo `{ quoteUserFlow: true }` de `backendError`.
 
 - **Elegir**: «Marcar como elegida por el usuario» en cada propuesta activa no elegida →
-  `PUT /admin/quote-requests/:id/selected-proposal` `{proposalId}`. Sólo con cuenta y sin cerrar.
+  `PUT /admin/quote-requests/:id/selected-proposal` `{proposalId}`. Sin cerrar (con cuenta o sin ella
+  desde el 2026-11-25).
 - **Declarar si fue**: tarjeta «¿Fue al taller?» → `POST /admin/quote-requests/:id/user-outcome`
   `{outcome, performedOn?}`. Fue / No fue / Todavía no; con «Fue», la fecha real es obligatoria
-  (min = día del pedido, max = hoy, en hora de Buenos Aires). Con cuenta, con `answered_at` y no
-  cancelado por la persona — **sí** con el pedido cerrado por el operador.
+  (min = día del pedido, max = hoy, en hora de Buenos Aires). Con `answered_at` y no
+  cancelado por la persona (con cuenta o sin ella desde el 2026-11-25) — **sí** con el pedido cerrado por el operador.
 - **Reseñar en su nombre: NUNCA.** No hay ni va a haber acción para eso.
-- **Sin cuenta: ninguna acción.** Se cierran como siempre (`ops.close_quote_request` + nota). Un
-  taller que no estaba entre las propuestas va en nota interna, no se modela.
+- ~~**Sin cuenta: ninguna acción.**~~ **Desde el 2026-11-25 sí, con las mismas reglas** (ver la
+  sección siguiente). Un taller que no estaba entre las propuestas va en nota interna, no se modela.
 - **Procedencia**: «Cargado por el equipo (admin, fecha)» vs «Declarado por la persona en la app»,
   junto a la elegida, al resultado (estado y tarjeta) y en el recorrido. Columnas del backend
   **con nombres tentativos**, centralizados en `QUOTE_USER_FLOW_COLUMNS` del repo: si cambian, se
@@ -208,6 +209,70 @@ Alcance: `src/lib/quote-user-flow.ts` (reglas, payloads, errores — testeado en
 - Relación con `QuoteClosureCard` / `/leads/pedidos/cierres` (b2c5e45, mocks): aquel diseña un cierre
   más rico (con quién, monto, disputa). Esto no lo conecta ni lo borra: carga los dos datos que ya
   existen, que son los que esa tarjeta lee como «lo real».
+
+## Sin cuenta también, y la tabla «Resolución de pedidos» (2026-11-25, rama `feat/quotes-resolution-without-account`)
+
+### Las dos acciones, con cuenta o sin ella
+
+El backend dejó de devolver 404 para un pedido sin cuenta (`user_id` NULL: web pública y WhatsApp):
+mismos endpoints, mismos bodies, mismas reglas. **404 `NOT_FOUND` = sólo pedido inexistente.** En
+el panel:
+
+- `canSelectProposalOnBehalf` = pedido no cerrado; `canDeclareOutcomeOnBehalf` = con `answered_at` y
+  no cancelado por la persona. **Ninguna mira `userId`**: el operador no tiene que notar diferencia.
+- «Flujo incompleto» (`hasIncompleteUserFlow` y el `where` de `listQuoteRequests`) incluye los sin
+  cuenta. El chip dice «respondido, sin decir si fue».
+- **Procedencia**: `provenanceSource(source, hasAccount)`. Sin cuenta es SIEMPRE el equipo — «Declarado
+  por la persona en la app» no puede aparecer ahí, ni siquiera con un dato anterior a la 0169 sin
+  fuente (con cuenta, ese caso sigue leyéndose como la app). Sin fuente ni autor dice «Cargado por el
+  equipo», sin nombre. Lo mismo en el recorrido de la ficha y en `QuoteClosureCard`, que pasó a decir
+  «Resultado (usuario)» en vez de «Lo que declaró en la app».
+- Los textos que hablan de la app (la confirmación de «Marcar como elegida», la explicación de «¿Fue
+  al taller?») cambian según haya cuenta. Lo que el backend NO hace sin cuenta (registro de service,
+  reseñas) no se muestra ni se explica: es del backend.
+
+### `/leads/pedidos/resolucion` — «Resolución de pedidos»
+
+Alcance: `src/lib/quote-resolution.ts` (schema `res*`, tipos, `quoteResolutionCsv`),
+`src/server/quote-resolution.repo.ts`, `src/fn/quote-resolution.ts`,
+`src/routes/_authed/leads.pedidos.resolucion.tsx`, `src/lib/csv.ts` (`tests/csv.test.ts`) y
+`userOutcomeReporter`/`userOutcomeReporterLabel` en `~/lib/quote-user-flow` (testeados). Link
+«Resolución» en el header de `/leads/pedidos`, al lado de «Cierres y disputas».
+
+Una fila por pedido, todos los canales, con y sin cuenta. Sólo lectura: las acciones siguen en la
+ficha (link en el código `AL-n`).
+
+- **Dos resultados, dos columnas**: «según el cliente» (`user_outcome`) y «según el equipo»
+  (`outcome`, lo escribe `ops.close_quote_request`). Decisión del usuario: separados; si se
+  unifican, se decide aparte.
+- **UNA sentencia** (`listQuoteResolution`): lo que no es columna de `quote_requests` va como
+  subconsulta escalar o `LEFT JOIN` 1:1 (propuesta elegida → partner; admin que declaró). Filtros en
+  el `where` de AFUERA, como `listQuoteRequests`. `limit + 1` para saber si hay más.
+- **Guards por pieza**: propuestas (`quoteProposalsAvailability`), 0169
+  (`quoteUserFlowProvenanceAvailable`, nombres de `QUOTE_USER_FLOW_COLUMNS`), servicios del operador
+  (0155), rubros de `ops` y servicios de IA (0124). Lo que falta sale `NULL` y la pantalla lo dice en
+  ámbar; nunca un 500.
+- **Contacto**: con cuenta, nombre y teléfono de `users` (si la cuenta no los tiene, los del pedido);
+  sin cuenta, `contact_name`/`contact_phone` del pedido.
+- **Rubro / servicio**: servicios del operador (0155) → rubros del operador (`ops.quote_request_rubro`)
+  → servicios de la IA con score ≥ `AI_SERVICE_LOW_SCORE`. Operador antes que IA, como la ficha; la
+  fuente va debajo.
+- **Quién informó**: `userOutcomeReporter` — sin cuenta, el equipo; con cuenta sin la 0169, «no se
+  sabe»; con cuenta, la columna (null = la app, anterior a la 0169).
+- **Filtros** (prefijo `res`, para no chocar con los `sort`/`quoteChannel` de `/leads/pedidos`):
+  canal, resultado del cliente (+ «No declaró»), del equipo (+ «Sin registrar»), taller elegido
+  (todos / sin taller / de afuera / un partner — las opciones salen de la base entera, no de lo
+  filtrado), rango de fecha del pedido en hora de Buenos Aires, «Flujo incompleto» (mismo corte) y
+  duplicados/prueba fuera por default.
+- **Sin paginación**, como `/leads/pedidos`: 500 en pantalla y el subtítulo avisa si hay más.
+- **CSV**: el primer export del panel. `exportQuoteResolutionFn` trae lo filtrado ENTERO (tope 5000) y
+  el navegador lo arma con `quoteResolutionCsv` → `toCsv`: separador `;` y BOM (Excel es-AR), fórmulas
+  neutralizadas (`'` delante de `= + - @`), mismos rótulos que la tabla, fechas en Buenos Aires y el
+  link a la ficha.
+
+Verificado el 2026-11-25: `pnpm test` y `pnpm typecheck` en verde; la sentencia completa (todas las
+piezas en `true`, con filtros) y la de opciones de taller **planifican** (`EXPLAIN`) contra la base
+local con la 0169. Leer filas no se pudo (permisos): falta mirarla con datos.
 
 ## Cómo verificar un cambio acá
 
