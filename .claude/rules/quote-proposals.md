@@ -274,6 +274,43 @@ Verificado el 2026-11-25: `pnpm test` y `pnpm typecheck` en verde; la sentencia 
 piezas en `true`, con filtros) y la de opciones de taller **planifican** (`EXPLAIN`) contra la base
 local con la 0169. Leer filas no se pudo (permisos): falta mirarla con datos.
 
+## Motivo y observación de «No fue» (2026-11-25, rama `feat/quotes-not-hired-reason`)
+
+Al declarar «No fue» en la tarjeta «¿Fue al taller?», el operador puede cargar **por qué** y una
+**observación**. Sólo panel: la app no cambia, y declarar NO cierra el pedido.
+
+- **Los dos OPCIONALES**, incluso con «Otro» (decisión del usuario). El select arranca en «Sin
+  motivo»; la observación tiene tope de 1000 caracteres (recortada) con contador.
+- **Contrato**: `POST /admin/quote-requests/:id/user-outcome` suma `notHiredReason` (enum
+  `quote_request_not_hired_reason`: `no_budget` · `no_time` · `did_it_themselves` ·
+  `hired_outside_network` · `no_longer_needed` · `took_too_long` · `other`, rótulos en
+  `QUOTE_NOT_HIRED_REASON_LABELS`) y `notHiredNote`. Con otro resultado, un valor no nulo es 400:
+  el zod (`declareQuoteUserOutcomeOnBehalfSchema`) lo rechaza antes y `declareOutcomeBody` no los
+  manda nunca fuera de «No fue».
+- **Con «No fue» viajan SIEMPRE los dos** (`null` = sin motivo / sin observación): corregir una
+  declaración y dejarlo vacío BORRA lo anterior. Por eso «Corregir lo que declaró» precarga el motivo
+  y la observación vigentes al volver a elegir «No fue». Cambiar a Fue/Todavía no los limpia.
+- **El enum vive en `~/lib/quote-user-flow`**, no en `~/lib/quote-requests` al lado de
+  `QUOTE_REQUEST_CANCELLATION_REASONS` (que es el patrón que sigue): ese archivo lo prueba
+  `node --test` y no puede importar de `~/`. Un valor que el panel no conoce se muestra crudo
+  (`quoteNotHiredReasonLabel`).
+- **Columnas con nombres TENTATIVOS** en `QUOTE_USER_FLOW_COLUMNS`: `user_outcome_not_hired_reason`
+  y `user_outcome_not_hired_note`. **Guard propio**, separado del de la procedencia (0169):
+  `quoteUserFlowColumnsAvailability()` devuelve `{ provenance, notHired }` en UNA consulta a
+  `information_schema`, y `quoteUserFlowProvenanceAvailable()` sigue mirando sólo las 5 de la 0169.
+  Meterlas en el mismo guard habría apagado la procedencia en toda base sin la migración nueva.
+- **Sin esa migración**: el formulario no ofrece motivo ni observación y **no manda las claves**
+  (un backend viejo podría rechazarlas); la ficha no muestra nada; la tabla de resolución dice en
+  ámbar que falta, sin columnas con dato ni filtro. Nunca un 500. La disponibilidad de las columnas
+  es el proxy de «el backend ya acepta los campos»: migran en el pre-deploy del mismo despliegue.
+  Con la 0169 ausente tampoco se ofrecen (el motivo viaja dentro de la procedencia).
+- **Ficha**: `QuoteNotHiredDetailLine` debajo del resultado y de su procedencia, en la tarjeta y en
+  «Resultado (usuario)»; el recorrido suma « · motivo: …». Sólo con `user_outcome = 'not_hired'`.
+- **`/leads/pedidos/resolucion`**: columnas «Motivo (no fue)» y «Observación» (también en el CSV,
+  después de «Resultado según el equipo»), y el filtro `resNotHiredReason` — Todos / «Sin motivo» /
+  cada motivo. **Cualquier opción distinta de Todos acota a `user_outcome = 'not_hired'`**: «Sin
+  motivo» es «no fue y no se cargó motivo», no «todo pedido sin motivo».
+
 ## Cómo verificar un cambio acá
 
 `pnpm typecheck`. El recorrido real (enviar, precargar, corregir, retirar,
