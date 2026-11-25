@@ -62,6 +62,20 @@ export interface PlanInfo {
 /** El plan de quien no tiene suscripción con acceso. */
 export const FREE_PLAN_CODE = 'free'
 
+/**
+ * Plan gratis SIN tope de propuestas (Trello «Plan gratis sin tope de propuestas
+ * (opción 2)», 2026-11-25). El catálogo del backend todavía dice 1 por mes
+ * (`subscription_plans.monthly_whatsapp_request_limit`, NOT NULL); el panel lo
+ * lee como «sin límite» hasta que el back cambie el dato
+ * (`docs/pedido-backend-plan-gratis-sin-tope.md`). El backend no aplica el tope
+ * en el despacho: es sólo lo que se muestra.
+ */
+export const FREE_PLAN_UNLIMITED = true
+
+/** El tope efectivo de un plan del catálogo, con la excepción del gratis. */
+export const effectiveCap = (code: string, cap: number | null): number | null =>
+  code === FREE_PLAN_CODE && FREE_PLAN_UNLIMITED ? null : cap
+
 /** `partner_subscriptions.status`. Un valor nuevo se muestra crudo. */
 export const SUBSCRIPTION_STATUS_LABELS: Record<string, string> = {
   pending: 'pago pendiente',
@@ -248,7 +262,7 @@ export interface PartnerRef {
  * |---|---|---|
  * | `no_plan` | sin billing en la base | "sin plan", gris |
  * | `founding` | Aliado, pase o no el tope | gris neutro + badge |
- * | `unlimited` | plan sin límite (hoy ninguno) | normal |
+ * | `unlimited` | plan sin límite (el gratis, desde el 25/11/26) | normal |
  * | `over` | usadas > tope | rojo |
  * | `at` | usadas = tope | amarillo |
  * | `under` | por debajo | normal |

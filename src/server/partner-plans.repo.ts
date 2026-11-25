@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
+import { effectiveCap } from '~/lib/partner-plans'
 import type { PartnerPlansResult, PartnerSubscriptionInfo, PlanInfo } from '~/lib/partner-plans'
 
 /**
@@ -108,7 +109,7 @@ export async function listPartnerPlans(opts: { partnerId?: string } = {}): Promi
   const catalog: Array<PlanInfo> = plans.map((r) => ({
     code: r.code,
     name: r.name,
-    cap: r.cap === null ? null : Number(r.cap),
+    cap: effectiveCap(r.code, r.cap === null ? null : Number(r.cap)),
     active: r.active,
   }))
   const subscriptions: Array<PartnerSubscriptionInfo> = subs.map((r) => ({
