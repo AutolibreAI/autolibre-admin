@@ -12,6 +12,11 @@ import { auth } from '@clerk/tanstack-react-start/server'
 import { issuedClaimCodeSchema, type IssuedClaimCode } from '~/lib/partner-claim-codes'
 import { QUOTE_LOCATION_ERROR, type QuoteLocation } from '~/lib/quote-location'
 import { QUOTE_SERVICES_ERROR } from '~/lib/quote-services'
+import {
+  declareOutcomeBody,
+  quoteUserFlowErrorMessage,
+  type DeclareQuoteUserOutcomeOnBehalfInput,
+} from '~/lib/quote-user-flow'
 import { NOTIFICATION_RULE_ERROR } from '~/lib/notification-rules'
 import {
   QUOTE_PLATE_ERROR,
@@ -203,6 +208,7 @@ async function backendError(
     quoteLocation?: boolean
     quotePlate?: boolean
     quoteServices?: boolean
+    quoteUserFlow?: boolean
     notificationRule?: boolean
   } = {},
 ): Promise<Error> {
@@ -346,6 +352,25 @@ async function backendError(
         serviceSlugs: strings(body?.serviceSlugs),
         cannotRoute: response.status === 404 && /^Cannot (PUT|POST|GET)\b/.test(message ?? ''),
       })}`,
+    )
+  }
+
+  /**
+   * Modo `quoteUserFlow` — opt-in, lo usan sólo las dos acciones de «Completar
+   * en nombre de la persona» (elegir la propuesta y declarar si fue). Mismo
+   * formato que `quotePlate`: el 404 tiene dos codes (`QUOTE_REQUEST_NOT_FOUND`
+   * / `QUOTE_PROPOSAL_NOT_FOUND`) más el «Cannot PUT|POST» del backend sin
+   * desplegar, y el 409 dice "el pedido no admite esto". Lo lee
+   * `parseQuoteUserFlowError` de `~/lib/quote-user-flow`.
+   */
+  if (opts.quoteUserFlow) {
+    return new Error(
+      quoteUserFlowErrorMessage({
+        status: response.status,
+        code: typeof body?.code === 'string' ? body.code : '',
+        message: message ?? `${what} falló sin explicación`,
+        cannotRoute: response.status === 404 && /^Cannot (PUT|POST)/.test(message ?? ''),
+      }),
     )
   }
 
@@ -1650,4 +1675,74 @@ export async function setNotificationRuleActive(ruleId: string, active: boolean)
     throw await backendError(response, active ? 'Reactivar el recordatorio' : 'Pausar el recordatorio', {
       notificationRule: true,
     })
+}
+
+// ── Completar el flujo de la persona en su nombre ─────────────────────────────
+
+/**
+ * El equipo llama a la persona y carga en su nombre los dos pasos que dejó sin
+ * hacer en la app: elegir la propuesta y declarar si fue al taller. Por HTTP y
+ * no por SQL por el motivo de siempre: el grep dio positivo
+ * (`AdminQuoteRequestController`, `AdminGuard`), y el backend es el que deja
+ * la procedencia (`selection_source` / `user_outcome_source` = `operator`, y
+ * el admin del token como autor). Un `UPDATE` por SQL dejaría el dato sin
+ * dueño. → `~/lib/quote-user-flow`
+ *
+ * Los dos contestan 204 sin cuerpo. Un timeout se traduce a la sentinela con
+ * `status: 0`: los dos dejan un valor fijo, así que reintentar con el mismo
+ * cuerpo no duplica nada.
+ */
+async function quoteUserFlowFetch(
+  path: string,
+  init: { method: 'PUT' | 'POST'; body: Record<string, unknown> },
+  what: string,
+  opts: { signal?: AbortSignal },
+): Promise<void> {
+  const token = await bearerToken()
+  const base = baseUrl()
+  const timeout = AbortSignal.timeout(JSON_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: init.method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(init.body),
+      cache: 'no-store',
+      signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
+    })
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') {
+      throw new Error(quoteUserFlowErrorMessage({ status: 0, code: 'TIMEOUT', message: 'timeout', cannotRoute: false }))
+    }
+    if (cause instanceof Error && cause.name === 'AbortError') throw cause
+    throw new Error(`BACKEND_UNREACHABLE:${base}`)
+  }
+  if (!response.ok) throw await backendError(response, what, { quoteUserFlow: true })
+}
+
+/** `PUT /admin/quote-requests/:id/selected-proposal` — la propuesta que eligió la persona, cargada por el equipo. */
+export async function selectQuoteProposalOnBehalf(
+  quoteRequestId: string,
+  proposalId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  await quoteUserFlowFetch(
+    `/admin/quote-requests/${encodeURIComponent(quoteRequestId)}/selected-proposal`,
+    { method: 'PUT', body: { proposalId } },
+    'Marcar la propuesta elegida',
+    opts,
+  )
+}
+
+/** `POST /admin/quote-requests/:id/user-outcome` — si fue al taller, declarado por el equipo. */
+export async function declareQuoteUserOutcomeOnBehalf(
+  input: DeclareQuoteUserOutcomeOnBehalfInput,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  await quoteUserFlowFetch(
+    `/admin/quote-requests/${encodeURIComponent(input.quoteRequestId)}/user-outcome`,
+    { method: 'POST', body: declareOutcomeBody(input) },
+    'Declarar si fue al taller',
+    opts,
+  )
 }
