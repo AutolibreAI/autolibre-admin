@@ -899,6 +899,13 @@ export async function listQuoteRequests(
 
   if (search.quoteUncontacted) where.push('uncontacted')
 
+  // El mismo corte que `hasIncompleteUserFlow` de `~/lib/quote-user-flow`.
+  if (search.quoteIncompleteFlow)
+    where.push(
+      `user_id is not null and answered_at is not null and user_outcome is null
+       and close_reason_code is distinct from 'cancelled_by_user'`,
+    )
+
   if (!search.quoteShowDuplicates) where.push(NOT_DUPLICATE_PREDICATE)
 
   const { columns: extra, proposalsAvailable } = await listExtraColumns()

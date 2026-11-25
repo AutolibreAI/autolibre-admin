@@ -344,6 +344,13 @@ export const quoteRequestSearchSchema = z.object({
   /** Sólo abiertos, sin `contacted_at`, con más de `QUOTE_UNCONTACTED_AFTER_HOURS`. */
   quoteUncontacted: z.coerce.boolean().catch(false).default(false),
   /**
+   * Flujo de la persona incompleto: con cuenta, respondido, sin `user_outcome`
+   * y no cancelado por ella — a quién hay que llamar para completar en su
+   * nombre (`~/lib/quote-user-flow`, `hasIncompleteUserFlow`, mismo corte).
+   * Incluye los cerrados por el operador: ahí también se puede declarar.
+   */
+  quoteIncompleteFlow: z.coerce.boolean().catch(false).default(false),
+  /**
    * Los cerrados como `duplicate` (duplicados de verdad y pedidos de PRUEBA del
    * equipo) no se listan salvo que se pidan — desde el 2026-09-25. Son filas
    * que el operador tiene que poder encontrar, pero no pedidos reales.

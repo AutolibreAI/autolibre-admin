@@ -132,6 +132,7 @@ function Pedidos() {
     search.quoteChannel !== 'all' ||
     search.quoteOutcome !== 'all' ||
     search.quoteUncontacted ||
+    search.quoteIncompleteFlow ||
     search.quoteShowDuplicates ||
     (proposalsAvailable && search.quoteMaxProposals !== undefined)
 
@@ -256,6 +257,23 @@ function Pedidos() {
             onClick={() => setSearch({ quoteUncontacted: !search.quoteUncontacted })}
           >
             Sin contactar &gt; {QUOTE_UNCONTACTED_AFTER_HOURS} h
+          </Chip>
+          {/*
+            A quién llamar para completar el flujo en su nombre. Prenderlo pasa
+            el estado a «Todos»: los cerrados por el operador también entran.
+          */}
+          <Chip
+            tone="warn"
+            active={search.quoteIncompleteFlow}
+            onClick={() =>
+              setSearch(
+                search.quoteIncompleteFlow
+                  ? { quoteIncompleteFlow: false }
+                  : { quoteIncompleteFlow: true, quoteStatus: 'all' },
+              )
+            }
+          >
+            Flujo incompleto (con cuenta, sin decir si fue)
           </Chip>
         </FilterGroup>
 
