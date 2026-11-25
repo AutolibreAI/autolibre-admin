@@ -31,6 +31,7 @@ import {
   ScanLine,
   Store,
   TrendingUp,
+  LayoutDashboard,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -251,6 +252,8 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { to: "/operacion", label: "Operación", icon: Activity },
   { to: "/ai-costos", label: "Costos de IA", icon: Coins },
   { to: "/negocio", label: "Negocio", icon: TrendingUp },
+  /** Accesos a los tableros de las alianzas (Sin Fotomultas, Chasis…). → `.claude/rules/alliance-dashboards.md` */
+  { to: "/alianzas", label: "Alianzas", icon: LayoutDashboard },
 ];
 
 function Wordmark() {
