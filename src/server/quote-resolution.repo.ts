@@ -42,7 +42,7 @@ import { userOutcomeReporter, type QuoteUserFlowSource } from '~/lib/quote-user-
 const toIso = (v: unknown): string | null =>
   v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : String(v)
 
-interface Pieces {
+export interface Pieces {
   proposals: boolean
   userFlow: boolean
   notHired: boolean
@@ -51,7 +51,7 @@ interface Pieces {
   ai: boolean
 }
 
-async function availablePieces(): Promise<Pieces> {
+export async function availablePieces(): Promise<Pieces> {
   const [proposals, userFlowColumns, tables] = await Promise.all([
     quoteProposalsAvailability(),
     quoteUserFlowColumnsAvailability(),
@@ -79,7 +79,7 @@ async function availablePieces(): Promise<Pieces> {
  * constantes cerradas (nunca del request): interpolarlos es seguro. El umbral
  * de la IA también es una constante del código, no un parámetro del usuario.
  */
-function selectPieces(p: Pieces): { columns: string; joins: string } {
+export function selectPieces(p: Pieces): { columns: string; joins: string } {
   const opServices = p.operatorServices
     ? `(select array_agg(sv.name order by qos.position)
           from quote_request_operator_services qos

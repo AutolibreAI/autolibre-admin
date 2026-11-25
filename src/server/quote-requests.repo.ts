@@ -159,7 +159,7 @@ export async function quoteEditAvailable(opts: { signal?: AbortSignal } = {}): P
  * La tabla de `ops` quedó SIN USO con la 032 pero no se dropeó. El día que se
  * dropee, la rama `'ops'` y este guard se van con ella.
  */
-async function vehicleTextSource(): Promise<'column' | 'ops' | null> {
+export async function vehicleTextSource(): Promise<'column' | 'ops' | null> {
   const row = await sqlOne<{ has_column: boolean; has_ops: boolean }>(
     `select exists (select 1 from information_schema.columns
                      where table_schema = 'public' and table_name = 'quote_requests'
