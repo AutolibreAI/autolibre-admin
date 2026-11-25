@@ -57,7 +57,8 @@ export function QuoteClosureCard({
         </div>
 
         <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-          <Item label="Lo que declaró en la app">
+          {/* No «en la app»: puede cargarlo el equipo, y sin cuenta no hay app. */}
+          <Item label="Resultado (usuario)">
             {d.userOutcome ? quoteUserOutcomeLabel(d.userOutcome) : <span className="text-muted-foreground">no declaró</span>}
             {d.userOutcomeAt ? (
               <span className="block text-xs text-muted-foreground">{formatDateTime(d.userOutcomeAt)} UTC</span>

@@ -35,24 +35,28 @@ const err = (status: number, code = '', message = '', cannotRoute = false) =>
 
 // ── Cuándo se ofrece cada acción ────────────────────────────────────────────
 
-test('elegir: sólo con cuenta y sin cerrar', () => {
+test('elegir: sin cerrar, con cuenta o sin ella', () => {
   assert.equal(canSelectProposalOnBehalf(facts()), true)
-  assert.equal(canSelectProposalOnBehalf(facts({ userId: null })), false)
+  assert.equal(canSelectProposalOnBehalf(facts({ userId: null })), true)
   assert.equal(canSelectProposalOnBehalf(facts({ status: 'closed', closeReasonCode: 'resolved' })), false)
+  assert.equal(canSelectProposalOnBehalf(facts({ userId: null, status: 'closed', closeReasonCode: 'resolved' })), false)
 })
 
-test('declarar: con cuenta, respondido y no cancelado por la persona; cerrado por el operador SÍ', () => {
+test('declarar: respondido y no cancelado por la persona, con cuenta o sin ella; cerrado por el operador SÍ', () => {
   assert.equal(canDeclareOutcomeOnBehalf(facts()), true)
   assert.equal(canDeclareOutcomeOnBehalf(facts({ status: 'closed', closeReasonCode: 'resolved' })), true)
-  assert.equal(canDeclareOutcomeOnBehalf(facts({ userId: null })), false)
+  assert.equal(canDeclareOutcomeOnBehalf(facts({ userId: null })), true)
+  assert.equal(canDeclareOutcomeOnBehalf(facts({ userId: null, status: 'closed', closeReasonCode: 'resolved' })), true)
   assert.equal(canDeclareOutcomeOnBehalf(facts({ answeredAt: null })), false)
+  assert.equal(canDeclareOutcomeOnBehalf(facts({ userId: null, answeredAt: null })), false)
   assert.equal(canDeclareOutcomeOnBehalf(facts({ status: 'closed', closeReasonCode: 'cancelled_by_user' })), false)
 })
 
 test('flujo incompleto = declarable y sin user_outcome', () => {
   assert.equal(hasIncompleteUserFlow({ ...facts(), userOutcome: null }), true)
   assert.equal(hasIncompleteUserFlow({ ...facts(), userOutcome: 'pending' }), false)
-  assert.equal(hasIncompleteUserFlow({ ...facts({ userId: null }), userOutcome: null }), false)
+  assert.equal(hasIncompleteUserFlow({ ...facts({ userId: null }), userOutcome: null }), true)
+  assert.equal(hasIncompleteUserFlow({ ...facts({ userId: null, answeredAt: null }), userOutcome: null }), false)
 })
 
 // ── Payloads ────────────────────────────────────────────────────────────────
@@ -102,9 +106,17 @@ test('min = día del pedido, max = hoy', () => {
 
 // ── Procedencia ─────────────────────────────────────────────────────────────
 
-test('sin fuente en la columna = anterior a la migración = la app', () => {
-  assert.equal(provenanceSource(null), 'user')
-  assert.equal(provenanceSource('operator'), 'operator')
+test('sin fuente en la columna = anterior a la migración = la app (con cuenta)', () => {
+  assert.equal(provenanceSource(null, true), 'user')
+  assert.equal(provenanceSource('operator', true), 'operator')
+  assert.equal(provenanceSource('user', true), 'user')
+})
+
+test('sin cuenta no hay app: la procedencia es siempre el equipo', () => {
+  assert.equal(provenanceSource(null, false), 'operator')
+  assert.equal(provenanceSource('operator', false), 'operator')
+  // Un 'user' sin cuenta no lo escribe el contrato; si apareciera, tampoco se dice «la persona en la app».
+  assert.equal(provenanceSource('user', false), 'operator')
 })
 
 test('el admin se nombra con lo que haya', () => {
@@ -122,7 +134,10 @@ test('la sentinela ida y vuelta', () => {
 })
 
 test('elegir: cada código del contrato tiene su lectura', () => {
-  assert.equal(readableSelectProposalError(err(404, 'NOT_FOUND'))?.action, 'reload')
+  const missing = readableSelectProposalError(err(404, 'NOT_FOUND'))
+  assert.equal(missing?.action, 'reload')
+  assert.match(missing?.text ?? '', /no existe/)
+  assert.doesNotMatch(missing?.text ?? '', /cuenta/)
   const gone = readableSelectProposalError(err(404, 'QUOTE_PROPOSAL_NOT_FOUND'))
   assert.equal(gone?.action, 'reload')
   assert.match(gone?.text ?? '', /ya no está activa/)

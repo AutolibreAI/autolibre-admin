@@ -34,7 +34,8 @@ import type { QuoteProposal } from '~/lib/quote-proposals'
  * después RELEE el loader (`router.invalidate()`): sin movimiento optimista.
  *
  * Reseñar al taller en su nombre: NUNCA. No hay acción para eso, a propósito.
- * Sin cuenta: ninguna de las dos acciones aparece (`~/lib/quote-user-flow`).
+ * Sin cuenta: las dos acciones aparecen igual (mismas reglas,
+ * `~/lib/quote-user-flow`); cambian sólo los textos que hablan de la app.
  *
  * Se relaciona con `QuoteClosureCard` / `/leads/pedidos/cierres` (b2c5e45):
  * aquel es el diseño, con mocks, de un cierre declarado MÁS RICO (con quién,
@@ -75,6 +76,7 @@ export function QuoteUserFlowProvenanceLine({
   step,
   hasValue,
   at,
+  hasAccount,
   className,
 }: {
   provenance: QuoteUserFlowProvenance
@@ -82,6 +84,8 @@ export function QuoteUserFlowProvenanceLine({
   hasValue: boolean
   /** `selected_at` / `user_outcome_at`. */
   at: string | null
+  /** Sin cuenta no hay app: la procedencia es siempre el equipo. */
+  hasAccount: boolean
   className?: string
 }) {
   if (!hasValue) return null
@@ -94,12 +98,22 @@ export function QuoteUserFlowProvenanceLine({
 
   const p: QuoteUserFlowStepProvenance = provenance[step]
   const when = at ? `, ${formatDateTime(at)} UTC` : ''
-  if (provenanceSource(p.source) === 'operator')
+  if (provenanceSource(p.source, hasAccount) === 'operator')
     return (
       <span className={cn('flex items-center gap-1 text-xs text-status-yellow', className)}>
         <Users className="size-3 shrink-0" aria-hidden />
-        Cargado por el equipo ({actorLabel(p.by)}
-        {when})
+        {/*
+          Sin fuente ni autor (sólo pasa sin cuenta, con un dato anterior a la
+          migración): se sabe que fue el equipo, no quién.
+        */}
+        {p.source === null && p.by === null ? (
+          <>Cargado por el equipo{when ? ` (${when.slice(2)})` : ''}</>
+        ) : (
+          <>
+            Cargado por el equipo ({actorLabel(p.by)}
+            {when})
+          </>
+        )}
       </span>
     )
   return (
@@ -179,7 +193,8 @@ export function MarkProposalSelectedButton({
     <div className="mt-2 w-full rounded-md border border-status-yellow/30 bg-status-yellow-bg p-2">
       <p className="text-xs leading-relaxed text-status-yellow">
         Vas a registrar que <strong>la persona eligió «{proposal.providerName}»</strong>, porque te lo dijo. Queda
-        cargado por el equipo, a tu nombre, y en la app se ve como su elección.
+        cargado por el equipo, a tu nombre
+        {facts.userId !== null ? ', y en la app se ve como su elección' : ''}.
         {currentSelection ? (
           <>
             {' '}
@@ -223,8 +238,8 @@ export function MarkProposalSelectedButton({
 
 /**
  * La tarjeta del resultado de la persona: lo que hay hoy (con quién lo cargó)
- * y, si el pedido lo admite, «Declarar si fue». Oculta del todo sin cuenta: el
- * resultado de un pedido sin cuenta es el del operador, en «Cerrar pedido».
+ * y, si el pedido lo admite, «Declarar si fue». Con cuenta o sin ella: sin
+ * cuenta sólo cambia la explicación (no hay app desde la que lo declare).
  */
 export function QuoteUserOutcomeCard({
   detail: d,
@@ -236,7 +251,7 @@ export function QuoteUserOutcomeCard({
   /** La propuesta elegida, como contexto («taller: X»). */
   selectedProposal: QuoteProposal | null
 }) {
-  if (d.userId === null) return null
+  const hasAccount = d.userId !== null
   const declarable = canDeclareOutcomeOnBehalf(d)
 
   return (
@@ -248,8 +263,9 @@ export function QuoteUserOutcomeCard({
             ¿Fue al taller?
           </h2>
           <p className="mt-0.5 max-w-prose text-sm text-muted-foreground">
-            Lo que la persona declara en la app después de recibir propuestas. Si no lo hizo, llamala y cargalo acá en
-            su nombre. La reseña del taller la deja ella sola, nunca el equipo.
+            {hasAccount
+              ? 'Lo que la persona declara en la app después de recibir propuestas. Si no lo hizo, llamala y cargalo acá en su nombre. La reseña del taller la deja ella sola, nunca el equipo.'
+              : 'Si la persona fue al taller después de recibir propuestas. Preguntale y cargalo acá en su nombre.'}
           </p>
         </div>
 
@@ -263,6 +279,7 @@ export function QuoteUserOutcomeCard({
                 step="outcome"
                 hasValue={d.userOutcome !== null}
                 at={d.userOutcomeAt}
+                hasAccount={hasAccount}
                 className="mt-0.5"
               />
             </dd>

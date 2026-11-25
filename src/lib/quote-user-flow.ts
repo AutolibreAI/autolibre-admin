@@ -12,10 +12,12 @@ import { z } from 'zod'
  * persona: una reseña es una opinión, y una opinión que escribe el equipo no
  * es de nadie. No hay ni habrá acción para eso acá.
  *
- * Fuera de alcance: los pedidos SIN cuenta (`user_id` NULL). Ahí no hay app ni
- * "flujo de la persona" que completar: se cierran como siempre, con el
- * resultado del operador y una nota (`ops.close_quote_request`). Un taller que
- * no estaba entre las propuestas tampoco se modela: va en una nota interna.
+ * Con cuenta o SIN cuenta (`user_id` NULL: web pública y WhatsApp), con las
+ * mismas reglas — desde el 2026-11-25 el backend procesa los dos y el operador
+ * no tiene que notar diferencia. Sin cuenta la única procedencia posible es el
+ * equipo (`provenanceSource`): no hay app desde la que la persona lo declare.
+ * Un taller que no estaba entre las propuestas no se modela: va en una nota
+ * interna.
  *
  * Client-safe y SIN imports de `~/` a propósito: lo prueba `node --test`
  * directo (`tests/quote-user-flow.test.ts`), que no resuelve alias.
@@ -32,26 +34,26 @@ export interface QuoteUserFlowFacts {
 }
 
 /**
- * «Marcar como elegida por el usuario»: sólo con cuenta y con el pedido sin
- * cerrar. Lo demás (propuesta activa y del pedido) lo decide el backend atómico
+ * «Marcar como elegida por el usuario»: con el pedido sin cerrar, tenga o no
+ * cuenta. Lo demás (propuesta activa y del pedido) lo decide el backend atómico
  * con la escritura; acá sólo se evita ofrecer lo que seguro rebota.
  */
 export function canSelectProposalOnBehalf(f: QuoteUserFlowFacts): boolean {
-  return f.userId !== null && f.status !== 'closed'
+  return f.status !== 'closed'
 }
 
 /**
- * «Declarar si fue»: con cuenta, con `answered_at` (hubo algo que responderle)
+ * «Declarar si fue»: tenga o no cuenta, con `answered_at` (hubo algo que responderle)
  * y sin cancelación de la persona. A diferencia de elegir, SÍ se permite con el
  * pedido cerrado por el operador: es el caso típico de un pedido viejo que se
  * cerró sin que la persona contara cómo le fue.
  */
 export function canDeclareOutcomeOnBehalf(f: QuoteUserFlowFacts): boolean {
-  return f.userId !== null && f.answeredAt !== null && f.closeReasonCode !== 'cancelled_by_user'
+  return f.answeredAt !== null && f.closeReasonCode !== 'cancelled_by_user'
 }
 
 /**
- * Flujo incompleto: con cuenta, respondido y sin `user_outcome`. Es a quién hay
+ * Flujo incompleto: respondido y sin `user_outcome`, con cuenta o sin ella. Es a quién hay
  * que llamar. Se excluyen los cancelados por la persona: ahí no hay nada que
  * declarar (el backend lo rechaza con 400 `INVALID_STATE_TRANSITION`).
  */
@@ -173,8 +175,14 @@ export type QuoteUserFlowProvenance =
       }
     }
 
-/** La fuente de un paso que TIENE dato. `null` en la columna = anterior a la migración = la app. */
-export function provenanceSource(source: QuoteUserFlowSource | null): QuoteUserFlowSource {
+/**
+ * La fuente de un paso que TIENE dato. Con cuenta, `null` en la columna =
+ * anterior a la migración = la app (era el único camino). SIN cuenta no hay app:
+ * la fuente es siempre el equipo, diga lo que diga la columna — «Declarado por
+ * la persona en la app» no puede aparecer en un pedido sin cuenta.
+ */
+export function provenanceSource(source: QuoteUserFlowSource | null, hasAccount: boolean): QuoteUserFlowSource {
+  if (!hasAccount) return 'operator'
   return source ?? 'user'
 }
 
@@ -226,7 +234,7 @@ export function parseQuoteUserFlowError(cause: unknown): QuoteUserFlowErrorInfo 
  * - `retry`: reintentar manda EXACTAMENTE lo mismo (timeout, 5xx). Las dos
  *   escrituras dejan un valor fijo, así que repetirlas no duplica nada.
  * - `reload`: el pedido cambió (400 `INVALID_STATE_TRANSITION`: cerrado o ya
- *   no admite la declaración; 404: propuesta retirada o pedido sin cuenta;
+ *   no admite la declaración; 404: propuesta retirada o pedido inexistente;
  *   409 `CONFLICT`: carrera con otra escritura); se relee la ficha.
  * - `fix`: hay que corregir algo o no hay nada que reintentar.
  */
@@ -259,10 +267,10 @@ function commonError(raw: string, e: QuoteUserFlowErrorInfo | null, endpoint: st
       text: `El backend desplegado todavía no tiene esta acción (${endpoint}). Hay que desplegarlo. No se guardó nada.`,
       action: 'fix',
     }
-  // 404 `NOT_FOUND`: el pedido no existe o NO tiene cuenta (el backend no los distingue).
+  // 404 `NOT_FOUND`: el pedido no existe (desde 2026-11-25 un pedido sin cuenta ya no da 404).
   if (e.status === 404 && e.code === 'NOT_FOUND')
     return {
-      text: 'El backend no encuentra este pedido con una cuenta de AutoLibre (no existe o no tiene cuenta). No se guardó nada: se recargó la ficha.',
+      text: 'El backend no encuentra este pedido (no existe o se borró). No se guardó nada: se recargó la ficha.',
       action: 'reload',
     }
   // 409 `CONFLICT`: sólo la carrera de dos escrituras simultáneas sobre el pedido.

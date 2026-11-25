@@ -574,6 +574,7 @@ function QuoteRequestScreen() {
                 step="outcome"
                 hasValue={d.userOutcome !== null}
                 at={d.userOutcomeAt}
+                hasAccount={d.userId !== null}
               />
             </Field>
           </div>
@@ -639,13 +640,14 @@ function QuoteRequestScreen() {
             step="selection"
             hasValue={selectedProposal !== null}
             at={proposals.available ? proposals.selectedAt : null}
+            hasAccount={d.userId !== null}
           />
         }
       />
 
       {/*
         «¿Fue al taller?»: el resultado de la persona con quién lo cargó, y
-        «Declarar si fue» en su nombre. Sólo con cuenta. → `~/components/QuoteUserFlow`
+        «Declarar si fue» en su nombre. Con cuenta o sin ella. → `~/components/QuoteUserFlow`
       */}
       <QuoteUserOutcomeCard
         key={`user-outcome-${d.id}`}
@@ -755,8 +757,9 @@ function Timeline({ detail: d, userFlow }: { detail: QuoteRequestDetail; userFlo
   if (d.userOutcomeAt) {
     events.push({
       at: d.userOutcomeAt,
+      // Sin cuenta no hay app: siempre fue el equipo (`provenanceSource`).
       label:
-        userFlow.available && userFlow.outcome.source === 'operator'
+        d.userId === null || (userFlow.available && userFlow.outcome.source === 'operator')
           ? 'El equipo cargó el resultado en nombre de la persona'
           : 'La persona declaró el resultado',
       body: d.userOutcome ? quoteUserOutcomeLabel(d.userOutcome) : undefined,
