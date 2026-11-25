@@ -24,9 +24,22 @@ export const QUOTE_USER_FLOW_COLUMNS = {
   outcomeSource: 'user_outcome_source',
   outcomeDeclaredBy: 'user_outcome_declared_by',
   outcomePerformedOn: 'user_outcome_performed_on',
+  // Motivo y observación de «No fue» (2026-11-25, también tentativos). Llegan
+  // en OTRA migración que la procedencia: tienen su propio guard, y sin ellas
+  // la procedencia sigue andando.
+  notHiredReason: 'user_outcome_not_hired_reason',
+  notHiredNote: 'user_outcome_not_hired_note',
 } as const
 
-const COLUMN_NAMES = Object.values(QUOTE_USER_FLOW_COLUMNS)
+const c0 = QUOTE_USER_FLOW_COLUMNS
+const PROVENANCE_COLUMNS: ReadonlyArray<string> = [
+  c0.selectionSource,
+  c0.selectedBy,
+  c0.outcomeSource,
+  c0.outcomeDeclaredBy,
+  c0.outcomePerformedOn,
+]
+const NOT_HIRED_COLUMNS: ReadonlyArray<string> = [c0.notHiredReason, c0.notHiredNote]
 
 /**
  * ¿Tiene esta base la migración del backend? Mismo patrón que
@@ -36,14 +49,23 @@ const COLUMN_NAMES = Object.values(QUOTE_USER_FLOW_COLUMNS)
  * migración: así se puede desarrollar contra una base local que todavía no la
  * tiene, sin flag ni configuración que haya que acordarse de prender.
  */
-export async function quoteUserFlowProvenanceAvailable(): Promise<boolean> {
-  const row = await sqlOne<{ n: number }>(
-    `select count(*)::int as n from information_schema.columns
+export async function quoteUserFlowColumnsAvailability(): Promise<{ provenance: boolean; notHired: boolean }> {
+  const row = await sqlOne<{ present: Array<string> | null }>(
+    `select array_agg(column_name::text) as present from information_schema.columns
       where table_schema = 'public' and table_name = 'quote_requests'
         and column_name = any($1::text[])`,
-    [COLUMN_NAMES],
+    [[...PROVENANCE_COLUMNS, ...NOT_HIRED_COLUMNS]],
   )
-  return Number(row?.n ?? 0) === COLUMN_NAMES.length
+  const present = new Set(row?.present ?? [])
+  return {
+    provenance: PROVENANCE_COLUMNS.every((col) => present.has(col)),
+    notHired: NOT_HIRED_COLUMNS.every((col) => present.has(col)),
+  }
+}
+
+/** Sólo la procedencia (0169). El motivo de «No fue» tiene su propio guard. */
+export async function quoteUserFlowProvenanceAvailable(): Promise<boolean> {
+  return (await quoteUserFlowColumnsAvailability()).provenance
 }
 
 interface ProvenanceRow {
@@ -56,12 +78,15 @@ interface ProvenanceRow {
   outcome_declared_by_name: string | null
   outcome_declared_by_email: string | null
   outcome_performed_on: string | null
+  not_hired_reason: string | null
+  not_hired_note: string | null
 }
 
 const toSource = (v: string | null): QuoteUserFlowSource | null => (v === 'user' || v === 'operator' ? v : null)
 
 export async function getQuoteUserFlowProvenance(quoteRequestId: string): Promise<QuoteUserFlowProvenance> {
-  if (!(await quoteUserFlowProvenanceAvailable())) return { available: false }
+  const columns = await quoteUserFlowColumnsAvailability()
+  if (!columns.provenance) return { available: false }
 
   // Los identificadores salen de la constante de arriba (cerrada, nunca del
   // request): interpolarlos es seguro. Los valores van por `$1`.
@@ -73,7 +98,12 @@ export async function getQuoteUserFlowProvenance(quoteRequestId: string): Promis
             qr.${c.outcomeSource}::text as outcome_source,
             qr.${c.outcomeDeclaredBy} as outcome_declared_by,
             ob.name as outcome_declared_by_name, ob.email as outcome_declared_by_email,
-            to_char(qr.${c.outcomePerformedOn}, 'YYYY-MM-DD') as outcome_performed_on
+            to_char(qr.${c.outcomePerformedOn}, 'YYYY-MM-DD') as outcome_performed_on,
+            ${
+              columns.notHired
+                ? `qr.${c.notHiredReason}::text as not_hired_reason, qr.${c.notHiredNote} as not_hired_note`
+                : 'null::text as not_hired_reason, null::text as not_hired_note'
+            }
        from quote_requests qr
        left join users sb on sb.id = qr.${c.selectedBy}
        left join users ob on ob.id = qr.${c.outcomeDeclaredBy}
@@ -97,5 +127,8 @@ export async function getQuoteUserFlowProvenance(quoteRequestId: string): Promis
         : null,
       performedOn: row.outcome_performed_on,
     },
+    notHired: columns.notHired
+      ? { available: true, reason: row.not_hired_reason, note: row.not_hired_note }
+      : { available: false },
   }
 }

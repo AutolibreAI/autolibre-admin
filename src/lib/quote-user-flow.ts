@@ -238,7 +238,18 @@ export type QuoteUserFlowProvenance =
         /** Fecha real del trabajo (`YYYY-MM-DD`), sólo con `hired`. */
         performedOn: string | null
       }
+      /** Motivo y observación de «No fue» (sólo con `user_outcome = 'not_hired'`). */
+      notHired: QuoteNotHiredDetail
     }
+
+/**
+ * `available: false` = la base no tiene las columnas del motivo (migración del
+ * backend aparte de la procedencia): no se muestra ni se ofrece cargarlo.
+ * `reason` es texto crudo: un valor nuevo del enum se muestra tal cual.
+ */
+export type QuoteNotHiredDetail =
+  | { available: false }
+  | { available: true; reason: string | null; note: string | null }
 
 /**
  * La fuente de un paso que TIENE dato. Con cuenta, `null` en la columna =

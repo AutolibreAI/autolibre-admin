@@ -40,9 +40,14 @@ import { QuoteUserLinker } from '~/components/QuoteUserLinker'
 import { whatsappOptInMock } from '~/mocks/quote-whatsapp-opt-in'
 import { QuoteProposals } from '~/components/QuoteProposals'
 import { listQuoteProposalsFn } from '~/fn/quote-proposals'
-import { MarkProposalSelectedButton, QuoteUserFlowProvenanceLine, QuoteUserOutcomeCard } from '~/components/QuoteUserFlow'
+import {
+  MarkProposalSelectedButton,
+  QuoteNotHiredDetailLine,
+  QuoteUserFlowProvenanceLine,
+  QuoteUserOutcomeCard,
+} from '~/components/QuoteUserFlow'
 import { getQuoteUserFlowProvenanceFn } from '~/fn/quote-user-flow'
-import type { QuoteUserFlowProvenance } from '~/lib/quote-user-flow'
+import { quoteNotHiredReasonLabel, type QuoteUserFlowProvenance } from '~/lib/quote-user-flow'
 import { PartnerDispatch } from '~/components/PartnerDispatch'
 import { getDispatchPartnerFactsFn, getPartnerDispatchFn } from '~/fn/partner-dispatch'
 import { familiesOfServices } from '~/lib/quote-services'
@@ -576,6 +581,7 @@ function QuoteRequestScreen() {
                 at={d.userOutcomeAt}
                 hasAccount={d.userId !== null}
               />
+              <QuoteNotHiredDetailLine provenance={userFlow} userOutcome={d.userOutcome} className="mt-1" />
             </Field>
           </div>
         </CardContent>
@@ -739,6 +745,12 @@ interface TimelineEvent {
  * haber pasado por `answered`. Un paso sin fecha no aparece — no se inventa
  * cuándo pasó.
  */
+/** « · motivo: Falta de plata» en el recorrido, sólo con «No fue» y motivo cargado. */
+function notHiredReasonSuffix(userOutcome: string, userFlow: QuoteUserFlowProvenance): string {
+  if (userOutcome !== 'not_hired' || !userFlow.available || !userFlow.notHired.available) return ''
+  return userFlow.notHired.reason ? ` · motivo: ${quoteNotHiredReasonLabel(userFlow.notHired.reason)}` : ''
+}
+
 function Timeline({ detail: d, userFlow }: { detail: QuoteRequestDetail; userFlow: QuoteUserFlowProvenance }) {
   const events: Array<TimelineEvent> = [
     { at: d.createdAt, label: 'Pedido recibido', body: `por ${quoteChannelLabel(d.channel)}` },
@@ -762,7 +774,9 @@ function Timeline({ detail: d, userFlow }: { detail: QuoteRequestDetail; userFlo
         d.userId === null || (userFlow.available && userFlow.outcome.source === 'operator')
           ? 'El equipo cargó el resultado en nombre de la persona'
           : 'La persona declaró el resultado',
-      body: d.userOutcome ? quoteUserOutcomeLabel(d.userOutcome) : undefined,
+      body: d.userOutcome
+        ? `${quoteUserOutcomeLabel(d.userOutcome)}${notHiredReasonSuffix(d.userOutcome, userFlow)}`
+        : undefined,
     })
   }
   if (d.closedAt) {

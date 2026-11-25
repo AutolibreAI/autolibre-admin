@@ -10,6 +10,7 @@ import {
   declareQuoteUserOutcomeOnBehalfSchema,
   performedOnBounds,
   provenanceSource,
+  quoteNotHiredReasonLabel,
   readableDeclareOutcomeError,
   readableSelectProposalError,
   type DeclareQuoteUserOutcomeOnBehalfInput,
@@ -121,6 +122,39 @@ export function QuoteUserFlowProvenanceLine({
       <UserRound className="size-3 shrink-0" aria-hidden />
       {step === 'selection' ? 'Elegida por la persona en la app' : 'Declarado por la persona en la app'}
       {when}
+    </span>
+  )
+}
+
+/**
+ * Motivo y observación de «No fue», debajo del resultado (y de su
+ * procedencia). Sólo con `not_hired` y si hay algo: los dos son opcionales, y
+ * sin la migración del backend no se dice nada (ya lo dice la procedencia).
+ */
+export function QuoteNotHiredDetailLine({
+  provenance,
+  userOutcome,
+  className,
+}: {
+  provenance: QuoteUserFlowProvenance
+  userOutcome: string | null
+  className?: string
+}) {
+  if (userOutcome !== 'not_hired' || !provenance.available || !provenance.notHired.available) return null
+  const { reason, note } = provenance.notHired
+  if (!reason && !note) return null
+  return (
+    <span className={cn('block space-y-0.5 text-xs', className)}>
+      {reason ? (
+        <span className="block">
+          <span className="text-muted-foreground">Motivo:</span> {quoteNotHiredReasonLabel(reason)}
+        </span>
+      ) : null}
+      {note ? (
+        <span className="block whitespace-pre-wrap border-l-2 border-border pl-2 italic text-muted-foreground">
+          {note}
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -282,6 +316,7 @@ export function QuoteUserOutcomeCard({
                 hasAccount={hasAccount}
                 className="mt-0.5"
               />
+              <QuoteNotHiredDetailLine provenance={provenance} userOutcome={d.userOutcome} className="mt-1" />
             </dd>
           </div>
           <div className="min-w-0">
