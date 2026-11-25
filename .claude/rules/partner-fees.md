@@ -73,3 +73,21 @@ La pantalla dice qué falta y no escribe nada (`PARTNER_FEES_UNAVAILABLE`).
 - `tests/partner-fees.test.ts` (regla, agrupado, resumen, CSV, mensaje, schema).
 - Cuadre contra producción: ver el commit del bloque.
 - **No aplicada en ninguna base**: la aplica el `vercel-build` del próximo deploy de `main`.
+
+## Comisiones de los comerciales (`/comercial/liquidaciones`, migración 039)
+
+`~/lib/commercial-commissions`, `commercial-commissions.repo.ts`. Una comisión por proveedor con
+«Alta por»:
+
+- **Fee del primer trabajo**: si su primer trabajo confirmado (el `commercialFee` de arriba) es
+  anterior a su primera suscripción paga, o no tiene suscripción → el fee completo, sin vencimiento.
+- **Primera cuota**: si no, y tiene una suscripción autorizada con precio → `price_amount` del plan de
+  su PRIMERA suscripción autorizada, desde `authorized_at`. No hay tabla de cobros del backend: es el
+  precio de lista, no lo que pagó.
+- `ops.commercial_commission_payment` guarda sólo que se pagó (sin fila = pendiente), con monto,
+  comercial y referencia CONGELADOS. El servidor recalcula la regla antes de escribir.
+
+## Pedidos al backend
+
+- `docs/pedido-backend-liquidaciones-proveedores.md`: elegir la propuesta en pedidos cerrados y
+  atribuir los que no tienen propuesta (para retirar la tabla parche).
