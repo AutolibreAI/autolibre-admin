@@ -193,6 +193,49 @@ export function actorLabel(by: QuoteUserFlowActor | null): string {
   return by.name ?? by.email ?? by.id
 }
 
+/**
+ * Quién informó el resultado de la persona (`user_outcome`), para un listado
+ * («Resolución de pedidos»). Misma regla que la ficha (`provenanceSource`):
+ *
+ * - sin resultado → `none`;
+ * - SIN cuenta → siempre el equipo: no hay app desde la que la persona lo
+ *   declare, aunque la base no tenga todavía las columnas de procedencia;
+ * - con cuenta y sin las columnas → `unknown` (falta la migración del backend);
+ * - con cuenta → la columna, y `null` = anterior a la migración = la app.
+ */
+export type UserOutcomeReporter =
+  | { kind: 'none' }
+  | { kind: 'unknown' }
+  | { kind: 'user' }
+  | { kind: 'operator'; by: QuoteUserFlowActor | null }
+
+export function userOutcomeReporter(f: {
+  hasValue: boolean
+  hasAccount: boolean
+  provenanceAvailable: boolean
+  source: QuoteUserFlowSource | null
+  by: QuoteUserFlowActor | null
+}): UserOutcomeReporter {
+  if (!f.hasValue) return { kind: 'none' }
+  if (!f.hasAccount) return { kind: 'operator', by: f.provenanceAvailable ? f.by : null }
+  if (!f.provenanceAvailable) return { kind: 'unknown' }
+  return provenanceSource(f.source, true) === 'operator' ? { kind: 'operator', by: f.by } : { kind: 'user' }
+}
+
+/** El texto de la columna «Quién informó» (y del CSV). */
+export function userOutcomeReporterLabel(r: UserOutcomeReporter): string {
+  switch (r.kind) {
+    case 'none':
+      return '—'
+    case 'unknown':
+      return 'No se sabe (falta la migración del backend)'
+    case 'user':
+      return 'La persona (app)'
+    case 'operator':
+      return r.by ? `Equipo: ${actorLabel(r.by)}` : 'Equipo'
+  }
+}
+
 // ── Errores ─────────────────────────────────────────────────────────────────
 
 /** Sentinela de `backendError(..., { quoteUserFlow: true })`. */

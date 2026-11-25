@@ -16,6 +16,8 @@ import {
   readableDeclareOutcomeError,
   readableSelectProposalError,
   selectQuoteProposalOnBehalfSchema,
+  userOutcomeReporter,
+  userOutcomeReporterLabel,
 } from '../src/lib/quote-user-flow.ts'
 
 const ID = '00000000-0000-4000-8000-000000000001'
@@ -124,6 +126,37 @@ test('el admin se nombra con lo que haya', () => {
   assert.equal(actorLabel({ id: USER, name: null, email: 'ana@x.com' }), 'ana@x.com')
   assert.equal(actorLabel({ id: USER, name: null, email: null }), USER)
   assert.equal(actorLabel(null), 'un admin que ya no está')
+})
+
+test('quién informó el resultado: nadie si no hay resultado', () => {
+  const r = userOutcomeReporter({ hasValue: false, hasAccount: true, provenanceAvailable: true, source: null, by: null })
+  assert.deepEqual(r, { kind: 'none' })
+  assert.equal(userOutcomeReporterLabel(r), '—')
+})
+
+test('quién informó: sin las columnas del backend no se sabe', () => {
+  const r = userOutcomeReporter({ hasValue: true, hasAccount: true, provenanceAvailable: false, source: null, by: null })
+  assert.deepEqual(r, { kind: 'unknown' })
+  assert.match(userOutcomeReporterLabel(r), /falta la migración/)
+})
+
+test('quién informó: la persona en la app, o el equipo con su autor', () => {
+  const ana = { id: USER, name: 'Ana', email: 'ana@x.com' }
+  const app = userOutcomeReporter({ hasValue: true, hasAccount: true, provenanceAvailable: true, source: null, by: null })
+  assert.deepEqual(app, { kind: 'user' })
+  assert.equal(userOutcomeReporterLabel(app), 'La persona (app)')
+  const op = userOutcomeReporter({ hasValue: true, hasAccount: true, provenanceAvailable: true, source: 'operator', by: ana })
+  assert.deepEqual(op, { kind: 'operator', by: ana })
+  assert.equal(userOutcomeReporterLabel(op), 'Equipo: Ana (ana@x.com)')
+})
+
+test('quién informó sin cuenta: siempre el equipo, nunca «la persona (app)»', () => {
+  const legacy = userOutcomeReporter({ hasValue: true, hasAccount: false, provenanceAvailable: true, source: null, by: null })
+  assert.deepEqual(legacy, { kind: 'operator', by: null })
+  assert.equal(userOutcomeReporterLabel(legacy), 'Equipo')
+  // Sin cuenta ni columnas: igual se sabe que fue el equipo.
+  const noCols = userOutcomeReporter({ hasValue: true, hasAccount: false, provenanceAvailable: false, source: null, by: null })
+  assert.deepEqual(noCols, { kind: 'operator', by: null })
 })
 
 // ── Errores ─────────────────────────────────────────────────────────────────
