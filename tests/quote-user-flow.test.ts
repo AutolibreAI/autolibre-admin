@@ -8,6 +8,10 @@ import {
   canSelectProposalOnBehalf,
   declareOutcomeBody,
   declareQuoteUserOutcomeOnBehalfSchema,
+  QUOTE_NOT_HIRED_NOTE_MAX,
+  QUOTE_NOT_HIRED_REASONS,
+  QUOTE_NOT_HIRED_REASON_LABELS,
+  quoteNotHiredReasonLabel,
   hasIncompleteUserFlow,
   parseQuoteUserFlowError,
   performedOnBounds,
@@ -89,6 +93,58 @@ test('el cuerpo HTTP no lleva el id ni una fecha fuera de «Fue»', () => {
     performedOn: '2026-11-02',
   })
   assert.deepEqual(declareOutcomeBody({ quoteRequestId: ID, outcome: 'pending' }), { outcome: 'pending' })
+})
+
+// ── Motivo de «No fue» ──────────────────────────────────────────────────────
+
+test('motivos de «No fue»: el enum del backend, en el orden del contrato, con su rótulo', () => {
+  assert.deepEqual(
+    [...QUOTE_NOT_HIRED_REASONS],
+    ['no_budget', 'no_time', 'did_it_themselves', 'hired_outside_network', 'no_longer_needed', 'took_too_long', 'other'],
+  )
+  assert.equal(QUOTE_NOT_HIRED_REASON_LABELS.no_budget, 'Falta de plata')
+  assert.equal(QUOTE_NOT_HIRED_REASON_LABELS.hired_outside_network, 'Lo hizo fuera de la red')
+  assert.equal(quoteNotHiredReasonLabel('other'), 'Otro')
+  // Un valor que el panel no conoce se muestra crudo, nunca se pierde.
+  assert.equal(quoteNotHiredReasonLabel('nuevo_motivo'), 'nuevo_motivo')
+})
+
+test('«No fue» admite motivo y observación, los dos opcionales (también con «Otro»)', () => {
+  const ok = (v: object) => declareQuoteUserOutcomeOnBehalfSchema.safeParse({ quoteRequestId: ID, ...v }).success
+  assert.equal(ok({ outcome: 'not_hired', notHiredReason: 'no_budget', notHiredNote: 'Le pareció caro' }), true)
+  assert.equal(ok({ outcome: 'not_hired', notHiredReason: 'other' }), true)
+  assert.equal(ok({ outcome: 'not_hired', notHiredReason: null, notHiredNote: null }), true)
+  assert.equal(ok({ outcome: 'not_hired', notHiredReason: 'sin_ganas' }), false)
+  assert.equal(ok({ outcome: 'not_hired', notHiredNote: 'x'.repeat(QUOTE_NOT_HIRED_NOTE_MAX) }), true)
+  assert.equal(ok({ outcome: 'not_hired', notHiredNote: 'x'.repeat(QUOTE_NOT_HIRED_NOTE_MAX + 1) }), false)
+  // El tope se mide sin los espacios de los bordes: el backend recorta antes de contar.
+  assert.equal(ok({ outcome: 'not_hired', notHiredNote: `  ${'x'.repeat(QUOTE_NOT_HIRED_NOTE_MAX)}  ` }), true)
+})
+
+test('con «Fue» o «Todavía no», motivo y observación no nulos se rechazan (el backend da 400)', () => {
+  const ok = (v: object) => declareQuoteUserOutcomeOnBehalfSchema.safeParse({ quoteRequestId: ID, ...v }).success
+  assert.equal(ok({ outcome: 'pending', notHiredReason: 'no_budget' }), false)
+  assert.equal(ok({ outcome: 'pending', notHiredNote: 'algo' }), false)
+  assert.equal(ok({ outcome: 'hired', performedOn: '2026-11-02', notHiredReason: 'no_time' }), false)
+  assert.equal(ok({ outcome: 'pending', notHiredReason: null, notHiredNote: null }), true)
+})
+
+test('el cuerpo de «No fue» lleva motivo y observación sólo si vinieron; la observación recortada y vacía → null', () => {
+  assert.deepEqual(
+    declareOutcomeBody({ quoteRequestId: ID, outcome: 'not_hired', notHiredReason: 'no_time', notHiredNote: '  Viaja  ' }),
+    { outcome: 'not_hired', notHiredReason: 'no_time', notHiredNote: 'Viaja' },
+  )
+  assert.deepEqual(
+    declareOutcomeBody({ quoteRequestId: ID, outcome: 'not_hired', notHiredReason: null, notHiredNote: '   ' }),
+    { outcome: 'not_hired', notHiredReason: null, notHiredNote: null },
+  )
+  // Sin las claves (backend sin la migración): no viajan.
+  assert.deepEqual(declareOutcomeBody({ quoteRequestId: ID, outcome: 'not_hired' }), { outcome: 'not_hired' })
+  // Con otro resultado no viajan nunca, ni en null.
+  assert.deepEqual(
+    declareOutcomeBody({ quoteRequestId: ID, outcome: 'pending', notHiredReason: null, notHiredNote: null }),
+    { outcome: 'pending' },
+  )
 })
 
 // ── Fechas ──────────────────────────────────────────────────────────────────

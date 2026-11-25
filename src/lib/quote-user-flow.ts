@@ -89,16 +89,65 @@ export const QUOTE_USER_OUTCOME_DECLARATION_LABELS: Record<QuoteUserOutcomeDecla
 const DAY = /^\d{4}-\d{2}-\d{2}$/
 
 /**
+ * Por qué NO fue al taller (backend, `quote_request_not_hired_reason`). El
+ * orden es el del contrato y el del select. Mismo patrón que
+ * `QUOTE_REQUEST_CANCELLATION_REASONS` (`~/lib/quote-requests`), pero vive acá
+ * porque este archivo no puede importar de `~/` (lo prueba `node --test`).
+ */
+export const QUOTE_NOT_HIRED_REASONS = [
+  'no_budget',
+  'no_time',
+  'did_it_themselves',
+  'hired_outside_network',
+  'no_longer_needed',
+  'took_too_long',
+  'other',
+] as const
+export type QuoteNotHiredReason = (typeof QUOTE_NOT_HIRED_REASONS)[number]
+
+export const QUOTE_NOT_HIRED_REASON_LABELS: Record<QuoteNotHiredReason, string> = {
+  no_budget: 'Falta de plata',
+  no_time: 'Falta de tiempo',
+  did_it_themselves: 'Lo hizo él',
+  hired_outside_network: 'Lo hizo fuera de la red',
+  no_longer_needed: 'Ya no lo necesita',
+  took_too_long: 'Tardamos demasiado',
+  other: 'Otro',
+}
+
+/** Un valor que el panel todavía no conoce se muestra crudo: nunca se pierde. */
+export function quoteNotHiredReasonLabel(reason: string): string {
+  return (QUOTE_NOT_HIRED_REASON_LABELS as Record<string, string>)[reason] ?? reason
+}
+
+/** Tope de la observación, en caracteres, ya recortada (el backend da 400 si lo pasa). */
+export const QUOTE_NOT_HIRED_NOTE_MAX = 1000
+
+/**
  * `performedOn` obligatorio con `hired` y PROHIBIDO en los otros dos — el
  * backend contesta 400 si viene de más, así que acá no viaja ni vacío. Los
  * límites (no futuro, no antes del pedido) los vuelve a chequear el backend; el
  * date picker los impone con `min`/`max` (`performedOnBounds`).
+ *
+ * `notHiredReason` / `notHiredNote`: sólo con `not_hired`, y los DOS opcionales
+ * (incluso con «Otro» la observación no es obligatoria — decisión del usuario).
+ * Con otro resultado, un valor no nulo es 400 del backend: acá se rechaza antes.
+ * `null` explícito = «sin motivo» / «sin observación» (pisa lo que hubiera);
+ * la clave ausente = el panel no los manda (la base no tiene la migración).
  */
 export const declareQuoteUserOutcomeOnBehalfSchema = z
   .object({
     quoteRequestId: z.uuid(),
     outcome: z.enum(QUOTE_USER_OUTCOME_DECLARATIONS),
     performedOn: z.string().regex(DAY, 'La fecha va como AAAA-MM-DD.').optional(),
+    notHiredReason: z.enum(QUOTE_NOT_HIRED_REASONS).nullable().optional(),
+    notHiredNote: z
+      .string()
+      .refine((v) => v.trim().length <= QUOTE_NOT_HIRED_NOTE_MAX, {
+        message: `La observación va hasta ${QUOTE_NOT_HIRED_NOTE_MAX} caracteres.`,
+      })
+      .nullable()
+      .optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
@@ -106,16 +155,32 @@ export const declareQuoteUserOutcomeOnBehalfSchema = z
       ctx.addIssue({ code: 'custom', path: ['performedOn'], message: 'Falta la fecha en que se hizo el trabajo.' })
     if (v.outcome !== 'hired' && v.performedOn !== undefined)
       ctx.addIssue({ code: 'custom', path: ['performedOn'], message: 'La fecha va sólo si fue al taller.' })
+    if (v.outcome !== 'not_hired' && v.notHiredReason != null)
+      ctx.addIssue({ code: 'custom', path: ['notHiredReason'], message: 'El motivo va sólo si no fue.' })
+    if (v.outcome !== 'not_hired' && v.notHiredNote != null)
+      ctx.addIssue({ code: 'custom', path: ['notHiredNote'], message: 'La observación va sólo si no fue.' })
   })
 export type DeclareQuoteUserOutcomeOnBehalfInput = z.infer<typeof declareQuoteUserOutcomeOnBehalfSchema>
 
-/** El cuerpo HTTP, sin el id (va en la URL). `performedOn` sólo existe si viaja. */
-export function declareOutcomeBody(
-  input: DeclareQuoteUserOutcomeOnBehalfInput,
-): { outcome: QuoteUserOutcomeDeclaration; performedOn?: string } {
-  return input.outcome === 'hired' && input.performedOn
-    ? { outcome: input.outcome, performedOn: input.performedOn }
-    : { outcome: input.outcome }
+export type DeclareOutcomeBody = {
+  outcome: QuoteUserOutcomeDeclaration
+  performedOn?: string
+  notHiredReason?: QuoteNotHiredReason | null
+  notHiredNote?: string | null
+}
+
+/**
+ * El cuerpo HTTP, sin el id (va en la URL). `performedOn` sólo con «Fue»;
+ * motivo y observación sólo con «No fue» y sólo si el input trae la clave. La
+ * observación viaja recortada, y vacía → `null` (el backend hace lo mismo).
+ */
+export function declareOutcomeBody(input: DeclareQuoteUserOutcomeOnBehalfInput): DeclareOutcomeBody {
+  if (input.outcome === 'hired' && input.performedOn) return { outcome: input.outcome, performedOn: input.performedOn }
+  const body: DeclareOutcomeBody = { outcome: input.outcome }
+  if (input.outcome !== 'not_hired') return body
+  if (input.notHiredReason !== undefined) body.notHiredReason = input.notHiredReason
+  if (input.notHiredNote !== undefined) body.notHiredNote = input.notHiredNote?.trim() || null
+  return body
 }
 
 // ── Las fechas del date picker ──────────────────────────────────────────────
