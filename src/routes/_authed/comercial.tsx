@@ -22,6 +22,7 @@ const TABS: ReadonlyArray<{ to: string; label: string }> = [
   // Etapa 2 (2026-11-11): el resumen con objeciones y trabajos/mes, y las altas para liquidar.
   { to: '/comercial/resumen', label: 'Resumen' },
   { to: '/comercial/altas', label: 'Altas' },
+  { to: '/comercial/liquidaciones', label: 'Liquidaciones' },
   // Etapa 3 (2026-11-11): la venta de la API de datos vehiculares a agencias (migración 031).
   { to: '/comercial/api-chasis', label: 'API Chasis' },
   // 2026-11-20 (migración 035): el catálogo del equipo, para «Alta por» y «Conseguido por».
