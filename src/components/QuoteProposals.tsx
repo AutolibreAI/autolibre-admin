@@ -86,6 +86,8 @@ export function QuoteProposals({
   hasUser,
   channel,
   status,
+  renderSelectAction,
+  selectionProvenance,
 }: {
   quoteRequestId: string
   data: QuoteProposalsResult
@@ -97,6 +99,14 @@ export function QuoteProposals({
   /** Por dónde entró, para decir por dónde le llegan las propuestas. */
   channel: string
   status: string
+  /**
+   * «Marcar como elegida por el usuario» (`~/components/QuoteUserFlow`), para
+   * cada activa NO elegida. Lo arma la ficha: esta tarjeta no sabe de cuentas
+   * ni de procedencia, sólo le hace lugar.
+   */
+  renderSelectAction?: (p: QuoteProposal) => ReactNode
+  /** Quién eligió la elegida (la persona o el equipo), debajo de su badge. */
+  selectionProvenance?: ReactNode
 }) {
   if (!data.available) {
     return (
@@ -181,6 +191,8 @@ export function QuoteProposals({
                     partners={partners}
                     otherRecommended={recommended !== null && recommended.id !== p.id ? recommended : null}
                     readOnly={closed}
+                    selectAction={data.selectedProposalId !== p.id ? renderSelectAction?.(p) : undefined}
+                    selectionProvenance={data.selectedProposalId === p.id ? selectionProvenance : undefined}
                   />
                 ) : (
                   <div className="flex items-baseline gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
@@ -286,6 +298,8 @@ function ProposalRow({
   partners,
   otherRecommended,
   readOnly,
+  selectAction,
+  selectionProvenance,
 }: {
   proposal: QuoteProposal
   quoteRequestId: string
@@ -294,6 +308,8 @@ function ProposalRow({
   partners: Array<PartnerOption>
   otherRecommended: QuoteProposal | null
   readOnly: boolean
+  selectAction?: ReactNode
+  selectionProvenance?: ReactNode
 }) {
   const router = useRouter()
   const [confirming, setConfirming] = useState(false)
@@ -350,6 +366,7 @@ function ProposalRow({
               Elegida{selectedAt ? ` el ${formatDateTime(selectedAt)} UTC` : ''}
             </Badge>
           ) : null}
+          {selected && selectionProvenance ? <span className="basis-full">{selectionProvenance}</span> : null}
         </div>
         <div className="flex shrink-0 items-baseline gap-3">
           <span className={cn('text-sm tabular-nums', amount ? 'font-semibold' : 'text-muted-foreground')}>
@@ -459,6 +476,8 @@ function ProposalRow({
           </div>
         </div>
       ) : null}
+
+      {!readOnly && !confirming && selectAction ? <div className="mt-1 flex justify-end">{selectAction}</div> : null}
 
       {error ? <div className="mt-2"><ErrorText>{error}</ErrorText></div> : null}
     </div>
