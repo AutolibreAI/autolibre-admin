@@ -7,6 +7,8 @@ import { listPartnerQuoteVolumeFn } from '~/fn/partner-quote-volume'
 import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
 import { listPartnerLastContactsFn } from '~/fn/partner-prospects'
+import { getPartnerFeesFn } from '~/fn/partner-fees'
+import { classifyFeeJobs, groupOpenByPartner } from '~/lib/partner-fees'
 import { Chip, FilterGroup, RangeFilter } from '~/components/Filters'
 import { MultiSelect } from '~/components/MultiSelect'
 import { SortHeader } from '~/components/SortHeader'
@@ -25,7 +27,7 @@ import {
   TableRow,
 } from '~/components/ui/table'
 import { normalizeForMatch } from '~/lib/catalog'
-import { formatInt } from '~/lib/format'
+import { formatArs, formatInt } from '~/lib/format'
 import {
   PROPOSAL_COUNT_START,
   PROPOSAL_HISTORY,
@@ -39,6 +41,7 @@ import {
   monthLabel,
   partnerHistoryCsv,
   shortDay,
+  subscriptionStatusLabel,
 } from '~/lib/partner-plans'
 import {
   CLEARED_PROPOSAL_FILTERS,
@@ -57,6 +60,7 @@ import type {
   ExternalUsageRow,
   PartnerHistoryRow,
   PartnerRef,
+  PartnerSubscriptionInfo,
   PartnerPlansResult,
   PartnerUsageRow,
   PlanInfo,
@@ -112,13 +116,23 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners, volume, plans, contacts] = await Promise.all([
+    const [quotes, partners, volume, plans, contacts, fees] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
       listPartnerQuoteVolumeFn({ signal }),
       listPartnerPlansFn({ signal }),
       listPartnerLastContactsFn({ signal }),
+      // El fee pendiente de Liquidaciones (038). Si falla o falta, la columna dice «—».
+      getPartnerFeesFn({ signal }).catch(() => ({ available: false as const })),
     ])
+    // Fee pendiente + avisado por proveedor, con la MISMA regla que Partners › Liquidaciones.
+    let feeOwed: Array<[string, number]> | null = null
+    if (fees.available) {
+      const fp = new Map(fees.partners.map((p) => [p.id, p]))
+      feeOwed = groupOpenByPartner(classifyFeeJobs(fees.jobs, fp), fp).map(
+        (g) => [g.partner.id, g.pendingTotal + g.notifiedTotal] as [string, number],
+      )
+    }
     // Sólo proveedores del directorio: un taller de afuera no tiene plan ni ficha.
     const allTime: Array<[string, AllTimeVolume]> | null = volume.available
       ? volume.rows.flatMap((r) =>
@@ -149,6 +163,7 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
       partnerInfo,
       lastContacts: contacts.rows,
       contactsAvailable: contacts.available,
+      feeOwed,
     }
   },
   head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
@@ -158,8 +173,13 @@ export const Route = createFileRoute('/_authed/partners/propuestas')({
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 function PartnerProposals() {
-  const { requests, partners, allTime, plansResult, partnerInfo, lastContacts, contactsAvailable } =
+  const { requests, partners, allTime, plansResult, partnerInfo, lastContacts, contactsAvailable, feeOwed } =
     Route.useLoaderData()
+  const feeMap = useMemo(() => (feeOwed ? new Map(feeOwed) : null), [feeOwed])
+  const subMap = useMemo(
+    () => new Map(plansResult.available ? plansResult.subscriptions.map((x) => [x.partnerId, x] as const) : []),
+    [plansResult],
+  )
   const allTimeMap = useMemo(() => (allTime ? new Map(allTime) : null), [allTime])
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -512,11 +532,12 @@ function PartnerProposals() {
         </>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[1180px]">
+          <Table className="min-w-[1480px]">
             <TableHeader>
               <TableRow>
                 <Th label="Proveedor" k="name" />
                 <Th label="Plan" k="plan" />
+                <TableHead>Rubros</TableHead>
                 <Th label="Zona" k="zone" />
                 <Th label="Alta" k="createdAt" />
                 <Th label="Último contacto" k="lastContact" title="Del seguimiento comercial (Comercial › Contactos)." />
@@ -525,11 +546,20 @@ function PartnerProposals() {
                 <Th label="Elegidas" k="selected" align="right" />
                 <Th label="Usadas / tope" k="used" align="right" />
                 <Th label="Desde 27/10" k="historyUsed" align="right" title="Usadas desde el 27/10/26 (el histórico)." />
+                <TableHead className="text-right" title="Pendiente + avisado en Partners › Liquidaciones.">
+                  Fee pendiente
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {monthRows.map((r) => (
-                <UsageRow key={r.partnerId} row={r} facts={factsFor(r.partnerId)} />
+                <UsageRow
+                  key={r.partnerId}
+                  row={r}
+                  facts={factsFor(r.partnerId)}
+                  sub={subMap.get(r.partnerId) ?? null}
+                  feeOwed={feeMap ? (feeMap.get(r.partnerId) ?? 0) : null}
+                />
               ))}
             </TableBody>
           </Table>
@@ -543,7 +573,18 @@ function PartnerProposals() {
   )
 }
 
-function UsageRow({ row, facts }: { row: PartnerUsageRow; facts: PartnerFacts }) {
+function UsageRow({
+  row,
+  facts,
+  sub,
+  feeOwed,
+}: {
+  row: PartnerUsageRow
+  facts: PartnerFacts
+  sub: PartnerSubscriptionInfo | null
+  feeOwed: number | null
+}) {
+  const left = row.plan !== null && row.cap !== null ? row.cap - row.used : null
   return (
     <TableRow className={toneRowClass(row.tone)}>
       <TableCell>
@@ -551,6 +592,19 @@ function UsageRow({ row, facts }: { row: PartnerUsageRow; facts: PartnerFacts })
       </TableCell>
       <TableCell className="text-sm">
         <PlanCell plan={row.plan} />
+        {sub ? (
+          <div className="text-xs text-muted-foreground">
+            {subscriptionStatusLabel(sub.status)}
+            {sub.status === 'trialing' && sub.trialEndsAt ? ` · prueba hasta ${shortDay(baDay(sub.trialEndsAt))}` : ''}
+          </div>
+        ) : null}
+      </TableCell>
+      <TableCell className="max-w-56 text-xs" title={facts.categories.map((c) => c.name).join(', ')}>
+        {facts.categories.length ? (
+          <span className="line-clamp-2">{facts.categories.map((c) => c.name).join(', ')}</span>
+        ) : (
+          <span className="text-muted-foreground">sin rubros</span>
+        )}
       </TableCell>
       <FactCells facts={facts} />
       <TableCell className="text-right tabular-nums">{formatInt(row.sent)}</TableCell>
@@ -561,8 +615,22 @@ function UsageRow({ row, facts }: { row: PartnerUsageRow; facts: PartnerFacts })
       <TableCell className={cn('text-right tabular-nums', toneTextClass(row.tone))}>
         {formatInt(row.used)} / {row.plan === null ? '—' : row.cap === null ? 'sin límite' : formatInt(row.cap)}
         <ToneNote tone={row.tone} used={row.used} cap={row.cap} />
+        {left !== null && left > 0 && !isFounding(row.tier) ? (
+          <div className="text-xs font-normal text-muted-foreground">quedan {formatInt(left)}</div>
+        ) : null}
       </TableCell>
       <TableCell className="text-right tabular-nums">{formatInt(facts.historyUsed)}</TableCell>
+      <TableCell className="text-right tabular-nums">
+        {feeOwed === null ? (
+          <span className="text-muted-foreground">—</span>
+        ) : feeOwed > 0 ? (
+          <Link to="/partners/liquidaciones" search={{ feePartner: row.partnerId }} className="hover:underline">
+            {formatArs(feeOwed)}
+          </Link>
+        ) : (
+          <span className="text-muted-foreground">$ 0</span>
+        )}
+      </TableCell>
     </TableRow>
   )
 }
