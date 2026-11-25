@@ -452,8 +452,8 @@ export function readableDeclareOutcomeError(cause: unknown): ReadableQuoteUserFl
   if (e.status === 400)
     return {
       text: e.message
-        ? `El backend rechazó la declaración: «${e.message}». Revisá la fecha (no puede ser futura ni anterior al pedido). No se guardó nada.`
-        : 'El backend rechazó la declaración. Revisá la fecha (no puede ser futura ni anterior al pedido). No se guardó nada.',
+        ? `El backend rechazó la declaración: «${e.message}». Revisá la fecha (no puede ser futura ni anterior al pedido) y la observación (hasta 1000 caracteres). No se guardó nada.`
+        : 'El backend rechazó la declaración. Revisá la fecha (no puede ser futura ni anterior al pedido) y la observación (hasta 1000 caracteres). No se guardó nada.',
       action: 'fix',
     }
   return fallback(e)

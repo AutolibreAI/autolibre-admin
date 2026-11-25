@@ -2,6 +2,9 @@ import { useId, useRef, useState, type ReactNode } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import { Check, PhoneCall, UserRound, Users } from 'lucide-react'
 import {
+  QUOTE_NOT_HIRED_NOTE_MAX,
+  QUOTE_NOT_HIRED_REASONS,
+  QUOTE_NOT_HIRED_REASON_LABELS,
   QUOTE_USER_OUTCOME_DECLARATIONS,
   QUOTE_USER_OUTCOME_DECLARATION_LABELS,
   actorLabel,
@@ -14,6 +17,7 @@ import {
   readableDeclareOutcomeError,
   readableSelectProposalError,
   type DeclareQuoteUserOutcomeOnBehalfInput,
+  type QuoteNotHiredReason,
   type QuoteUserFlowErrorAction,
   type QuoteUserFlowProvenance,
   type QuoteUserFlowStepProvenance,
@@ -24,6 +28,7 @@ import { declareQuoteUserOutcomeOnBehalfFn, selectQuoteProposalOnBehalfFn } from
 import { Button } from '~/components/ui/button'
 import { Card, CardContent } from '~/components/ui/card'
 import { Input } from '~/components/ui/input'
+import { Textarea } from '~/components/ui/textarea'
 import { formatDateTime } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { QuoteProposal } from '~/lib/quote-proposals'
@@ -336,7 +341,7 @@ export function QuoteUserOutcomeCard({
         </dl>
 
         {declarable ? (
-          <DeclareOutcomeForm key={d.id} detail={d} selectedProposal={selectedProposal} />
+          <DeclareOutcomeForm key={d.id} detail={d} provenance={provenance} selectedProposal={selectedProposal} />
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {d.closeReasonCode === 'cancelled_by_user'
@@ -351,16 +356,29 @@ export function QuoteUserOutcomeCard({
 
 function DeclareOutcomeForm({
   detail: d,
+  provenance,
   selectedProposal,
 }: {
   detail: QuoteRequestDetail
+  provenance: QuoteUserFlowProvenance
   selectedProposal: QuoteProposal | null
 }) {
+  // Sin las columnas del motivo en la base (migración del backend aparte), el
+  // formulario no los ofrece ni los manda: un backend viejo los rechazaría.
+  const notHiredAvailable = provenance.available && provenance.notHired.available
+  // Lo cargado hoy, si ya dijo «No fue»: corregir arranca desde ahí, no en blanco
+  // (mandar vacío lo borra).
+  const currentNotHired =
+    d.userOutcome === 'not_hired' && provenance.available && provenance.notHired.available
+      ? provenance.notHired
+      : null
   const router = useRouter()
   const formId = useId()
   const [open, setOpen] = useState(false)
   const [outcome, setOutcome] = useState<QuoteUserOutcomeDeclaration | null>(null)
   const [performedOn, setPerformedOn] = useState('')
+  const [notHiredReason, setNotHiredReason] = useState<QuoteNotHiredReason | ''>('')
+  const [notHiredNote, setNotHiredNote] = useState('')
   const [invalid, setInvalid] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // El payload que salió: «Reintentar» reenvía ESTE, nunca lo rearma del formulario.
@@ -375,10 +393,26 @@ function DeclareOutcomeForm({
     setBounds(performedOnBounds(d.createdAt))
     setOutcome(null)
     setPerformedOn('')
+    setNotHiredReason('')
+    setNotHiredNote('')
     setInvalid(null)
     setError(null)
     setSent(null)
     setOpen(true)
+  }
+
+  /** Elegir el resultado. Salir de «No fue» limpia motivo y observación; volver, recupera lo cargado. */
+  function choose(o: QuoteUserOutcomeDeclaration) {
+    setOutcome(o)
+    setInvalid(null)
+    if (o === 'not_hired') {
+      const known = (QUOTE_NOT_HIRED_REASONS as ReadonlyArray<string>).includes(currentNotHired?.reason ?? '')
+      setNotHiredReason(known ? (currentNotHired?.reason as QuoteNotHiredReason) : '')
+      setNotHiredNote(currentNotHired?.note ?? '')
+    } else {
+      setNotHiredReason('')
+      setNotHiredNote('')
+    }
   }
 
   async function send(payload: DeclareQuoteUserOutcomeOnBehalfInput) {
@@ -413,6 +447,11 @@ function DeclareOutcomeForm({
       quoteRequestId: d.id,
       outcome,
       ...(outcome === 'hired' && performedOn ? { performedOn } : {}),
+      // Con «No fue» viajan SIEMPRE los dos (null = sin motivo / sin observación),
+      // así corregir sin motivo borra el anterior. Con los otros, nunca.
+      ...(outcome === 'not_hired' && notHiredAvailable
+        ? { notHiredReason: notHiredReason || null, notHiredNote: notHiredNote.trim() || null }
+        : {}),
     })
     if (!parsed.success) {
       setInvalid(parsed.error.issues[0]?.message ?? 'Revisá los datos.')
@@ -458,10 +497,7 @@ function DeclareOutcomeForm({
               aria-checked={outcome === o}
               variant={outcome === o ? 'default' : 'outline'}
               disabled={busy}
-              onClick={() => {
-                setOutcome(o)
-                setInvalid(null)
-              }}
+              onClick={() => choose(o)}
             >
               {QUOTE_USER_OUTCOME_DECLARATION_LABELS[o]}
             </Button>
@@ -491,6 +527,53 @@ function DeclareOutcomeForm({
           <p className="mt-1 text-xs text-muted-foreground">
             La fecha real, no la de hoy: del {formatPlainDay(bounds.min)} a hoy.
           </p>
+        </div>
+      ) : null}
+
+      {outcome === 'not_hired' && notHiredAvailable ? (
+        <div className="space-y-3">
+          <div>
+            <label htmlFor={`${formId}-not-hired-reason`} className="mb-1 block text-xs font-medium text-muted-foreground">
+              ¿Por qué no fue? (opcional)
+            </label>
+            <select
+              id={`${formId}-not-hired-reason`}
+              value={notHiredReason}
+              disabled={busy}
+              onChange={(e) => {
+                setNotHiredReason(e.target.value as QuoteNotHiredReason | '')
+                setInvalid(null)
+              }}
+              className="h-8 w-full max-w-xs rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">Sin motivo</option>
+              {QUOTE_NOT_HIRED_REASONS.map((r) => (
+                <option key={r} value={r}>
+                  {QUOTE_NOT_HIRED_REASON_LABELS[r]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor={`${formId}-not-hired-note`} className="mb-1 block text-xs font-medium text-muted-foreground">
+              Observación (opcional)
+            </label>
+            <Textarea
+              id={`${formId}-not-hired-note`}
+              value={notHiredNote}
+              maxLength={QUOTE_NOT_HIRED_NOTE_MAX}
+              rows={3}
+              disabled={busy}
+              onChange={(e) => {
+                setNotHiredNote(e.target.value)
+                setInvalid(null)
+              }}
+              className="text-sm"
+            />
+            <p className="mt-1 text-right text-xs text-muted-foreground">
+              {notHiredNote.trim().length}/{QUOTE_NOT_HIRED_NOTE_MAX}
+            </p>
+          </div>
         </div>
       ) : null}
 
