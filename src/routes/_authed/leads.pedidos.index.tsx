@@ -150,6 +150,13 @@ function Pedidos() {
             {/* El que llega de forma informal (llamada, en persona, referido) y
                 nunca pasó por app/web/whatsapp. → `QuoteRequestComposer`,
                 `ops.create_quote_request` (migración 012). */}
+            {/* Cómo terminó cada pedido, todos los canales, con CSV. → `leads.pedidos.resolucion.tsx` */}
+            <Link
+              to="/leads/pedidos/resolucion"
+              className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
+            >
+              Resolución
+            </Link>
             <Link
               to="/leads/pedidos/cierres"
               className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground"
