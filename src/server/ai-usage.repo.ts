@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 import { sql } from './db'
+import { accountTypeContext, countsAsUserSql } from './account-type.repo'
 import { WINDOW_DAYS } from '~/lib/ai-usage'
 import type {
   ModelPrice,
@@ -242,7 +243,7 @@ export async function usageUnitEconomics(
         AND ($2::text IS NULL OR surface = $2)
     ),
     real_users AS (
-      SELECT u.id FROM users u WHERE ${REAL_USER_PREDICATE}
+      SELECT u.id FROM users u WHERE ${REAL_USER_PREDICATE} AND ${countsAsUserSql('u', await accountTypeContext())}
     ),
     app_active AS (
       SELECT u.id

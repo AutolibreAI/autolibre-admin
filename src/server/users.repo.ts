@@ -1,4 +1,6 @@
 import '@tanstack/react-start/server-only'
+import { accountTypeContext, accountTypeSql } from './account-type.repo'
+import type { AccountType } from '~/lib/account-type'
 
 import { sql, sqlOne } from './db'
 import { partnerMembersAvailability } from './partner-members.repo'
@@ -81,6 +83,8 @@ interface UserListRow {
   last_activity_at: Date | string | null
   driver_license_expires_at: Date | string | null
   driver_license_days_until_expiration: number | string | null
+  account_type: AccountType
+  linked_partners: Array<{ id: string; name: string }> | null
 }
 
 /**
@@ -99,6 +103,7 @@ const SORT_COLUMNS: Record<UserSortKey, string> = {
   createdAt: 'created_at',
   lastActivity: 'last_activity_at',
   license: 'driver_license_days_until_expiration',
+  accountType: 'account_type',
 }
 
 /**
@@ -183,6 +188,14 @@ export async function listUsers(
 
   const outerWhere: Array<string> = []
 
+  // Tipo de cuenta (`~/lib/account-type`): va afuera, sobre el alias.
+  if (search.userAccountType === 'counted') {
+    outerWhere.push(`account_type in ('usuario', 'partner_dueno')`)
+  } else if (search.userAccountType !== 'all') {
+    params.push(search.userAccountType)
+    outerWhere.push(`account_type = $${params.length}`)
+  }
+
   if (search.hasVehicles !== 'all') {
     outerWhere.push(search.hasVehicles === 'yes' ? 'vehicle_count > 0' : 'vehicle_count = 0')
   }
@@ -204,6 +217,12 @@ export async function listUsers(
   }
 
   const sortColumn = SORT_COLUMNS[search.sort]
+  const ctx = await accountTypeContext()
+  const linkedPartners = ctx.members
+    ? `(select json_agg(json_build_object('id', p.id, 'name', p.name) order by p.name)
+          from partner_members pm join partners p on p.id = pm.partner_id
+         where pm.user_id = u.id and pm.revoked_at is null)`
+    : `null::json`
 
   const rows = await sql<UserListRow>(
     `
@@ -239,7 +258,9 @@ export async function listUsers(
         (select l.expiration_date from driver_licenses l where l.user_id = u.id
            order by l.archived asc, l.created_at desc limit 1) as driver_license_expires_at,
         (select (l.expiration_date - current_date) from driver_licenses l where l.user_id = u.id
-           order by l.archived asc, l.created_at desc limit 1) as driver_license_days_until_expiration
+           order by l.archived asc, l.created_at desc limit 1) as driver_license_days_until_expiration,
+        ${accountTypeSql('u', ctx)} as account_type,
+        ${linkedPartners} as linked_partners
       from users u
       ${where.length ? `where ${where.join(' and ')}` : ''}
     ) s
@@ -264,6 +285,8 @@ export async function listUsers(
     lastActivityAt: toIso(r.last_activity_at),
     driverLicenseExpiresAt: toIso(r.driver_license_expires_at),
     driverLicenseDaysUntilExpiration: toIntOrNull(r.driver_license_days_until_expiration),
+    accountType: r.account_type,
+    linkedPartners: r.linked_partners ?? [],
   }))
 }
 

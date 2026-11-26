@@ -1,5 +1,7 @@
 import '@tanstack/react-start/server-only'
 
+import { accountTypeContext, countsAsUserSql, realUserPredicate } from './account-type.repo'
+
 import { sql, sqlOne } from './db'
 import { NOTIFICATION_DELAYED_AFTER_MIN } from '~/lib/notifications'
 import {
@@ -153,16 +155,20 @@ export async function adoptionPulse(
 ): Promise<AdoptionPulse> {
   void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
 
+  // "Usuario real" = no interno Y cuenta como usuario (`~/lib/account-type`):
+  // un taller que creó su cuenta para dar de alta el taller no es un usuario.
+  const ctx = await accountTypeContext()
   const row = await sqlOne<AdoptionRow>(`
     WITH flagged AS (
-      SELECT u.role, u.auth_provider, u.created_at, ${INTERNAL_PREDICATE} AS internal
+      SELECT u.role, u.auth_provider, u.created_at, ${INTERNAL_PREDICATE} AS internal,
+             ${countsAsUserSql('u', ctx)} AS counted
       FROM users u
     )
     SELECT
-      count(*) FILTER (WHERE NOT internal)::int AS users_total,
+      count(*) FILTER (WHERE NOT internal AND counted)::int AS users_total,
       count(*) FILTER (WHERE internal)::int     AS users_internal,
-      count(*) FILTER (WHERE NOT internal AND created_at >= now() - interval '7 days')::int  AS users_last_7d,
-      count(*) FILTER (WHERE NOT internal AND created_at >= now() - interval '30 days')::int AS users_last_30d,
+      count(*) FILTER (WHERE NOT internal AND counted AND created_at >= now() - interval '7 days')::int  AS users_last_7d,
+      count(*) FILTER (WHERE NOT internal AND counted AND created_at >= now() - interval '30 days')::int AS users_last_30d,
       count(*) FILTER (WHERE NOT internal AND role = 'admin')::int AS admins,
       count(*) FILTER (WHERE role = 'admin' AND auth_provider = 'native')::int AS legacy_native_admins,
       (SELECT count(*) FROM vehicles WHERE NOT archived)::int AS vehicles_active,
@@ -306,11 +312,12 @@ export async function adoptionSeries(
 ): Promise<GrowthSeries> {
   void opts.signal
 
+  const real = await realUserPredicate()
   const [users, vehicles, partners, legacy] = await Promise.all([
-    growthSeries('u.created_at', `from users u where not ${INTERNAL_PREDICATE}`, unit),
+    growthSeries('u.created_at', `from users u where ${real}`, unit),
     growthSeries(
       'v.created_at',
-      `from vehicles v join users u on u.id = v.user_id where not ${INTERNAL_PREDICATE}`,
+      `from vehicles v join users u on u.id = v.user_id where ${real}`,
       unit,
     ),
     growthSeries('p.created_at', `from partners p where p.source::text <> 'legacy_sheet'`, unit),
@@ -373,13 +380,14 @@ export async function onboardingSeries(
 ): Promise<OnboardingSeries> {
   void opts.signal
 
+  const real = await realUserPredicate()
   const rows = await sql<OnboardingRow>(
     `
     with real_users as (
       select u.id, u.created_at,
         (select min(v.created_at) from vehicles v where v.user_id = u.id) as first_vehicle_at
       from users u
-      where not ${INTERNAL_PREDICATE}
+      where ${real}
     ),
     counts as (
       select
@@ -463,9 +471,10 @@ export async function vehicleDistribution(
 
   const archivedClause = search.fleetScope === 'active' ? 'and not v.archived' : ''
 
+  const real = await realUserPredicate()
   const rows = await sql<{ vehicles: number | string; users: number | string }>(`
     WITH flagged AS (
-      SELECT u.id, ${INTERNAL_PREDICATE} AS internal
+      SELECT u.id, NOT ${real} AS internal
       FROM users u
     ),
     per_user AS (
@@ -568,9 +577,10 @@ export async function usageAdoption(
 ): Promise<UsageAdoption> {
   void opts.signal // `pg` no acepta AbortSignal; queda documentado el hueco.
 
+  const real = await realUserPredicate()
   const row = await sqlOne<UsageRow>(`
     WITH real_users AS (
-      SELECT u.id FROM users u WHERE NOT ${INTERNAL_PREDICATE}
+      SELECT u.id FROM users u WHERE ${real}
     )
     SELECT
       (SELECT count(*) FROM real_users)::int AS total,

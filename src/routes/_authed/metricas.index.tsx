@@ -40,6 +40,8 @@ import { getVehicleLocationBreakdownFn } from '~/fn/vehicles'
 import { VehicleLocationSection } from '~/components/VehicleLocationBreakdown'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PulseRow } from '~/components/PulseCards'
+import { getAccountTypeCensusFn } from '~/fn/users'
+import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABELS } from '~/lib/account-type'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { GrowthChart } from '~/components/GrowthChart'
 import { getActiveUsersSeries } from '~/fn/activity-feed'
@@ -108,6 +110,7 @@ export const Route = createFileRoute('/_authed/metricas/')({
       channels,
       activeUsers,
       origins,
+      accounts,
     ] = await Promise.all([
       getOpsPulse({ signal }),
       getUsageAdoption({ signal }),
@@ -123,6 +126,7 @@ export const Route = createFileRoute('/_authed/metricas/')({
       getChannelPeople({ data: deps, signal }),
       getActiveUsersSeries({ data: deps, signal }),
       getQuoteOriginWeeklyFn({ signal }),
+      getAccountTypeCensusFn({ signal }),
     ])
     return {
       pulse,
@@ -139,6 +143,7 @@ export const Route = createFileRoute('/_authed/metricas/')({
       channels,
       activeUsers,
       origins,
+      accounts,
     }
   },
 
@@ -181,6 +186,7 @@ function MetricasPage() {
     channels,
     activeUsers,
     origins,
+    accounts,
   } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -199,7 +205,22 @@ function MetricasPage() {
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
-      <PulseRow pulse={pulse} channels={channels} />
+      <PulseRow pulse={pulse} channels={channels} accounts={accounts} />
+
+      {/*
+        Las cuentas por tipo (`~/lib/account-type`). La suma ES el total de
+        cuentas: si no cuadra, un tipo quedó afuera de la definición.
+      */}
+      <p className="mt-3 text-xs text-muted-foreground">
+        Cuentas: {formatInt(accounts.total)} ={' '}
+        {ACCOUNT_TYPES.map((t) => `${formatInt(accounts.byType[t])} ${ACCOUNT_TYPE_LABELS[t]}`).join(' + ')}.
+        Cuentan como usuario: Usuario + Partner + dueño (sin las internas). Un partner es una cuenta con membresía
+        activa en un taller.{' '}
+        <Link to="/usuarios/revisar" className="underline underline-offset-2 hover:text-foreground">
+          Revisar cuentas
+        </Link>
+        {!accounts.membersAvailable ? ' · Esta base no tiene partner_members: nadie sale Partner.' : null}
+      </p>
 
       <section className="mt-8">
         <h2 className="mb-3 font-heading text-base font-semibold">Crecimiento</h2>

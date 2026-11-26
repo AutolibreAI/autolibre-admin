@@ -1,9 +1,10 @@
 import '@tanstack/react-start/server-only'
+import { realUserPredicate } from './account-type.repo'
 
 import { sql, sqlOne } from './db'
 import { FAILED, NO_DATA, OK } from './scanners.repo'
 import { notDuplicatePredicate, quoteRequestsAvailability } from './quote-requests.repo'
-import { INTERNAL_PREDICATE, PG_UNIT } from './ops.repo'
+import { PG_UNIT } from './ops.repo'
 import { METRICS_TZ, type ActiveUsersSeries, type GrowthUnit } from '~/lib/ops'
 import {
   ACTIVITY_KINDS,
@@ -603,7 +604,7 @@ export async function activeUserIdsSince(since: Date): Promise<Array<string>> {
       from signals sg
       join users u on u.id = sg.user_id
      where sg.occurred_at >= $1
-       and not ${INTERNAL_PREDICATE}
+       and ${await realUserPredicate()}
     `,
     [since],
   )
@@ -626,7 +627,7 @@ export async function activeUsersSeries(
         from signals sg
         join users u on u.id = sg.user_id
        where sg.occurred_at is not null
-         and not ${INTERNAL_PREDICATE}
+         and ${await realUserPredicate()}
        group by 1, 2
     ),
     counts as (

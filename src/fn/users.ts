@@ -5,6 +5,12 @@ import { findUserDetail, listUserVehicleSummaries, listUsers } from '~/server/us
 import { requestSignal } from '~/server/request'
 import { adminMiddleware } from './middleware'
 import type { UserDetail, UserListItem, UserVehicleSummary } from '~/lib/users'
+import {
+  markAccountReviewedSchema,
+  type AccountReviewQueue,
+  type AccountTypeCensus,
+} from '~/lib/account-type'
+import { accountTypeCensus, listAccountReviewQueue, markAccountReviewed } from '~/server/account-type.repo'
 
 /**
  * El borde RPC de Usuarios. Las dos funciones son de LECTURA y las dos pasan por
@@ -58,3 +64,24 @@ export const getUserVehicleSummaries = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<Array<UserVehicleSummary>> =>
     listUserVehicleSummaries(data.userId, { signal: requestSignal() }),
   )
+
+// ── Tipos de cuenta y cola «Revisar cuentas» (`~/lib/account-type`) ──────────
+
+/** Cuántas cuentas hay de cada tipo. Sin datos personales. */
+export const getAccountTypeCensusFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<AccountTypeCensus> => accountTypeCensus())
+
+/** La cola: mail y teléfono, SÓLO acá (admins). */
+export const listAccountReviewQueueFn = createServerFn({ method: 'GET' })
+  .middleware([adminMiddleware])
+  .handler(async (): Promise<AccountReviewQueue> => listAccountReviewQueue())
+
+/** «Marcar revisado» (043). El actor sale de la sesión, nunca del payload. */
+export const markAccountReviewedFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(markAccountReviewedSchema)
+  .handler(async ({ data, context }) => {
+    await markAccountReviewed(data, context.user.id)
+    return { ok: true as const }
+  })

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { userAccountTypeParam, type AccountType } from './account-type'
 import type { UserRole } from './types'
 import type { VehicleLocation } from './vehicle-location'
 
@@ -187,6 +188,10 @@ export const CENSUS_GROUPS: ReadonlyArray<CensusGroup> = [
 // ── Formas de fila ───────────────────────────────────────────────────────────
 
 export interface UserListItem {
+  /** `~/lib/account-type`: Usuario / Partner / Partner + dueño / Admin. */
+  accountType: AccountType
+  /** Talleres con membresía activa (para el link desde la fila). */
+  linkedPartners: Array<{ id: string; name: string }>
   id: string
   email: string
   name: string | null
@@ -615,6 +620,7 @@ export const USER_SORT_KEYS = [
   'createdAt',
   'lastActivity',
   'license',
+  'accountType',
 ] as const
 export type UserSortKey = (typeof USER_SORT_KEYS)[number]
 
@@ -648,6 +654,8 @@ export const userSearchSchema = z.object({
    * no se recuerda.
    */
   onlyLegacyNative: z.coerce.boolean().catch(false).default(false),
+  /** Tipo de cuenta, calificado (`type`/`kind` pelados chocan con otras rutas). */
+  userAccountType: userAccountTypeParam,
 
   /** El orden por defecto es el de siempre: alta descendente. */
   sort: z.enum(USER_SORT_KEYS).catch('createdAt').default('createdAt'),

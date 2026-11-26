@@ -1,7 +1,7 @@
 import '@tanstack/react-start/server-only'
+import { realUserPredicate } from './account-type.repo'
 
 import { sql, sqlOne } from './db'
-import { INTERNAL_PREDICATE } from './ops.repo'
 import { USER_ACTIVITY_SIGNALS, lastSignalSql } from '~/lib/activity'
 import {
   BUSINESS_MONTH_WINDOW_COUNT,
@@ -111,7 +111,7 @@ export async function businessUserMonths(monthsBack: number | null): Promise<Arr
     real_users as (
       select u.id, u.created_at
       from users u
-      where not ${INTERNAL_PREDICATE}
+      where ${await realUserPredicate()}
     ),
     us as (
       select ru.id, ru.created_at,
@@ -242,7 +242,7 @@ async function businessScalars(): Promise<{ neverActivated: number; providersNon
     `
     select
       (select count(*) from users u
-        where not ${INTERNAL_PREDICATE} and ${noSignal})::int as never_activated,
+        where ${await realUserPredicate()} and ${noSignal})::int as never_activated,
       (select count(*) from partners where status <> 'active')::int as providers_non_active
     `,
   )

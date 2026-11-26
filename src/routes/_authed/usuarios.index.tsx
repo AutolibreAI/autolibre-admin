@@ -17,6 +17,12 @@ import {
   type UserVehicleSummary,
 } from '~/lib/users'
 import { getUserVehicleSummaries, listAppUsers } from '~/fn/users'
+import {
+  ACCOUNT_TYPE_LABELS,
+  USER_ACCOUNT_TYPE_FILTERS,
+  USER_ACCOUNT_TYPE_FILTER_LABELS,
+  countsAsUser,
+} from '~/lib/account-type'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Chip, FilterGroup } from '~/components/Filters'
 import { Badge } from '~/components/ui/badge'
@@ -150,14 +156,22 @@ function UsersList() {
     search.hasVehicles !== 'all' ||
     search.onlyScanFailures ||
     search.onlyNeverActive ||
-    search.license !== 'all'
+    search.license !== 'all' ||
+    search.userAccountType !== 'all'
 
   return (
     <>
       <PageHeader
         title="Usuarios"
         subtitle={`${formatInt(users.length)} ${filtered ? 'con este filtro' : 'en total'}`}
-        actions={<SsrTag>ssr: full</SsrTag>}
+        actions={
+          <div className="flex items-center gap-3">
+            <Link to="/usuarios/revisar" className="text-sm font-medium text-foreground underline underline-offset-2 hover:text-brand">
+              Revisar cuentas
+            </Link>
+            <SsrTag>ssr: full</SsrTag>
+          </div>
+        }
       />
 
       {/*
@@ -211,6 +225,18 @@ function UsersList() {
           value={search.q}
           onSearch={(q) => setSearch({ q })}
         />
+
+        {/*
+          Tipo de cuenta (`~/lib/account-type`): Partner = membresía activa en un
+          taller, NO `users.role`. «Cuentan como usuario» = Usuario + Partner + dueño.
+        */}
+        <FilterGroup label="Tipo de cuenta">
+          {USER_ACCOUNT_TYPE_FILTERS.map((t) => (
+            <Chip key={t} active={search.userAccountType === t} onClick={() => setSearch({ userAccountType: t })}>
+              {USER_ACCOUNT_TYPE_FILTER_LABELS[t]}
+            </Chip>
+          ))}
+        </FilterGroup>
 
         <FilterGroup label="Rol">
           {USER_ROLE_FILTERS.map((role) => (
@@ -299,6 +325,7 @@ function UsersList() {
                 <TableHead className="w-8" />
                 <SortableHeader label="Usuario" sortKey="name" search={search} />
                 <SortableHeader label="Rol" sortKey="role" search={search} />
+                <SortableHeader label="Tipo de cuenta" sortKey="accountType" search={search} />
                 <SortableHeader label="Vehículos" sortKey="vehicles" search={search} align="right" />
                 <SortableHeader label="Escaneos" sortKey="scans" search={search} align="right" />
                 <SortableHeader label="Alta" sortKey="createdAt" search={search} />
@@ -412,6 +439,30 @@ function Row({
           </div>
         </TableCell>
 
+        <TableCell>
+          <div className="flex flex-col gap-0.5">
+            <span
+              className={cn(
+                'text-sm',
+                countsAsUser(user.accountType) ? 'text-foreground' : 'text-muted-foreground',
+              )}
+              title={countsAsUser(user.accountType) ? 'Cuenta como usuario de la app' : 'No cuenta como usuario'}
+            >
+              {ACCOUNT_TYPE_LABELS[user.accountType]}
+            </span>
+            {user.linkedPartners.map((p) => (
+              <Link
+                key={p.id}
+                to="/partners/$partnerId"
+                params={{ partnerId: p.id }}
+                className="text-xs text-muted-foreground underline-offset-2 hover:text-brand hover:underline"
+              >
+                {p.name}
+              </Link>
+            ))}
+          </div>
+        </TableCell>
+
         <TableCell className="text-right tabular-nums">
           {user.vehicleCount === 0 ? (
             <span className="text-muted-foreground/50">0</span>
@@ -479,7 +530,7 @@ function Row({
 
       {expanded ? (
         <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={8} className="whitespace-normal bg-canvas p-0">
+          <TableCell colSpan={9} className="whitespace-normal bg-canvas p-0">
             <VehicleSummaryPanel state={vehicleState} />
           </TableCell>
         </TableRow>

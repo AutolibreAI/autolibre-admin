@@ -4,6 +4,7 @@ import { formatInt } from '~/lib/format'
 import { cn } from '~/lib/utils'
 import type { OpsPulse } from '~/lib/ops'
 import type { ChannelPeople } from '~/lib/channels'
+import type { AccountTypeCensus } from '~/lib/account-type'
 
 /**
  * Las cuatro tarjetas del pulso del negocio: usuarios reales, vehículos activos,
@@ -24,6 +25,11 @@ import type { ChannelPeople } from '~/lib/channels'
  * WhatsApp y web no valen lo mismo y nunca se muestran sumados sin decirlo
  * (`~/lib/channels`). Sin `channels`, o sin `quote_requests` en la base, es
  * "Usuarios reales" de la app como antes.
+ *
+ * Desde el 2026-11-26 los talleres NO cuentan como usuarios (`~/lib/account-type`):
+ * "Usuarios reales" = Usuario + Partner + dueño. La card de Partners dice
+ * cuántas cuentas de partner hay y cuántas TAMBIÉN usan la app como dueños
+ * (`accounts`); esas son las únicas que están en las dos cards.
  */
 
 interface PulseTile {
@@ -39,7 +45,17 @@ interface PulseTile {
   alert: boolean
 }
 
-export function PulseRow({ pulse, channels }: { pulse: OpsPulse; channels?: ChannelPeople }) {
+export function PulseRow({
+  pulse,
+  channels,
+  accounts,
+}: {
+  pulse: OpsPulse
+  channels?: ChannelPeople
+  accounts?: AccountTypeCensus
+}) {
+  const partnerOwners = accounts ? accounts.byType.partner_dueno : 0
+  const partnerAccounts = accounts ? accounts.byType.partner + accounts.byType.partner_dueno : 0
   const { adoption, marketplace, quotes } = pulse
   const withChannels = channels?.available ? channels : null
 
@@ -68,10 +84,15 @@ export function PulseRow({ pulse, channels }: { pulse: OpsPulse; channels?: Chan
       // Las cuentas internas se muestran, no se restan en silencio: la
       // diferencia entre "3 usuarios" y "3 + 2.986 internas" es la diferencia
       // entre un producto que arranca y uno que parece tener tracción.
-      hint:
-        adoption.usersInternal > 0
-          ? `+${formatInt(adoption.usersInternal)} internas excluidas · ${formatInt(adoption.usersLast30d)} nuevos en 30 d`
-          : `${formatInt(adoption.usersLast30d)} nuevos en 30 días`,
+      hint: [
+        adoption.usersInternal > 0 ? `+${formatInt(adoption.usersInternal)} internas excluidas` : null,
+        accounts && partnerAccounts > 0
+          ? `sin ${formatInt(accounts.byType.partner)} talleres${partnerOwners > 0 ? ` (incluye ${formatInt(partnerOwners)} partner + dueño)` : ''}`
+          : null,
+        `${formatInt(adoption.usersLast30d)} nuevos en 30 d`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       alert: false,
     },
     {
@@ -95,6 +116,11 @@ export function PulseRow({ pulse, channels }: { pulse: OpsPulse; channels?: Chan
       // Directo a la pestaña con la tabla; `/partners` es sólo el layout y redirige.
       to: '/partners/listado',
       value: formatInt(marketplace.active),
+      // Las CUENTAS de partner (membresía activa), aparte de los talleres
+      // publicados: un taller puede tener varias cuentas, o ninguna.
+      secondary: accounts
+        ? `${formatInt(partnerAccounts)} cuentas de partner · de las cuales ${formatInt(partnerOwners)} también usan la app como dueños`
+        : undefined,
       label: 'Partners publicados',
       hint: `${formatInt(marketplace.founding)} founding · ${formatInt(marketplace.total)} en total`,
       alert: false,

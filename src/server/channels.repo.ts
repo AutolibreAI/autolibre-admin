@@ -1,7 +1,8 @@
 import '@tanstack/react-start/server-only'
+import { realUserPredicate } from './account-type.repo'
 
 import { sql } from './db'
-import { INTERNAL_PREDICATE, PG_UNIT } from './ops.repo'
+import { PG_UNIT } from './ops.repo'
 import { notDuplicatePredicate, quoteRequestsAvailability } from './quote-requests.repo'
 import { METRICS_TZ, type GrowthUnit } from '~/lib/ops'
 import type { ChannelPeople } from '~/lib/channels'
@@ -66,9 +67,12 @@ export async function channelPeople(
 
   const availability = await quoteRequestsAvailability()
 
+  // `internal` = NO es usuario real: cuenta interna, admin o taller puro
+  // (`~/lib/account-type`). Sus contactos no cuentan como "gente sin cuenta".
+  const real = await realUserPredicate()
   const usersPromise = sql<UserRow>(
     `select u.id, nullif(lower(btrim(coalesce(u.email, ''))), '') as email, u.created_at,
-            ${INTERNAL_PREDICATE} as internal
+            not ${real} as internal
        from users u`,
   )
 
