@@ -5,6 +5,8 @@ import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { listPartnerClaimCodesFn, listPartnerMembersFn } from '~/fn/partner-members'
 import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { getPartnerSourcerFn } from '~/fn/team'
+import { getPartnerFreePlanNoticeFn } from '~/fn/partner-free-plan-notice'
+import { FreePlanNoticeLine } from '~/components/FreePlanNoticeLine'
 import { sourcerLabel } from '~/lib/team'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { PublicProfileLink } from '~/components/PublicProfileLink'
@@ -20,7 +22,7 @@ import type { PartnerServicesView, ServiceItem } from '~/lib/catalog'
 export const Route = createFileRoute('/_authed/partners/$partnerId')({
   loader: async ({ params, abortController }) => {
     const signal = abortController.signal
-    const [view, members, claimCodes, plans, sourcer] = await Promise.all([
+    const [view, members, claimCodes, plans, sourcer, freePlanNotice] = await Promise.all([
       getPartnerServicesView({ data: params, signal }).catch((cause: unknown) => {
         if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
         throw cause
@@ -34,10 +36,12 @@ export const Route = createFileRoute('/_authed/partners/$partnerId')({
       listPartnerPlansFn({ data: params, signal }),
       // "Alta por", heredado de la solicitud (`partners.application_id`, 035).
       getPartnerSourcerFn({ data: params, signal }),
+      // Aviso del cambio del plan gratis (042), de sólo lectura acá. Sin la 042: no se muestra.
+      getPartnerFreePlanNoticeFn({ data: params, signal }).catch(() => ({ available: false, notice: null })),
     ])
 
     if (!view) throw notFound()
-    return { ...view, members, claimCodes, plans, sourcer }
+    return { ...view, members, claimCodes, plans, sourcer, freePlanNotice }
   },
 
   head: ({ loaderData }) => ({
@@ -166,6 +170,9 @@ function PartnerServicesEditor() {
         haría que arreglar una y no la otra sea el resultado normal.
       */}
       <PartnerFicha partner={view.partner} plans={view.plans} />
+
+      {/* Aviso del cambio del plan gratis (042): sólo lectura; se marca en Partners › Aviso plan gratis. */}
+      <FreePlanNoticeLine partnerId={view.partner.id} plans={view.plans} result={view.freePlanNotice} />
 
       {/* Sellos: Aliado es real (tier); redes y aseguradoras, de ejemplo. */}
       <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />

@@ -10,6 +10,8 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router'
  * Desde el 2026-10-29, **Propuestas**: el conteo mensual por proveedor contra el
  * tope de su plan. Desde el 2026-11-25, **Liquidaciones**: el fee por trabajo
  * confirmado que se le cobra a cada proveedor (`.claude/rules/partner-fees.md`).
+ * Desde el 2026-11-26, **Aviso plan gratis**: quién ya está avisado del cambio
+ * del plan gratis (`.claude/rules/partner-free-plan-notice.md`).
  * Mismo patrón de layout que `/leads` y `/vehiculos`.
  *
  * La ficha de un partner (`/partners/$partnerId`, consultas 7 y 8: el editor de
@@ -34,6 +36,7 @@ const TABS: ReadonlyArray<Tab> = [
   { to: '/partners/cobertura', label: 'Cobertura' },
   { to: '/partners/propuestas', label: 'Propuestas' },
   { to: '/partners/liquidaciones', label: 'Liquidaciones' },
+  { to: '/partners/plan-gratis', label: 'Aviso plan gratis' },
   { to: '/partners/estudio', label: 'Estudio' },
   { to: '/partners/sellos', label: 'Sellos' },
   { to: '/partners/cabecera', label: 'Taller de cabecera' },
