@@ -11,11 +11,18 @@ Agregado el 2026-11-25.
 Lo que cada proveedor le debe a AutoLibre por los trabajos confirmados que le llegaron por
 nosotros, el aviso por WhatsApp y el registro del cobro. Plata que el proveedor nos paga.
 
-## La regla vive en UN archivo
+## La regla vive en UN archivo — modelo del 2026-11-26, SIN suscripciones
 
-`~/lib/partner-fees-config.ts`: `FEE_POR_TRABAJO = 20000`, y tres opciones **preparadas y
-apagadas** hasta que Nicolás las confirme: `EXCLUIR_PLAN_PAGO`, `PRIMER_CLIENTE_GRATIS`,
-`FECHA_INICIO`. Se cobra cada trabajo, cliente nuevo o no.
+`~/lib/partner-fees-config.ts`: `FEE_POR_TRABAJO = 20000`, `PRIMER_TRABAJO_GRATIS = true` (para
+todos, sin excepción de grúa), `FECHA_INICIO` a definir (null), y los defaults del paquete y del
+premio del comercial. `EXCLUIR_PLAN_PAGO` y `PRIMER_CLIENTE_GRATIS` se SACARON: ya no se venden
+suscripciones ni hay tope de respuestas.
+
+Para cada liquidable pendiente, en este orden (`classifyFeeJobs`):
+1. el PRIMER trabajo confirmado (no anulado) del proveedor → «Gratis (primer trabajo)»;
+2. un paquete vigente a la fecha del trabajo, con saldo → «Cubierto por paquete», el que vence
+   primero (`~/lib/partner-packages`, migración 044);
+3. si no, el fee.
 
 - **Trabajo confirmado**: `outcome = 'hired'` o `user_outcome = 'hired'`, sin `duplicate`
   (`notDuplicatePredicate`) y sin cuentas internas (`INTERNAL_PREDICATE`).
@@ -24,13 +31,37 @@ apagadas** hasta que Nicolás las confirme: `EXCLUIR_PLAN_PAGO`, `PRIMER_CLIENTE
 - **Proveedor**: la propuesta elegida manda; si no hay, la atribución parche. Si dicen distinto, la
   fila lo avisa.
 - **Día del trabajo**: `user_outcome_performed_on` → día del cierre → día del pedido (Buenos Aires).
-- **Fee para el comercial**: el PRIMER trabajo (no anulado) de cada taller, si a esa fecha no tenía
-  plan pago y su solicitud tiene «Alta por» (035). Etiqueta "Fee para X"; alimenta las
-  liquidaciones por comercial (bloque 2, pendiente).
-- `EXCLUIR_PLAN_PAGO` usa una APROXIMACIÓN: el backend no guarda el historial de estados de la
-  suscripción; se mira `authorized_at` / `ended_at` / `access_until`.
-- `PRIMER_CLIENTE_GRATIS` se aplica al primer trabajo del taller ("cliente nuevo" no se puede saber)
-  salvo grúa (por el nombre del servicio).
+- **Premio para el comercial** (`commercialFee`): el primer trabajo confirmado del taller, aunque sea
+  gratis para el taller, si su solicitud tiene «Alta por» (035). Ya no mira el plan.
+
+## Paquetes de trabajos (migración 044) — desde el 2026-11-26
+
+`ops.partner_job_package` (nunca se borra: se ANULA con motivo, y sólo sin imputaciones activas) y
+`ops.partner_job_package_allocation` (trabajo → paquete; se DESHACE con motivo, nunca se borra).
+
+- **Vigente** el día D: no anulado y `compra ≤ D ≤ vence` (`vence = compra + vigencia`, columna
+  generada). Estado: anulado · agotado · vencido · vigente. Un vencido con saldo es «Vencido con X sin
+  usar»: el saldo no se traslada.
+- **Imputación**: una GUARDADA manda (aunque sea el primer trabajo). Las que propone la regla se
+  muestran «sin guardar» en Liquidaciones y se guardan con un click (`persistPackageAllocationsFn`
+  re-calcula la regla en el servidor y guarda el paquete que dice la regla, nunca uno del payload).
+  «Deshacer»/«No imputar» deja una fila deshecha con motivo: ese trabajo sale de la regla automática
+  (va a fee) hasta «Volver a imputar automático» (`reopened_*`).
+- **Saldo** = trabajos − imputados (guardados + propuestos). Lo calcula `getPackagesViewFn` con la
+  misma clasificación que Liquidaciones.
+- Se carga desde la ficha del proveedor, desde Partners › Proveedores y desde Partners › Paquetes
+  (con el CSV para la caja y los que vencen en 15 días o menos arriba).
+- Los SP validan representabilidad (existe, no anulado, saldo, trabajo libre); las fechas las decide
+  el panel antes de llamar. **Suite de la 044: NO escrita ni corrida.** No aplicada en ninguna base.
+
+## Suscripciones y tope: fuera del panel
+
+- Ficha: «Suscripción (histórico)», sólo lectura, todas las suscripciones con estado y fechas
+  (`listSubscriptionHistory`). No se cancela nada en Mercado Pago.
+- Partners › Propuestas pasó a ser **Proveedores** (`partner-providers.ts`); el despacho, Estudio y
+  Liquidaciones ya no muestran ni filtran por plan; el aviso de la 042 pasó a ser «Aviso de cobro»
+  para todos los proveedores. `partner-plans.ts` queda sólo para el conteo de propuestas y el histórico.
+- Pedido al back: `docs/pedido-backend-plan-gratis-sin-tope.md`.
 
 ## Atribución: tabla parche, a propósito
 

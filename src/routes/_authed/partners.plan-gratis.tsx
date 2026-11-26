@@ -49,7 +49,7 @@ import { cn } from '~/lib/utils'
 export const Route = createFileRoute('/_authed/partners/plan-gratis')({
   validateSearch: freePlanNoticeSearchSchema,
   loader: () => listFreePlanNoticesFn(),
-  head: () => ({ meta: [{ title: 'Aviso plan gratis · Partners — AutoLibre' }] }),
+  head: () => ({ meta: [{ title: 'Aviso de cobro · Partners — AutoLibre' }] }),
   component: FreePlanNoticeView,
 })
 
@@ -66,8 +66,8 @@ function FreePlanNoticeView() {
 
   const header = (
     <PageHeader
-      title="Aviso plan gratis"
-      subtitle={`Primer trabajo gratis; desde el segundo, ${formatArs(PARTNER_FEE_CONFIG.FEE_POR_TRABAJO)} por trabajo`}
+      title="Aviso del cambio de cobro"
+      subtitle={`Sin planes: primer trabajo gratis; desde el segundo, ${formatArs(PARTNER_FEE_CONFIG.FEE_POR_TRABAJO)} por trabajo o un paquete`}
       actions={<SsrTag>ssr: full</SsrTag>}
     />
   )
@@ -181,7 +181,7 @@ function FreePlanNoticeView() {
             {visible.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
-                  {rows.length === 0 ? 'Ningún proveedor tiene plan gratis hoy.' : 'Ningún proveedor coincide con los filtros.'}
+                  {rows.length === 0 ? 'No hay proveedores activos ni pausados.' : 'Ningún proveedor coincide con los filtros.'}
                 </td>
               </tr>
             ) : (
@@ -193,8 +193,8 @@ function FreePlanNoticeView() {
         </table>
       </div>
       <p className="mt-3 text-xs text-muted-foreground">
-        Plan gratis = plan efectivo hoy (sin suscripción que dé acceso), la misma regla que Partners › Propuestas. Los
-        archivados no se listan. Para corregir el canal o la nota, destildá y volvé a marcar: el historial queda.
+        Desde el 2026-11-26 no hay planes: el cambio aplica a todos los proveedores activos (y pausados, si los
+        sumás). Los archivados no se listan. Para corregir el canal o la nota, destildá y volvé a marcar: el historial queda.
       </p>
     </>
   )

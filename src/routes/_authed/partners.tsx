@@ -34,9 +34,10 @@ interface Tab {
 const TABS: ReadonlyArray<Tab> = [
   { to: '/partners/listado', label: 'Listado' },
   { to: '/partners/cobertura', label: 'Cobertura' },
-  { to: '/partners/propuestas', label: 'Propuestas' },
+  { to: '/partners/propuestas', label: 'Proveedores' },
+  { to: '/partners/paquetes', label: 'Paquetes' },
   { to: '/partners/liquidaciones', label: 'Liquidaciones' },
-  { to: '/partners/plan-gratis', label: 'Aviso plan gratis' },
+  { to: '/partners/plan-gratis', label: 'Aviso de cobro' },
   { to: '/partners/estudio', label: 'Estudio' },
   { to: '/partners/sellos', label: 'Sellos' },
   { to: '/partners/cabecera', label: 'Taller de cabecera' },

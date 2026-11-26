@@ -209,7 +209,6 @@ export function partnerMonthlyReport(row: PartnerStudyRow, month: string, peers:
     `• Todavía sin decisión del cliente: ${row.undecided}`,
     `• Tiempo típico desde que entra el pedido hasta tu propuesta: ${formatMinutes(row.medianResponseMinutes)}`,
   ]
-  if (row.plan) lines.push(`• Tu plan: ${row.plan.name}`)
   lines.push('')
   if (zonePeers.length >= ZONE_PEERS_MIN) {
     const peerSent = median(zonePeers.map((p) => p.sent + p.withdrawn))

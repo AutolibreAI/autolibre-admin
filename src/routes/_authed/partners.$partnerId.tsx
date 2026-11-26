@@ -3,7 +3,9 @@ import { Link, createFileRoute, notFound, useRouter } from '@tanstack/react-rout
 import { ArrowLeft, EyeOff, Lightbulb } from 'lucide-react'
 import { editPartnerServicesFn, getPartnerServicesView } from '~/fn/partners'
 import { listPartnerClaimCodesFn, listPartnerMembersFn } from '~/fn/partner-members'
-import { listPartnerPlansFn } from '~/fn/partner-plans'
+import { listSubscriptionHistoryFn } from '~/fn/partner-plans'
+import { getPackagesViewFn } from '~/fn/partner-fees'
+import { PartnerPackagesCard } from '~/components/PartnerPackages'
 import { getPartnerSourcerFn } from '~/fn/team'
 import { getPartnerFreePlanNoticeFn } from '~/fn/partner-free-plan-notice'
 import { FreePlanNoticeLine } from '~/components/FreePlanNoticeLine'
@@ -22,7 +24,7 @@ import type { PartnerServicesView, ServiceItem } from '~/lib/catalog'
 export const Route = createFileRoute('/_authed/partners/$partnerId')({
   loader: async ({ params, abortController }) => {
     const signal = abortController.signal
-    const [view, members, claimCodes, plans, sourcer, freePlanNotice] = await Promise.all([
+    const [view, members, claimCodes, subscriptions, sourcer, freePlanNotice, packages] = await Promise.all([
       getPartnerServicesView({ data: params, signal }).catch((cause: unknown) => {
         if (cause instanceof Error && cause.message.startsWith('NOT_FOUND:')) return null
         throw cause
@@ -32,16 +34,18 @@ export const Route = createFileRoute('/_authed/partners/$partnerId')({
       // Guard propio (0144): puede faltar aunque esté la 0141. Nunca trae el
       // código en claro ni su hash — sólo existe en la respuesta de «Emitir».
       listPartnerClaimCodesFn({ data: params, signal }),
-      // El plan (billing del backend), de sólo lectura. Sin las tablas: `{ available: false }`.
-      listPartnerPlansFn({ data: params, signal }),
+      // Suscripciones (ya no se venden): sólo el histórico, de sólo lectura. Sin billing: `null`.
+      listSubscriptionHistoryFn({ data: params, signal }),
       // "Alta por", heredado de la solicitud (`partners.application_id`, 035).
       getPartnerSourcerFn({ data: params, signal }),
       // Aviso del cambio del plan gratis (042), de sólo lectura acá. Sin la 042: no se muestra.
       getPartnerFreePlanNoticeFn({ data: params, signal }).catch(() => ({ available: false, notice: null })),
+      // Paquetes de trabajos (044). Sin la 044 (o sin la 038): `{ available: false }`.
+      getPackagesViewFn({ data: params, signal }).catch(() => ({ available: false as const })),
     ])
 
     if (!view) throw notFound()
-    return { ...view, members, claimCodes, plans, sourcer, freePlanNotice }
+    return { ...view, members, claimCodes, subscriptions, sourcer, freePlanNotice, packages }
   },
 
   head: ({ loaderData }) => ({
@@ -169,10 +173,13 @@ function PartnerServicesEditor() {
         contacto/coordenadas— tienen que verse en la misma pantalla. Separarlas
         haría que arreglar una y no la otra sea el resultado normal.
       */}
-      <PartnerFicha partner={view.partner} plans={view.plans} />
+      <PartnerFicha partner={view.partner} subscriptions={view.subscriptions} />
 
-      {/* Aviso del cambio del plan gratis (042): sólo lectura; se marca en Partners › Aviso plan gratis. */}
-      <FreePlanNoticeLine partnerId={view.partner.id} plans={view.plans} result={view.freePlanNotice} />
+      {/* Paquetes de trabajos (044): cargar, ver saldo y anular. */}
+      <PartnerPackagesCard partnerId={view.partner.id} view={view.packages} />
+
+      {/* Aviso del cambio de cobro (042): sólo lectura; se marca en Partners › Aviso de cobro. */}
+      <FreePlanNoticeLine result={view.freePlanNotice} />
 
       {/* Sellos: Aliado es real (tier); redes y aseguradoras, de ejemplo. */}
       <PartnerSealsCard partnerId={view.partner.id} tier={view.partner.tier} actorEmail={user.email} />

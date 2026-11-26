@@ -1,31 +1,48 @@
-# Pedido al backend: plan gratis sin tope de propuestas (2026-11-25)
+# Pedido al backend: sin tope de respuestas y sin suscripciones (2026-11-26)
 
 De: panel de administración (`autolibre-admin`). Para: Ramiro (backend hex).
 
-Tarjeta: «Plan gratis sin tope de propuestas (opción 2)».
+Tarjeta: «Nuevo modelo de cobro a proveedores: sin suscripciones, cobro por trabajo y paquetes».
+Reemplaza el pedido del 2026-11-25 («plan gratis sin tope»), que pedía sacar el tope sólo al gratis.
 
-Relevado el 2026-11-25 sobre `development` del backend (052f663) y producción (sólo lectura).
+Relevado el 2026-11-26 sobre `main` del backend (7d632fb) y producción (sólo lectura).
 
-## Qué hay hoy
+## El modelo nuevo (decidido por Nicolás el 2026-11-26)
 
-- `subscription_plans.monthly_whatsapp_request_limit` del plan `free` = **1** (lo siembra
-  `subscription-plan-seed.ts`; Plus 5 y Plus Max 12 en producción, 10 y 15 en el seed).
-- La columna es `NOT NULL` con `CHECK (>= 0)`: no hay forma de decir «sin límite».
-- `PartnerEntitlements` (`billing/partner-subscription`) expone el tope, pero **ningún caso de uso
-  de `quotes` lo consulta**: el despacho y las propuestas no frenan a nadie por el tope. Es sólo un
-  dato que se muestra.
-- El panel, desde el 2026-11-25, lee el tope del plan gratis como «sin límite»
-  (`FREE_PLAN_UNLIMITED` en `src/lib/partner-plans.ts`): ya no lo pinta en rojo ni en ámbar.
+- Las suscripciones (Gratis / Plus / Plus Max) **dejan de existir comercialmente**: no se venden más.
+- **No hay tope de respuestas para nadie**: todos los proveedores responden pedidos sin límite.
+- El único cobro es por **trabajo confirmado** (ARS 20.000), con el **primer trabajo gratis** para todos.
+- **Paquetes**: el proveedor puede pagar por adelantado 5 trabajos con 90 días de vigencia a precio
+  reducido. Por ahora se cargan a mano desde el panel (`ops`, migración 044 del panel); más adelante
+  se automatiza el cobro.
+
+El panel ya funciona así: sacó plan y tope de Partners, del despacho, de Estudio y de Liquidaciones,
+cobra con la regla gratis → paquete → fee, y muestra las suscripciones existentes sólo como
+«Suscripción (histórico)» en la ficha del proveedor.
+
+## Qué hay hoy en el backend
+
+- `subscription_plans.monthly_whatsapp_request_limit` NOT NULL (`free` 1, Plus 5, Plus Max 12 en
+  producción). `PartnerEntitlements` lo expone; ningún caso de uso de `quotes` lo aplica.
+- `billing/partner-subscription`: checkout de Mercado Pago (`StartSubscriptionCheckout`), webhooks y
+  sync. La app y la web ofrecen los planes.
 
 ## Qué falta
 
-- [ ] Que el plan gratis no tenga tope: `monthly_whatsapp_request_limit` NULLABLE (NULL = sin
-  límite) y `free` en NULL, en la migración y en el seed. Que el DTO y `PartnerEntitlements`
-  acepten `null`.
-- [ ] Revisar cualquier texto de la app o la web que diga «1 pedido por mes» en el plan gratis.
-- [ ] Si algún día el despacho empieza a aplicar topes, que `free` quede afuera.
+- [ ] **Sin tope para todos**: `monthly_whatsapp_request_limit` NULLABLE (NULL = sin límite) y NULL en
+  los tres planes, o sacar el tope de `PartnerEntitlements`. Que nada de la app ni de la web muestre
+  «N pedidos por mes» ni «leads restantes».
+- [ ] **Dejar de ofrecer y cobrar suscripciones** desde la app y la web: sacar la pantalla de planes y
+  el checkout (o `active = false` en el catálogo y que la UI lo respete). **Sin borrar el histórico**:
+  `partner_subscriptions` queda como está.
+- [ ] Decidir qué pasa con las suscripciones vivas (`trialing`/`active`): el panel **no cancela nada en
+  Mercado Pago**. Si hay que cancelarlas, que lo haga el backend con su caso de uso, avisándole al
+  taller.
+- [ ] Si algún día el despacho aplica topes: que no aplique ninguno.
 
 ## Listo cuando
 
-- `select monthly_whatsapp_request_limit from subscription_plans where code = 'free'` da NULL.
-- El panel saca `FREE_PLAN_UNLIMITED` (lee el NULL directo).
+- `select count(*) from subscription_plans where monthly_whatsapp_request_limit is not null` da 0
+  (o el tope ya no existe).
+- La app y la web no ofrecen planes ni muestran tope.
+- `partner_subscriptions` conserva todas sus filas.

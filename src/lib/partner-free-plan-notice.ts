@@ -116,9 +116,10 @@ export function freePlanNoticeProgress(
 /** El texto del aviso. El monto sale de la config de fees, nunca escrito a mano. */
 export function freePlanNoticeMessage(partnerName: string, fee: number = PARTNER_FEE_CONFIG.FEE_POR_TRABAJO): string {
   return (
-    `Hola ${partnerName.trim()}! Te escribimos de AutoLibre para contarte un cambio en el plan gratis: ` +
-    `el primer trabajo que te llevamos es gratis, y desde el segundo se cobra un fee fijo de ${formatArs(fee)} por trabajo. ` +
-    `Si querés ver los planes pagos o tenés alguna duda, respondenos por acá.`
+    `Hola ${partnerName.trim()}! Te escribimos de AutoLibre para contarte cómo cobramos desde ahora: ` +
+    `ya no hay planes ni tope de pedidos. El primer trabajo que te llevamos es gratis, y desde el segundo se cobra ` +
+    `un fee fijo de ${formatArs(fee)} por trabajo confirmado. También podés comprar un paquete de trabajos por ` +
+    `adelantado a mejor precio. Cualquier duda, respondenos por acá.`
   )
 }
 

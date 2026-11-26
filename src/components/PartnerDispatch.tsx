@@ -2,7 +2,6 @@ import { createContext, useContext, useReducer, useRef, useState, type ReactNode
 import { Link, useRouter } from '@tanstack/react-router'
 import { MapPin, MessageCircle, RefreshCw, Search, Send, Undo2, X } from 'lucide-react'
 import { Badge } from '~/components/ui/badge'
-import { FREE_PLAN_CODE } from '~/lib/partner-plans'
 import { isRemoteModality, partnerWhatsAppUrl } from '~/lib/partners'
 import { quotePublicCode } from '~/lib/quote-requests'
 import { approvePartnerDispatchFn } from '~/fn/partner-dispatch'
@@ -765,41 +764,14 @@ function CandidateRow({
 }
 
 /**
- * El plan y las propuestas del mes, con la regla de `/partners/propuestas`
- * (`capTone`): pasado del tope en rojo, justo en el tope en ámbar, un Aliado
- * nunca se marca. Plan gratis → «hay que cobrarle».
+ * Las propuestas enviadas este mes (enviadas + retiradas, mes de Buenos
+ * Aires). Sin plan ni tope desde el 2026-11-26: nadie tiene límite.
  */
 function PlanLine({ facts: f }: { facts: DispatchPartnerFacts | null }) {
   if (!f) return null
-  if (!f.plan) {
-    return <div className="text-xs text-muted-foreground">Sin plan (la base no tiene el billing)</div>
-  }
-  const free = f.plan.code === FREE_PLAN_CODE
-  const used = f.usedThisMonth
-  const tone = f.capTone
-  const usage =
-    used === null
-      ? 'propuestas del mes: sin dato'
-      : f.plan.cap === null
-        ? `${formatInt(used)} propuestas este mes (sin tope)`
-        : `${formatInt(used)} de ${formatInt(f.plan.cap)} propuestas este mes`
   return (
-    <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-xs">
-      <span className="rounded border border-border px-1.5 py-px text-muted-foreground">Plan {f.plan.name}</span>
-      <span
-        className={cn(
-          'tabular-nums',
-          tone === 'over' ? 'font-medium text-status-red' : tone === 'at' ? 'font-medium text-status-yellow' : 'text-muted-foreground',
-        )}
-      >
-        {usage}
-        {tone === 'over' ? ' · pasado del tope' : tone === 'at' ? ' · en el tope' : tone === 'founding' ? ' · Aliado, sin límite' : ''}
-      </span>
-      {free && tone !== 'founding' ? (
-        <span className="rounded border border-status-yellow/40 bg-status-yellow-bg px-1.5 py-px font-medium text-status-yellow">
-          Plan gratis: hay que cobrarle
-        </span>
-      ) : null}
+    <div className="pt-0.5 text-xs tabular-nums text-muted-foreground">
+      {f.usedThisMonth === null ? 'propuestas del mes: sin dato' : `${formatInt(f.usedThisMonth)} propuestas este mes`}
     </div>
   )
 }

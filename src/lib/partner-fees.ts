@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { PARTNER_FEE_CONFIG, type PartnerFeeConfig } from '~/lib/partner-fees-config'
+import { allocatePackages, type PackageAllocation, type PackagesData } from '~/lib/partner-packages'
 
 /**
  * Liquidaciones a proveedores (`/partners/liquidaciones`) — el fee que el
@@ -25,6 +26,16 @@ import { PARTNER_FEE_CONFIG, type PartnerFeeConfig } from '~/lib/partner-fees-co
  *   atribución parche de `ops.partner_fee_attribution` (038).
  * - **Liquidable**: el resto. Su estado de cobro es la fila de
  *   `ops.partner_fee_charge`, o `pendiente` si no hay fila.
+ *
+ * ── Cuánto se cobra (modelo del 2026-11-26, sin suscripciones) ────────────
+ *
+ * Para cada liquidable pendiente, en este orden:
+ *   1. el PRIMER trabajo confirmado del proveedor → «Gratis (primer trabajo)»;
+ *   2. un paquete vigente a la fecha del trabajo, con saldo → «Cubierto por
+ *      paquete», el que vence primero (`~/lib/partner-packages`);
+ *   3. si no, el fee por trabajo.
+ * La opción de no cobrar a quien tenía plan pago se sacó: ya no se venden
+ * suscripciones.
  */
 
 export const FEE_STATUSES = ['pendiente', 'avisado', 'cobrado', 'anulado'] as const
@@ -102,8 +113,6 @@ export interface FeeJobFacts {
   attribution: FeeAttribution | null
   proposals: Array<FeeProposal>
   charge: FeeCharge | null
-  /** ¿Tenía plan pago a la fecha del trabajo? `null` = la base no tiene billing. Aproximado: ver la config. */
-  paidPlanAtJob: boolean | null
 }
 
 export interface FeePartnerFacts {
@@ -111,9 +120,6 @@ export interface FeePartnerFacts {
   name: string
   whatsapp: string | null
   tier: string | null
-  /** Plan efectivo HOY (código y nombre). `null` = sin billing en la base. */
-  planCode: string | null
-  planName: string | null
   /** «Alta por» de su solicitud (035). */
   sourcer: { memberId: string; name: string; active: boolean } | null
 }
@@ -122,12 +128,12 @@ export interface FeePartnerFacts {
 
 export type FeeJobKind = 'disputa' | 'sin_atribuir' | 'liquidable'
 
-export type FeeExclusion = 'antes_de_inicio' | 'plan_pago' | 'primer_cliente'
+export type FeeExclusion = 'antes_de_inicio' | 'primer_trabajo' | 'paquete'
 
 export const FEE_EXCLUSION_LABELS: Record<FeeExclusion, string> = {
   antes_de_inicio: 'Anterior a la fecha de inicio del cobro',
-  plan_pago: 'Tenía plan pago a la fecha del trabajo',
-  primer_cliente: 'Primer trabajo del taller (gratis)',
+  primer_trabajo: 'Gratis (primer trabajo)',
+  paquete: 'Cubierto por paquete',
 }
 
 export interface FeeJob extends FeeJobFacts {
@@ -146,8 +152,14 @@ export interface FeeJob extends FeeJobFacts {
   amount: number
   /** Monto de la propuesta del proveedor en este pedido, si la hubo. */
   proposalAmount: { min: number | null; max: number | null } | null
-  /** Es el primer trabajo del taller y lo trajo un comercial: el fee completo es para él. */
+  /** Es el primer trabajo confirmado del taller y lo trajo un comercial («Alta por»): genera su premio. */
   commercialFee: { memberId: string; name: string } | null
+  /** Es el primer trabajo confirmado (no anulado) de su proveedor. */
+  isFirstOfPartner: boolean
+  /** A qué paquete va (sólo con `exclusion = 'paquete'`). `persisted` = guardada en `ops`. */
+  packageAllocation: { packageId: string; persisted: boolean } | null
+  /** Imputación deshecha y no reabierta: no va a paquete aunque haya saldo. */
+  allocationUndone: PackageAllocation | null
 }
 
 export function isDispute(outcome: string | null, userOutcome: string | null): boolean {
@@ -156,8 +168,6 @@ export function isDispute(outcome: string | null, userOutcome: string | null): b
     (userOutcome === 'hired' && outcome === 'not_hired')
   )
 }
-
-const GRUA = /gr[uú]a|remolque|auxilio/i
 
 const byJobOrder = (a: FeeJobFacts, b: FeeJobFacts) =>
   a.jobDay === b.jobDay ? a.publicNumber - b.publicNumber : a.jobDay < b.jobDay ? -1 : 1
@@ -170,6 +180,7 @@ export function classifyFeeJobs(
   facts: ReadonlyArray<FeeJobFacts>,
   partners: ReadonlyMap<string, FeePartnerFacts>,
   config: PartnerFeeConfig = PARTNER_FEE_CONFIG,
+  packages: PackagesData | null = null,
 ): Array<FeeJob> {
   const base = facts.map((f) => {
     const partnerId = f.selectedPartnerId ?? f.attribution?.partnerId ?? null
@@ -194,17 +205,45 @@ export function classifyFeeJobs(
     if (partnerId && !firstByPartner.has(partnerId)) firstByPartner.set(partnerId, f.quoteRequestId)
   }
 
-  return base.map(({ f, partnerId, partnerSource, kind }) => {
+  // Primero las exclusiones que no dependen de paquetes, para saber qué
+  // trabajos quedan elegibles para la regla de paquetes.
+  const pre = base.map(({ f, partnerId, partnerSource, kind }) => {
     const status: FeeStatus = f.charge?.status ?? 'pendiente'
     const isFirst = partnerId !== null && firstByPartner.get(partnerId) === f.quoteRequestId
-
     let exclusion: FeeExclusion | null = null
     if (kind === 'liquidable' && status === 'pendiente') {
       if (config.FECHA_INICIO && f.jobDay < config.FECHA_INICIO) exclusion = 'antes_de_inicio'
-      else if (config.EXCLUIR_PLAN_PAGO && f.paidPlanAtJob === true) exclusion = 'plan_pago'
-      else if (config.PRIMER_CLIENTE_GRATIS && isFirst && !f.services.some((s) => GRUA.test(s)))
-        exclusion = 'primer_cliente'
+      else if (config.PRIMER_TRABAJO_GRATIS && isFirst) exclusion = 'primer_trabajo'
     }
+    return { f, partnerId, partnerSource, kind, status, isFirst, exclusion }
+  })
+
+  // Paquetes: en orden cronológico, sólo liquidables pendientes sin otra exclusión.
+  const rule = packages
+    ? allocatePackages(
+        [...pre]
+          .filter((x) => x.kind === 'liquidable' && x.partnerId !== null)
+          .sort((a, b) => byJobOrder(a.f, b.f))
+          .map((x) => ({
+            quoteRequestId: x.f.quoteRequestId,
+            partnerId: x.partnerId!,
+            jobDay: x.f.jobDay,
+            eligible: x.status === 'pendiente' && x.exclusion === null,
+          })),
+        packages,
+      )
+    : null
+
+  return pre.map(({ f, partnerId, partnerSource, kind, status, isFirst, exclusion: pre }) => {
+    let exclusion: FeeExclusion | null = pre
+    const decision = rule?.byJob.get(f.quoteRequestId) ?? null
+    // Una imputación GUARDADA manda aunque el trabajo sea el primero; una
+    // propuesta sólo se aplica a un pendiente sin otra exclusión.
+    const packageAllocation =
+      kind === 'liquidable' && status === 'pendiente' && decision && (decision.persisted || exclusion === null)
+        ? decision
+        : null
+    if (packageAllocation) exclusion = 'paquete'
 
     const amount =
       f.charge?.amount ?? (exclusion !== null || kind !== 'liquidable' ? 0 : config.FEE_POR_TRABAJO)
@@ -215,13 +254,11 @@ export function classifyFeeJobs(
         null)
       : null
 
-    // El fee del comercial: el primer trabajo del taller, si el taller estaba
-    // en el plan gratis (pago por auto) y tiene «Alta por».
+    // El premio del comercial: el primer trabajo confirmado del taller (aunque
+    // sea gratis para el taller), si tiene «Alta por».
     const sourcer = partnerId ? (partners.get(partnerId)?.sourcer ?? null) : null
     const commercialFee =
-      kind === 'liquidable' && isFirst && f.paidPlanAtJob !== true && sourcer
-        ? { memberId: sourcer.memberId, name: sourcer.name }
-        : null
+      kind === 'liquidable' && isFirst && sourcer ? { memberId: sourcer.memberId, name: sourcer.name } : null
 
     return {
       ...f,
@@ -236,6 +273,9 @@ export function classifyFeeJobs(
       amount,
       proposalAmount: proposal ? { min: proposal.amountMin, max: proposal.amountMax } : null,
       commercialFee,
+      isFirstOfPartner: isFirst,
+      packageAllocation,
+      allocationUndone: rule?.blocked.get(f.quoteRequestId) ?? null,
     }
   })
 }
@@ -270,8 +310,6 @@ export function groupOpenByPartner(
       name: 'Proveedor borrado',
       whatsapp: null,
       tier: null,
-      planCode: null,
-      planName: null,
       sourcer: null,
     }
     const g =
@@ -367,8 +405,6 @@ export const partnerFeesSearchSchema = z.object({
   feeTo: day,
   /** uuid de partner. */
   feePartner: z.string().uuid().optional().catch(undefined),
-  /** Código del plan efectivo hoy, o `none` (sin billing). */
-  feePlan: z.string().max(40).optional().catch(undefined),
   /** id de `ops.team_member`, o `none` (sin «Alta por»). */
   feeSourcer: z.string().max(40).optional().catch(undefined),
 })
@@ -377,16 +413,12 @@ export type PartnerFeesSearch = z.infer<typeof partnerFeesSearchSchema>
 export function matchesFeeFilters(
   j: FeeJob,
   partners: ReadonlyMap<string, FeePartnerFacts>,
-  s: Pick<PartnerFeesSearch, 'feeFrom' | 'feeTo' | 'feePartner' | 'feePlan' | 'feeSourcer'>,
+  s: Pick<PartnerFeesSearch, 'feeFrom' | 'feeTo' | 'feePartner' | 'feeSourcer'>,
 ): boolean {
   if (s.feeFrom && j.jobDay < s.feeFrom) return false
   if (s.feeTo && j.jobDay > s.feeTo) return false
   const p = j.partnerId ? partners.get(j.partnerId) : undefined
   if (s.feePartner && j.partnerId !== s.feePartner) return false
-  if (s.feePlan) {
-    const code = p?.planCode ?? 'none'
-    if (code !== s.feePlan) return false
-  }
   if (s.feeSourcer) {
     const id = p?.sourcer?.memberId ?? 'none'
     if (id !== s.feeSourcer) return false

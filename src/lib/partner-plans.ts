@@ -110,6 +110,32 @@ export interface PartnerSubscriptionInfo {
   scheduledPlanAt: string | null
 }
 
+/** Una suscripción del pasado (o viva), para «Suscripción (histórico)» de la ficha. */
+export interface SubscriptionHistoryEntry {
+  id: string
+  status: string
+  planName: string
+  price: number | null
+  createdAt: string | null
+  authorizedAt: string | null
+  trialEndsAt: string | null
+  currentPeriodEnd: string | null
+  accessUntil: string | null
+  endedAt: string | null
+  endReason: string | null
+}
+
+/** `partner_subscription_end_reason`. Un valor nuevo se muestra crudo. */
+export const SUBSCRIPTION_END_REASON_LABELS: Record<string, string> = {
+  checkout_abandoned: 'checkout abandonado',
+  checkout_replaced: 'checkout reemplazado',
+  cancelled_by_owner: 'cancelada por el dueño',
+  cancelled_by_payer: 'cancelada por quien pagaba',
+  payment_failed: 'falló el pago',
+  partner_archived: 'taller archivado',
+  provider_cancelled: 'cancelada por Mercado Pago',
+}
+
 export type PartnerPlansResult =
   | { available: false }
   | { available: true; catalog: Array<PlanInfo>; subscriptions: Array<PartnerSubscriptionInfo> }

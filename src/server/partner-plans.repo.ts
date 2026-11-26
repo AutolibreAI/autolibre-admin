@@ -2,7 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { effectiveCap } from '~/lib/partner-plans'
-import type { PartnerPlansResult, PartnerSubscriptionInfo, PlanInfo } from '~/lib/partner-plans'
+import type { PartnerPlansResult, PartnerSubscriptionInfo, PlanInfo, SubscriptionHistoryEntry } from '~/lib/partner-plans'
 
 /**
  * El plan de cada proveedor — la LECTURA de billing del backend
@@ -125,4 +125,54 @@ export async function listPartnerPlans(opts: { partnerId?: string } = {}): Promi
     scheduledPlanAt: toIso(r.scheduled_plan_at),
   }))
   return { available: true, catalog, subscriptions }
+}
+
+// ── Suscripción (histórico) — desde el 2026-11-26 ───────────────────────────
+
+/**
+ * Todas las suscripciones de un proveedor (también canceladas), para la
+ * tarjeta «Suscripción (histórico)» de la ficha. Ya no se venden: esto es sólo
+ * lectura del pasado. `null` sin billing en la base.
+ */
+export async function listSubscriptionHistory(partnerId: string): Promise<Array<SubscriptionHistoryEntry> | null> {
+  const has = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('public.partner_subscriptions') is not null
+        and to_regclass('public.subscription_plans') is not null as ok`,
+  )
+  if (!has?.ok) return null
+  const rows = await sql<{
+    id: string
+    status: string
+    plan_name: string
+    price: string | null
+    created_at: unknown
+    authorized_at: unknown
+    trial_ends_at: unknown
+    current_period_end: unknown
+    access_until: unknown
+    ended_at: unknown
+    end_reason: string | null
+  }>(
+    `select s.id, s.status::text as status, p.name as plan_name, p.price_amount::text as price,
+            s.created_at, s.authorized_at, s.trial_ends_at, s.current_period_end, s.access_until,
+            s.ended_at, s.end_reason::text as end_reason
+       from partner_subscriptions s
+       join subscription_plans p on p.id = s.plan_id
+      where s.partner_id = $1
+      order by s.created_at desc`,
+    [partnerId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    status: r.status,
+    planName: r.plan_name,
+    price: r.price === null ? null : Number(r.price),
+    createdAt: toIso(r.created_at),
+    authorizedAt: toIso(r.authorized_at),
+    trialEndsAt: toIso(r.trial_ends_at),
+    currentPeriodEnd: toIso(r.current_period_end),
+    accessUntil: toIso(r.access_until),
+    endedAt: toIso(r.ended_at),
+    endReason: r.end_reason,
+  }))
 }

@@ -2,11 +2,9 @@ import '@tanstack/react-start/server-only'
 
 import { sql, sqlOne } from './db'
 import { INTERNAL_PREDICATE } from './ops.repo'
-import { listPartnerPlans, partnerPlansAvailability } from './partner-plans.repo'
 import { notDuplicatePredicate, vehicleTextSource } from './quote-requests.repo'
 import { availablePieces, selectPieces } from './quote-resolution.repo'
 import { teamAvailable } from './team.repo'
-import { effectivePlans } from '~/lib/partner-plans'
 import {
   PARTNER_FEES_UNAVAILABLE,
   type AttributePartnerFeeInput,
@@ -15,6 +13,13 @@ import {
   type FeeStatus,
   type SetPartnerFeeStatusInput,
 } from '~/lib/partner-fees'
+import {
+  PARTNER_PACKAGES_UNAVAILABLE,
+  type CreatePackageInput,
+  type PackageAllocation,
+  type PackagesData,
+  type PartnerPackage,
+} from '~/lib/partner-packages'
 
 /**
  * Liquidaciones a proveedores — migración 038. LEE `public` (pedidos,
@@ -77,7 +82,6 @@ interface JobRow {
   fc_void_reason: string | null
   fc_by: string | null
   fc_updated_at: Date | string | null
-  paid_plan_at_job: boolean | null
 }
 
 const USER_LABEL = (a: string) => `coalesce(nullif(btrim(${a}.name), ''), ${a}.email)`
@@ -90,10 +94,9 @@ const USER_LABEL = (a: string) => `coalesce(nullif(btrim(${a}.name), ''), ${a}.e
 export async function listFeeJobFacts(): Promise<Array<FeeJobFacts> | null> {
   if (!(await partnerFeesAvailable())) return null
 
-  const [pieces, textSource, billing, extra] = await Promise.all([
+  const [pieces, textSource, extra] = await Promise.all([
     availablePieces(),
     vehicleTextSource(),
-    partnerPlansAvailability(),
     sqlOne<{ catalog_id: boolean }>(
       `select exists (select 1 from information_schema.columns
                        where table_schema = 'public' and table_name = 'quote_requests'
@@ -125,22 +128,9 @@ export async function listFeeJobFacts(): Promise<Array<FeeJobFacts> | null> {
           left join partners pp on pp.id = p.partner_id
          where p.quote_request_id = qr.id)`
     : `null::json`
-  // Aproximación: el backend no guarda el historial de estados de la
-  // suscripción. "Plan pago a la fecha del trabajo" = una suscripción
-  // autorizada antes o ese día y no terminada ni vencida a esa fecha.
-  const paidPlan = billing
-    ? `exists (select 1 from partner_subscriptions ps
-                where ps.partner_id = coalesce(t.selected_partner_id, t.fa_partner_id)
-                  and ps.authorized_at is not null
-                  and (ps.authorized_at at time zone '${BA}')::date <= t.job_day::date
-                  and (ps.ended_at is null or (ps.ended_at at time zone '${BA}')::date > t.job_day::date)
-                  and (ps.access_until is null or (ps.access_until at time zone '${BA}')::date > t.job_day::date))`
-    : `null::boolean`
-
   const rows = await sql<JobRow>(
     `
-    select t.*,
-           ${paidPlan} as paid_plan_at_job
+    select t.*
       from (
         select s.*,
                coalesce(s.performed_on,
@@ -226,19 +216,17 @@ export async function listFeeJobFacts(): Promise<Array<FeeJobFacts> | null> {
             updatedAt: toIso(r.fc_updated_at) ?? '',
           }
         : null,
-    paidPlanAtJob: r.paid_plan_at_job,
   }))
 }
 
 /**
- * Los proveedores que aparecen en los trabajos, con WhatsApp, plan efectivo de
- * HOY y «Alta por». El WhatsApp es del TALLER (para mandarle el cobro), no de
+ * Los proveedores que aparecen en los trabajos, con WhatsApp y «Alta por». El WhatsApp es del TALLER (para mandarle el cobro), no de
  * ninguna persona cliente.
  */
 export async function listFeePartnerFacts(partnerIds: ReadonlyArray<string>): Promise<Array<FeePartnerFacts>> {
   if (partnerIds.length === 0) return []
   const team = await teamAvailable()
-  const [rows, plans] = await Promise.all([
+  const [rows] = await Promise.all([
     sql<{ id: string; name: string; whatsapp: string | null; tier: string | null; member_id: string | null; member_name: string | null; member_active: boolean | null }>(
       `select p.id, p.name, nullif(btrim(p.whatsapp), '') as whatsapp, p.tier::text as tier,
               ${team ? 'm.id' : 'null::uuid'} as member_id,
@@ -250,18 +238,13 @@ export async function listFeePartnerFacts(partnerIds: ReadonlyArray<string>): Pr
         where p.id = any($1::uuid[])`,
       [partnerIds],
     ),
-    listPartnerPlans(),
   ])
-  const eff = effectivePlans(plans, partnerIds)
   return rows.map((r) => {
-    const plan = eff.get(r.id) ?? null
     return {
       id: r.id,
       name: r.name,
       whatsapp: r.whatsapp,
       tier: r.tier,
-      planCode: plan?.code ?? null,
-      planName: plan?.name ?? null,
       sourcer: r.member_id && r.member_name ? { memberId: r.member_id, name: r.member_name, active: r.member_active === true } : null,
     }
   })
@@ -298,4 +281,158 @@ export async function setPartnerFeeStatus(
     ],
   )
   return Number(row?.n ?? 0)
+}
+
+// ── Paquetes de trabajos (044) ──────────────────────────────────────────────
+
+/** ¿Está aplicada la 044? Se cachea sólo el `true`. */
+let packagesSeen = false
+export async function partnerPackagesAvailable(): Promise<boolean> {
+  if (packagesSeen) return true
+  const row = await sqlOne<{ ok: boolean }>(
+    `select to_regclass('ops.partner_job_package') is not null
+        and to_regclass('ops.partner_job_package_allocation') is not null as ok`,
+  )
+  packagesSeen = row?.ok === true
+  return packagesSeen
+}
+
+/** Todos los paquetes e imputaciones (son pocos). `null` sin la 044. */
+export async function listPackagesData(opts: { partnerId?: string } = {}): Promise<PackagesData | null> {
+  if (!(await partnerPackagesAvailable())) return null
+  const params = opts.partnerId ? [opts.partnerId] : []
+  const [packages, allocations] = await Promise.all([
+    sql<{
+      id: string
+      partner_id: string
+      jobs: number
+      validity_days: number
+      purchased_on: string
+      expires_on: string
+      price_paid: string
+      payment_method: string
+      note: string | null
+      created_by: string | null
+      created_at: Date | string
+      voided_at: Date | string | null
+      void_reason: string | null
+      voided_by: string | null
+    }>(
+      `select k.id, k.partner_id, k.jobs, k.validity_days,
+              to_char(k.purchased_on, 'YYYY-MM-DD') as purchased_on,
+              to_char(k.expires_on, 'YYYY-MM-DD') as expires_on,
+              k.price_paid::text as price_paid, k.payment_method, k.note,
+              ${USER_LABEL('cu')} as created_by, k.created_at,
+              k.voided_at, k.void_reason, ${USER_LABEL('vu')} as voided_by
+         from ops.partner_job_package k
+         left join users cu on cu.id = k.created_by
+         left join users vu on vu.id = k.voided_by
+        ${opts.partnerId ? 'where k.partner_id = $1' : ''}
+        order by k.purchased_on desc, k.created_at desc`,
+      params,
+    ),
+    sql<{
+      id: string
+      quote_request_id: string
+      package_id: string
+      created_at: Date | string
+      created_by: string | null
+      undone_at: Date | string | null
+      undo_reason: string | null
+      undone_by: string | null
+      reopened_at: Date | string | null
+    }>(
+      `select a.id, a.quote_request_id, a.package_id, a.created_at, ${USER_LABEL('cu')} as created_by,
+              a.undone_at, a.undo_reason, ${USER_LABEL('uu')} as undone_by, a.reopened_at
+         from ops.partner_job_package_allocation a
+         join ops.partner_job_package k on k.id = a.package_id
+         left join users cu on cu.id = a.created_by
+         left join users uu on uu.id = a.undone_by
+        ${opts.partnerId ? 'where k.partner_id = $1' : ''}
+        order by a.created_at`,
+      params,
+    ),
+  ])
+  return {
+    packages: packages.map(
+      (r): PartnerPackage => ({
+        id: r.id,
+        partnerId: r.partner_id,
+        jobs: Number(r.jobs),
+        validityDays: Number(r.validity_days),
+        purchasedOn: r.purchased_on,
+        expiresOn: r.expires_on,
+        pricePaid: Number(r.price_paid),
+        paymentMethod: r.payment_method,
+        note: r.note,
+        createdByName: r.created_by,
+        createdAt: toIso(r.created_at) ?? '',
+        voidedAt: toIso(r.voided_at),
+        voidReason: r.void_reason,
+        voidedByName: r.voided_by,
+      }),
+    ),
+    allocations: allocations.map(
+      (r): PackageAllocation => ({
+        id: r.id,
+        quoteRequestId: r.quote_request_id,
+        packageId: r.package_id,
+        createdAt: toIso(r.created_at) ?? '',
+        createdByName: r.created_by,
+        undoneAt: toIso(r.undone_at),
+        undoReason: r.undo_reason,
+        undoneByName: r.undone_by,
+        reopenedAt: toIso(r.reopened_at),
+      }),
+    ),
+  }
+}
+
+export async function createPartnerPackage(input: CreatePackageInput, actorId: string): Promise<void> {
+  if (!(await partnerPackagesAvailable())) throw new Error(PARTNER_PACKAGES_UNAVAILABLE)
+  await sql(
+    `select ops.create_partner_job_package(
+       p_partner_id => $1, p_jobs => $2, p_validity_days => $3, p_purchased_on => $4::date,
+       p_price_paid => $5, p_payment_method => $6, p_note => $7, p_actor_id => $8)`,
+    [input.partnerId, input.jobs, input.validityDays, input.purchasedOn, input.pricePaid, input.paymentMethod, input.note || null, actorId],
+  )
+}
+
+export async function voidPartnerPackage(packageId: string, reason: string, actorId: string): Promise<void> {
+  if (!(await partnerPackagesAvailable())) throw new Error(PARTNER_PACKAGES_UNAVAILABLE)
+  await sql(`select ops.void_partner_job_package(p_package_id => $1, p_reason => $2, p_actor_id => $3)`, [
+    packageId,
+    reason,
+    actorId,
+  ])
+}
+
+export async function allocateJobToPackage(quoteRequestId: string, packageId: string, actorId: string): Promise<void> {
+  if (!(await partnerPackagesAvailable())) throw new Error(PARTNER_PACKAGES_UNAVAILABLE)
+  await sql(
+    `select ops.allocate_job_to_package(p_quote_request_id => $1, p_package_id => $2, p_actor_id => $3)`,
+    [quoteRequestId, packageId, actorId],
+  )
+}
+
+export async function undoJobPackageAllocation(
+  quoteRequestId: string,
+  packageId: string | null,
+  reason: string,
+  actorId: string,
+): Promise<void> {
+  if (!(await partnerPackagesAvailable())) throw new Error(PARTNER_PACKAGES_UNAVAILABLE)
+  await sql(
+    `select ops.undo_job_package_allocation(
+       p_quote_request_id => $1, p_package_id => $2, p_reason => $3, p_actor_id => $4)`,
+    [quoteRequestId, packageId, reason, actorId],
+  )
+}
+
+export async function reopenJobPackageAllocation(quoteRequestId: string, actorId: string): Promise<void> {
+  if (!(await partnerPackagesAvailable())) throw new Error(PARTNER_PACKAGES_UNAVAILABLE)
+  await sql(`select ops.reopen_job_package_allocation(p_quote_request_id => $1, p_actor_id => $2)`, [
+    quoteRequestId,
+    actorId,
+  ])
 }

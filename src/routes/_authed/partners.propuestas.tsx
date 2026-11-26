@@ -1,354 +1,294 @@
+import { Fragment, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { Download, X } from 'lucide-react'
-import { useMemo } from 'react'
-import type { ReactNode } from 'react'
 import { listMarketplacePartners } from '~/fn/partners'
-import { listPartnerQuoteVolumeFn } from '~/fn/partner-quote-volume'
-import { listPartnerPlansFn } from '~/fn/partner-plans'
 import { listQuoteRequestsFn } from '~/fn/quote-requests'
-import { listPartnerLastContactsFn } from '~/fn/partner-prospects'
-import { getPartnerFeesFn } from '~/fn/partner-fees'
-import { classifyFeeJobs, groupOpenByPartner } from '~/lib/partner-fees'
-import { Chip, FilterGroup, RangeFilter } from '~/components/Filters'
+import { getProvidersFactsFn } from '~/fn/partner-fees'
+import { Chip, FilterGroup } from '~/components/Filters'
 import { MultiSelect } from '~/components/MultiSelect'
 import { SortHeader } from '~/components/SortHeader'
 import { SearchInput } from '~/components/SearchInput'
 import { useProposalFacts } from '~/components/useProposalFacts'
 import { ProposalLoadStatus as LoadStatus } from '~/components/ProposalLoadStatus'
+import { PackageComposer } from '~/components/PartnerPackages'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '~/components/ui/table'
 import { normalizeForMatch } from '~/lib/catalog'
+import { toCsv } from '~/lib/csv'
 import { formatArs, formatInt } from '~/lib/format'
 import {
   PROPOSAL_COUNT_START,
-  PROPOSAL_HISTORY,
-  aggregatePartnerHistory,
   aggregatePartnerUsage,
   baDay,
-  capLabel,
   countableMonths,
-  effectivePlans,
   isFounding,
   monthLabel,
-  partnerHistoryCsv,
   shortDay,
-  subscriptionStatusLabel,
 } from '~/lib/partner-plans'
+import type { ExternalUsageRow, PartnerRef } from '~/lib/partner-plans'
+import { feeDay } from '~/lib/partner-fees'
+import { PARTNER_FEE_CONFIG } from '~/lib/partner-fees-config'
 import {
-  CLEARED_PROPOSAL_FILTERS,
-  NO_PLAN,
-  TEXT_SORT_KEYS,
-  activeProposalFilterChips,
-  matchesProposalFilters,
-  partnerProposalsPageSearchSchema,
-  sortProposalRows,
-} from '~/lib/partner-proposal-filters'
-import type { PartnerFacts, ProposalSortKey } from '~/lib/partner-proposal-filters'
+  PROVIDERS_CSV_HEADER,
+  PROVIDER_STATUSES,
+  PROVIDER_STATUS_LABELS,
+  PROVIDER_TEXT_SORT_KEYS,
+  providersSearchSchema,
+  type ProviderFacts,
+  type ProviderSortKey,
+} from '~/lib/partner-providers'
 import { cn } from '~/lib/utils'
-import type {
-  AllTimeVolume,
-  CapTone,
-  ExternalUsageRow,
-  PartnerHistoryRow,
-  PartnerRef,
-  PartnerSubscriptionInfo,
-  PartnerPlansResult,
-  PartnerUsageRow,
-  PlanInfo,
-  UsageCounts,
-} from '~/lib/partner-plans'
 
 /**
- * Propuestas por proveedor y por mes, contra el tope de su plan.
+ * Partners › Proveedores (`/partners/propuestas`; la URL quedó de cuando era
+ * «Propuestas», para no romper links). → `.claude/rules/partner-fees.md`.
  *
- * Reemplaza lo que hoy no se puede contestar sin abrir pedido por pedido:
- * "¿cuántas propuestas le mandamos a cada proveedor este mes, y quién pasó el
- * tope de su plan?". El cobro a proveedores arranca en noviembre.
+ * Desde el 2026-11-26 no hay planes ni tope de respuestas: esta pantalla dejó
+ * de comparar propuestas contra el tope del plan y pasó a ser la vista por
+ * proveedor del cobro nuevo. Por fila: rubros, zona, estado, «Alta por», alta,
+ * propuestas enviadas en el mes, trabajos confirmados (total y del mes), si ya
+ * usó el primer trabajo gratis, el paquete vigente y lo que hay por cobrar.
  *
- * ── De dónde salen los datos ───────────────────────────────────────────────
+ * - Las PROPUESTAS se cuentan en el navegador, pedido por pedido
+ *   (`useProposalFacts`), igual que antes: no hay un endpoint que las cuente.
+ * - Trabajos, gratis, paquetes y por cobrar salen de `getProvidersFactsFn`,
+ *   con la MISMA clasificación que Liquidaciones.
+ * - Filtros y orden en el CLIENTE (decenas de filas), en la URL (`provider*`).
  *
- * Las propuestas son REALES: no hay un endpoint que las cuente por proveedor,
- * así que se leen pedido por pedido con `listQuoteProposalsFn` (el mismo que
- * usa la ficha), desde el navegador, como hace el mapa de cobertura con el GPS.
- * Sólo se piden los pedidos que pueden tener propuestas contables: abiertos, o
- * cerrados desde el 27/10. Sin duplicados (el equipo marca así sus pruebas).
- *
- * El PLAN es real desde el 05/11/26, y de sólo lectura: el plan EFECTIVO de
- * la suscripción de Mercado Pago (billing del backend, `listPartnerPlansFn`),
- * Gratis si no hay una que dé acceso. Topes y nombres salen del catálogo
- * `subscription_plans`. El día que exista `GET /admin/partner-proposal-usage`,
- * esta pantalla deja de pedir propuestas una por una y consume esas filas.
- *
- * La vista histórica (`proposalMonth=historico`) suma todo desde el 27/10 por
- * proveedor, con el pico mensual: el color va sobre ese pico, así se ve quién
- * pasaría el tope de su plan en algún mes. Sale del MISMO conteo que la vista
- * mensual (`bucketProposals`), y su CSV es para cruzar con quién pagó.
- *
- * El histórico suma además "desde siempre" (pedidos y desde cuándo cotiza),
- * de `ops.partner_quote_volume()` (migración 025): incluye lo cargado en
- * `ops.quote_request_response` antes del 27/10, que esta pantalla no cuenta.
- * Va en columnas aparte y no entra al pico ni al color: lo viejo no se publicó
- * en la app y no había tope. Es lo que usa Comercial para llamar a los talleres.
- *
- * Los colores los decide `capTone` (`~/lib/partner-plans`), no esta pantalla:
- * rojo pasó el tope, amarillo llegó, Aliado siempre gris (sin límite por
- * ahora), sin plan (base sin billing) gris. El tope no frena ningún envío.
- *
- * Orden y filtros (06/11/26, para Tobías): todo en la URL, sobre las filas ya
- * contadas — ver `~/lib/partner-proposal-filters`. Los encabezados ordenan
- * (`proposalSort`/`proposalDir`); sin orden elegido queda el de siempre.
- *
- * `ssr: 'data-only'`: el loader corre en el servidor (lista de pedidos y de
- * proveedores), pero la carga de propuestas y el mes en curso son del
- * navegador. Está detrás de auth.
+ * `ssr: 'data-only'`: el loader corre en el servidor, la carga de propuestas
+ * es del navegador. Está detrás de auth.
  */
 export const Route = createFileRoute('/_authed/partners/propuestas')({
-  validateSearch: partnerProposalsPageSearchSchema,
+  validateSearch: providersSearchSchema,
   ssr: 'data-only',
   loader: async ({ abortController }) => {
     const signal = abortController.signal
-    const [quotes, partners, volume, plans, contacts, fees] = await Promise.all([
+    const [quotes, partners, facts] = await Promise.all([
       listQuoteRequestsFn({ data: { quoteStatus: 'all', quoteShowDuplicates: false }, signal }),
       listMarketplacePartners({ data: {}, signal }),
-      listPartnerQuoteVolumeFn({ signal }),
-      listPartnerPlansFn({ signal }),
-      listPartnerLastContactsFn({ signal }),
-      // El fee pendiente de Liquidaciones (038). Si falla o falta, la columna dice «—».
-      getPartnerFeesFn({ signal }).catch(() => ({ available: false as const })),
+      getProvidersFactsFn({ signal }).catch(() => ({ available: false as const })),
     ])
-    // Fee pendiente + avisado por proveedor, con la MISMA regla que Partners › Liquidaciones.
-    let feeOwed: Array<[string, number]> | null = null
-    if (fees.available) {
-      const fp = new Map(fees.partners.map((p) => [p.id, p]))
-      feeOwed = groupOpenByPartner(classifyFeeJobs(fees.jobs, fp), fp).map(
-        (g) => [g.partner.id, g.pendingTotal + g.notifiedTotal] as [string, number],
-      )
-    }
-    // Sólo proveedores del directorio: un taller de afuera no tiene plan ni ficha.
-    const allTime: Array<[string, AllTimeVolume]> | null = volume.available
-      ? volume.rows.flatMap((r) =>
-          r.partnerId ? [[r.partnerId, { requests: r.requests, firstOn: r.firstQuotedOn }] as [string, AllTimeVolume]] : [],
-        )
-      : null
     const requests =
       'rows' in quotes
         ? quotes.rows
             .filter((r) => r.status !== 'closed' || (r.closedAt ?? '') >= PROPOSAL_COUNT_START)
             .map((r) => ({ id: r.id, createdAt: r.createdAt, channel: r.channel }))
         : null
-    const partnerRefs: Array<PartnerRef> = partners.map((p) => ({
+    const list = partners.map((p) => ({
       id: p.id,
       name: p.name,
       tier: p.tier,
       status: p.status,
+      zone: p.coverageZone || null,
+      categories: p.categories,
+      createdAt: p.createdAt,
     }))
-    // Lo que los filtros necesitan y `PartnerRef` no trae. Sin datos de personas.
-    const partnerInfo = partners.map(
-      (p) => [p.id, { zone: p.coverageZone || null, categories: p.categories, createdAt: p.createdAt }] as const,
-    )
-    return {
-      requests,
-      partners: partnerRefs,
-      allTime,
-      plansResult: plans,
-      partnerInfo,
-      lastContacts: contacts.rows,
-      contactsAvailable: contacts.available,
-      feeOwed,
-    }
+    return { requests, partners: list, facts }
   },
-  head: () => ({ meta: [{ title: 'Partners · Propuestas — AutoLibre' }] }),
-  component: PartnerProposals,
+  head: () => ({ meta: [{ title: 'Partners · Proveedores — AutoLibre' }] }),
+  component: Providers,
 })
 
-// ── Pantalla ─────────────────────────────────────────────────────────────────
+interface Row {
+  id: string
+  name: string
+  tier: string
+  status: string
+  zone: string | null
+  categories: Array<{ slug: string; name: string }>
+  createdAt: string
+  monthSent: number
+  facts: ProviderFacts | null
+}
 
-function PartnerProposals() {
-  const { requests, partners, allTime, plansResult, partnerInfo, lastContacts, contactsAvailable, feeOwed } =
-    Route.useLoaderData()
-  const feeMap = useMemo(() => (feeOwed ? new Map(feeOwed) : null), [feeOwed])
-  const subMap = useMemo(
-    () => new Map(plansResult.available ? plansResult.subscriptions.map((x) => [x.partnerId, x] as const) : []),
-    [plansResult],
-  )
-  const allTimeMap = useMemo(() => (allTime ? new Map(allTime) : null), [allTime])
+function Providers() {
+  const { requests, partners, facts } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const setSearch = (next: Partial<typeof search>) =>
     navigate({ search: { ...search, ...next }, replace: true, resetScroll: false })
+  const [composerFor, setComposerFor] = useState<string | null>(null)
 
   const months = useMemo(() => countableMonths(new Date()), [])
-  const isHistory = search.proposalMonth === PROPOSAL_HISTORY
-  const month = search.proposalMonth && months.includes(search.proposalMonth) ? search.proposalMonth : months[0]!
+  const month = search.providerMonth && months.includes(search.providerMonth) ? search.providerMonth : months[0]!
 
   const load = useProposalFacts(requests ?? [])
-  const plans = useMemo(() => effectivePlans(plansResult, partners.map((p) => p.id)), [plansResult, partners])
-
-  const monthView = useMemo(
-    () => aggregatePartnerUsage(load.facts, month, partners, plans, { includeIdle: search.proposalShowIdle }),
-    [load.facts, month, partners, plans, search.proposalShowIdle],
+  const refs: Array<PartnerRef> = useMemo(
+    () => partners.map((p) => ({ id: p.id, name: p.name, tier: p.tier, status: p.status })),
+    [partners],
   )
-  const historyView = useMemo(
-    () =>
-      aggregatePartnerHistory(load.facts, partners, plans, {
-        includeIdle: search.proposalShowIdle,
-        allTime: allTimeMap,
-      }),
-    [load.facts, partners, plans, search.proposalShowIdle, allTimeMap],
+  const usage = useMemo(
+    () => aggregatePartnerUsage(load.facts, month, refs, new Map(), { includeIdle: true }),
+    [load.facts, month, refs],
   )
-  const view = isHistory ? historyView : monthView
+  const sentBy = useMemo(() => new Map(usage.rows.map((r) => [r.partnerId, r.sent])), [usage])
+  const factsBy = facts.available ? facts.byPartner : null
 
-  // ── Lo que cada fila necesita para filtrarse y ordenarse ──────────────────
-  const infoMap = useMemo(() => new Map(partnerInfo), [partnerInfo])
-  const contactMap = useMemo(() => new Map(lastContacts.map((c) => [c.partnerId, c.lastContactOn])), [lastContacts])
-  const facts = useMemo(() => {
-    const monthUsed = new Map(monthView.rows.map((r) => [r.partnerId, r.used]))
-    const historyUsed = new Map(historyView.rows.map((r) => [r.partnerId, r.used]))
-    const out = new Map<string, PartnerFacts>()
-    for (const id of new Set([...monthUsed.keys(), ...historyUsed.keys()])) {
-      const info = infoMap.get(id)
-      out.set(id, {
-        zone: info?.zone ?? null,
-        categories: info?.categories ?? [],
-        createdAt: info?.createdAt ?? null,
-        lastContactOn: contactMap.get(id) ?? null,
-        monthUsed: monthUsed.get(id) ?? 0,
-        historyUsed: historyUsed.get(id) ?? 0,
-      })
-    }
-    return out
-  }, [monthView, historyView, infoMap, contactMap])
-  const factsFor = (id: string): PartnerFacts =>
-    facts.get(id) ?? { zone: null, categories: [], createdAt: null, lastContactOn: null, monthUsed: 0, historyUsed: 0 }
+  const all: Array<Row> = partners.map((p) => ({
+    ...p,
+    monthSent: sentBy.get(p.id) ?? 0,
+    facts: factsBy?.[p.id] ?? null,
+  }))
 
   const needle = search.q ? normalizeForMatch(search.q) : ''
-  const matches = (name: string) => needle === '' || normalizeForMatch(name).includes(needle)
-  const keep = (r: PartnerUsageRow | PartnerHistoryRow) =>
-    matches(r.name) &&
-    (!search.proposalOverCap || r.tone === 'over') &&
-    matchesProposalFilters(r, factsFor(r.partnerId), search)
-  const monthRows = sortProposalRows(monthView.rows.filter(keep), search.proposalSort, search.proposalDir, (r, k) =>
-    monthSortValue(r, k, factsFor(r.partnerId)),
-  )
-  const historyRows = sortProposalRows(
-    historyView.rows.filter(keep),
-    search.proposalSort,
-    search.proposalDir,
-    (r, k) => historySortValue(r, k, factsFor(r.partnerId)),
-  )
-
-  // ── Opciones de los filtros (salen de los datos, nunca a mano) ────────────
-  const planOptions = useMemo(() => {
-    const catalog = plansResult.available ? plansResult.catalog : []
-    return [...catalog.map((p) => ({ value: p.code, label: p.name })), { value: NO_PLAN, label: 'Sin plan' }]
-  }, [plansResult])
-  const zoneOptions = useMemo(() => {
-    const zones = new Set<string>()
-    for (const [, info] of partnerInfo) if (info.zone) zones.add(info.zone.trim())
-    return [...zones].sort((a, b) => a.localeCompare(b, 'es')).map((z) => ({ value: z, label: z }))
-  }, [partnerInfo])
-  const rubroOptions = useMemo(() => {
-    const bySlug = new Map<string, string>()
-    for (const [, info] of partnerInfo) for (const c of info.categories) bySlug.set(c.slug, c.name)
-    return [...bySlug].sort((a, b) => a[1].localeCompare(b[1], 'es')).map(([value, label]) => ({ value, label }))
-  }, [partnerInfo])
-  const monthName = isHistory ? 'del mes en curso' : `de ${monthLabel(month).toLowerCase()}`
-  const chips = activeProposalFilterChips(search, {
-    plan: (code) => planOptions.find((o) => o.value === code)?.label ?? code,
-    rubro: (slug) => rubroOptions.find((o) => o.value === slug)?.label ?? slug,
-    monthName,
+  const rows = all.filter((r) => {
+    if (needle && !normalizeForMatch(r.name).includes(needle)) return false
+    if (search.providerStatuses.length > 0 && !search.providerStatuses.includes(r.status as never)) return false
+    if (search.providerRubros.length > 0 && !r.categories.some((c) => search.providerRubros.includes(c.slug))) return false
+    if (search.providerZones.length > 0) {
+      const zone = normalizeForMatch(r.zone ?? '')
+      if (!search.providerZones.some((z) => zone.includes(normalizeForMatch(z)))) return false
+    }
+    if (search.providerSourcer) {
+      const id = r.facts?.sourcer?.memberId ?? 'none'
+      if (id !== search.providerSourcer) return false
+    }
+    if (search.providerWithPackage && !r.facts?.package) return false
+    if (search.providerPackageExpiring && !r.facts?.package?.expiringSoon) return false
+    if (search.providerOwes && !(r.facts && r.facts.owed > 0)) return false
+    return true
   })
-  const toggle = (list: ReadonlyArray<string>, v: string) =>
-    list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
-  const rows = isHistory ? historyRows : monthRows
-  const externals = view.externals.filter((e) => matches(e.name))
+
+  const value = (r: Row, k: ProviderSortKey): string | number | null => {
+    switch (k) {
+      case 'name':
+        return r.name
+      case 'zone':
+        return r.zone
+      case 'status':
+        return PROVIDER_STATUS_LABELS[r.status] ?? r.status
+      case 'sourcer':
+        return r.facts?.sourcer?.name ?? null
+      case 'createdAt':
+        return r.createdAt
+      case 'monthSent':
+        return r.monthSent
+      case 'confirmedTotal':
+        return r.facts?.confirmedTotal ?? null
+      case 'confirmedMonth':
+        return r.facts?.confirmedMonth ?? null
+      case 'package':
+        return r.facts?.package?.balance ?? null
+      case 'owed':
+        return r.facts?.owed ?? null
+    }
+  }
+  const sign = search.providerDir === 'asc' ? 1 : -1
+  const sorted = [...rows].sort((a, b) => {
+    const va = value(a, search.providerSort)
+    const vb = value(b, search.providerSort)
+    if (va === null && vb !== null) return 1
+    if (vb === null && va !== null) return -1
+    if (va !== null && vb !== null && va !== vb) {
+      const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb), 'es')
+      if (cmp !== 0) return cmp * sign
+    }
+    return a.name.localeCompare(b.name, 'es')
+  })
+
+  const zoneOptions = useMemo(() => {
+    const s = new Set<string>()
+    for (const p of partners) if (p.zone) s.add(p.zone.trim())
+    return [...s].sort((a, b) => a.localeCompare(b, 'es')).map((z) => ({ value: z, label: z }))
+  }, [partners])
+  const rubroOptions = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of partners) for (const c of p.categories) m.set(c.slug, c.name)
+    return [...m].sort((a, b) => a[1].localeCompare(b[1], 'es')).map(([value, label]) => ({ value, label }))
+  }, [partners])
+
+  const activeFilters =
+    !!search.q ||
+    search.providerStatuses.length > 0 ||
+    search.providerRubros.length > 0 ||
+    search.providerZones.length > 0 ||
+    !!search.providerSourcer ||
+    search.providerWithPackage ||
+    search.providerPackageExpiring ||
+    search.providerOwes
 
   const downloadCsv = () => {
-    // Se baja lo que se ve: el buscador y "solo sobre el tope" también filtran el CSV.
-    const csv = partnerHistoryCsv({ rows: historyRows, externals })
+    const csv = toCsv(
+      PROVIDERS_CSV_HEADER,
+      sorted.map((r) => [
+        r.name,
+        r.categories.map((c) => c.name).join(', '),
+        r.zone ?? '',
+        PROVIDER_STATUS_LABELS[r.status] ?? r.status,
+        r.facts?.sourcer?.name ?? '',
+        shortDay(baDay(r.createdAt)),
+        r.monthSent,
+        r.facts?.confirmedTotal ?? '',
+        r.facts?.confirmedMonth ?? '',
+        r.facts ? (r.facts.firstJobUsed ? 'usado' : 'disponible') : '',
+        r.facts?.package?.balance ?? '',
+        r.facts?.package ? feeDay(r.facts.package.expiresOn) : '',
+        r.facts?.owed ?? '',
+      ]),
+    )
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
     const a = document.createElement('a')
     a.href = url
-    a.download = `propuestas-por-proveedor-historico-${baDay(new Date())}.csv`
+    a.download = `proveedores-${month}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  // Los totales no siguen al buscador: son el panorama del período.
-  const counted: ReadonlyArray<UsageCounts & { tone: CapTone }> = view.rows
-  const totals = counted.reduce(
-    (acc, r) => ({
-      sent: acc.sent + r.sent,
-      withdrawn: acc.withdrawn + r.withdrawn,
-      selected: acc.selected + r.selected,
-      over: acc.over + Number(r.tone === 'over'),
-      at: acc.at + Number(r.tone === 'at'),
-      withProposals: acc.withProposals + Number(r.used > 0),
-    }),
-    { sent: 0, withdrawn: 0, selected: 0, over: 0, at: 0, withProposals: 0 },
-  )
-
-  if (requests === null) {
-    return (
-      <>
-        <PageHeader title="Propuestas por proveedor" actions={<SsrTag>ssr: data-only</SsrTag>} />
-        <Empty>Esta base no tiene la tabla de pedidos (`quote_requests`).</Empty>
-      </>
-    )
+  const totals = {
+    owed: rows.reduce((s, r) => s + (r.facts?.owed ?? 0), 0),
+    withPackage: rows.filter((r) => r.facts?.package).length,
+    expiring: rows.filter((r) => r.facts?.package?.expiringSoon).length,
+    sent: rows.reduce((s, r) => s + r.monthSent, 0),
   }
 
   return (
     <>
       <PageHeader
-        title="Propuestas por proveedor"
-        subtitle={`${isHistory ? 'Histórico' : monthLabel(month)} · hora de Buenos Aires · se cuenta desde el 27/10/2026`}
+        title="Proveedores"
+        subtitle={`${formatInt(rows.length)} proveedores · ${monthLabel(month)} · sin planes ni tope de respuestas`}
         actions={<SsrTag>ssr: data-only</SsrTag>}
       />
 
-      {!plansResult.available ? (
+      {!facts.available ? (
         <p className="mb-4 rounded-lg border border-status-yellow/30 bg-status-yellow-bg px-4 py-2 text-xs text-status-yellow">
-          Esta base no tiene el billing del backend (subscription_plans / partner_subscriptions): los proveedores
-          salen «sin plan» y no se marca ningún tope.
+          Falta la migración 038 (liquidaciones): trabajos confirmados, paquetes y por cobrar salen «—».
+        </p>
+      ) : !facts.packagesAvailable ? (
+        <p className="mb-4 rounded-lg border border-status-yellow/30 bg-status-yellow-bg px-4 py-2 text-xs text-status-yellow">
+          Falta la migración 044 (paquetes de trabajos): no se pueden cargar paquetes.
         </p>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap items-end gap-5">
-        <FilterGroup label="Mes">
+      <div className="mb-3 flex flex-wrap items-end gap-5">
+        <FilterGroup label="Mes de las propuestas">
           {months.map((m) => (
-            <Chip key={m} active={!isHistory && m === month} onClick={() => setSearch({ proposalMonth: m })}>
+            <Chip key={m} active={m === month} onClick={() => setSearch({ providerMonth: m })}>
               {monthLabel(m)}
             </Chip>
           ))}
-          <Chip active={isHistory} onClick={() => setSearch({ proposalMonth: PROPOSAL_HISTORY })}>
-            Histórico (desde 27/10/26)
-          </Chip>
         </FilterGroup>
-        <FilterGroup label="Tope">
-          <Chip
-            tone="warn"
-            active={search.proposalOverCap}
-            onClick={() => setSearch({ proposalOverCap: !search.proposalOverCap })}
-          >
-            {isHistory ? 'Solo con un mes sobre el tope' : 'Solo sobre el tope'}
-            {totals.over > 0 && !search.proposalOverCap ? ` (${totals.over})` : ''}
-          </Chip>
-        </FilterGroup>
-        <FilterGroup label="Proveedores">
-          <Chip
-            active={search.proposalShowIdle}
-            onClick={() => setSearch({ proposalShowIdle: !search.proposalShowIdle })}
-          >
-            Incluir activos sin propuestas
-          </Chip>
+        <FilterGroup
+          label="Estado"
+          onClear={search.providerStatuses.length > 0 ? () => setSearch({ providerStatuses: [] }) : undefined}
+        >
+          {PROVIDER_STATUSES.map((s) => (
+            <Chip
+              key={s}
+              active={search.providerStatuses.includes(s)}
+              onClick={() =>
+                setSearch({
+                  providerStatuses: search.providerStatuses.includes(s)
+                    ? search.providerStatuses.filter((x) => x !== s)
+                    : [...search.providerStatuses, s],
+                })
+              }
+            >
+              {PROVIDER_STATUS_LABELS[s]}
+            </Chip>
+          ))}
         </FilterGroup>
         <SearchInput
           label="Buscar"
@@ -357,655 +297,299 @@ function PartnerProposals() {
           onSearch={(q) => setSearch({ q })}
           className="w-full sm:w-56"
         />
-        {isHistory ? (
-          <Button variant="outline" size="sm" onClick={downloadCsv} disabled={load.loading}>
-            <Download className="size-3.5" aria-hidden />
-            Descargar CSV
-          </Button>
-        ) : null}
+        <Button variant="outline" size="sm" onClick={downloadCsv}>
+          <Download className="size-3.5" aria-hidden />
+          Descargar CSV
+        </Button>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-end gap-5">
-        <FilterGroup
-          label="Plan"
-          onClear={search.proposalPlans.length > 0 ? () => setSearch({ proposalPlans: [] }) : undefined}
-        >
-          {planOptions.map((o) => (
-            <Chip
-              key={o.value}
-              active={search.proposalPlans.includes(o.value)}
-              onClick={() => setSearch({ proposalPlans: toggle(search.proposalPlans, o.value) })}
-            >
-              {o.label}
-            </Chip>
-          ))}
-        </FilterGroup>
-        <FilterGroup label="Aliado">
-          <Chip active={search.proposalAliado === 'all'} onClick={() => setSearch({ proposalAliado: 'all' })}>
-            Todos
-          </Chip>
-          <Chip active={search.proposalAliado === 'yes'} onClick={() => setSearch({ proposalAliado: 'yes' })}>
-            Sí
-          </Chip>
-          <Chip active={search.proposalAliado === 'no'} onClick={() => setSearch({ proposalAliado: 'no' })}>
-            No
-          </Chip>
-        </FilterGroup>
-        <div className="space-y-1.5">
-          <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">Zona</span>
-          <MultiSelect
-            label="Zona"
-            options={zoneOptions}
-            selected={search.proposalZones}
-            onChange={(next) => setSearch({ proposalZones: next })}
-            placeholder="Todas"
-            searchPlaceholder="Buscar zona…"
-            className="w-52"
-          />
-        </div>
+      <div className="mb-4 flex flex-wrap items-end gap-5">
         <div className="space-y-1.5">
           <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">Rubro</span>
           <MultiSelect
             label="Rubro"
             options={rubroOptions}
-            selected={search.proposalRubros}
-            onChange={(next) => setSearch({ proposalRubros: next })}
+            selected={search.providerRubros}
+            onChange={(next) => setSearch({ providerRubros: next })}
             placeholder="Todos"
             searchPlaceholder="Buscar rubro…"
             className="w-52"
           />
         </div>
-      </div>
-      <div className="mb-4 flex flex-wrap items-end gap-5">
-        <RangeFilter
-          label={`Propuestas ${monthName}`}
-          type="number"
-          min={search.proposalMonthMin}
-          max={search.proposalMonthMax}
-          onCommit={({ min, max }) => setSearch({ proposalMonthMin: toCount(min), proposalMonthMax: toCount(max) })}
-        />
-        <RangeFilter
-          label="Propuestas desde 27/10"
-          type="number"
-          min={search.proposalHistMin}
-          max={search.proposalHistMax}
-          onCommit={({ min, max }) => setSearch({ proposalHistMin: toCount(min), proposalHistMax: toCount(max) })}
-        />
-        <RangeFilter
-          label="Fecha de alta"
-          type="date"
-          min={search.proposalJoinedFrom}
-          max={search.proposalJoinedTo}
-          onCommit={({ min, max }) => setSearch({ proposalJoinedFrom: min, proposalJoinedTo: max })}
-        />
-        {contactsAvailable ? (
-          <>
-            <RangeFilter
-              label="Último contacto"
-              type="date"
-              min={search.proposalContactFrom}
-              max={search.proposalContactTo}
-              onCommit={({ min, max }) => setSearch({ proposalContactFrom: min, proposalContactTo: max })}
-            />
-            <FilterGroup label="Comercial">
-              <Chip
-                active={search.proposalNoContact}
-                onClick={() => setSearch({ proposalNoContact: !search.proposalNoContact })}
-              >
-                Sin contacto
-              </Chip>
-            </FilterGroup>
-          </>
-        ) : null}
-      </div>
-
-      {chips.length > 0 ? (
-        <div className="mb-4 flex flex-wrap items-center gap-1.5" aria-label="Filtros activos">
-          {chips.map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              onClick={() => setSearch(c.clear as Partial<typeof search>)}
-              className="inline-flex h-7 items-center gap-1 rounded-full border border-brand/40 bg-brand-soft px-2.5 text-xs text-brand outline-none hover:border-brand focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Quitar filtro ${c.label}`}
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">Zona</span>
+          <MultiSelect
+            label="Zona"
+            options={zoneOptions}
+            selected={search.providerZones}
+            onChange={(next) => setSearch({ providerZones: next })}
+            placeholder="Todas"
+            searchPlaceholder="Buscar zona…"
+            className="w-52"
+          />
+        </div>
+        {facts.available ? (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Comercial (Alta por)</span>
+            <select
+              value={search.providerSourcer ?? ''}
+              onChange={(e) => setSearch({ providerSourcer: e.target.value || undefined })}
+              className="h-9 rounded-md border border-input bg-surface px-2 text-sm"
             >
-              {c.label}
-              <X className="size-3" aria-hidden />
-            </button>
-          ))}
+              <option value="">Todos</option>
+              {facts.sourcers.map((s) => (
+                <option key={s.memberId} value={s.memberId}>
+                  {s.name}
+                </option>
+              ))}
+              <option value="none">Sin asignar</option>
+            </select>
+          </label>
+        ) : null}
+        <FilterGroup label="Cobro">
+          <Chip active={search.providerWithPackage} onClick={() => setSearch({ providerWithPackage: !search.providerWithPackage })}>
+            Con paquete vigente ({totals.withPackage})
+          </Chip>
+          <Chip
+            tone="warn"
+            active={search.providerPackageExpiring}
+            onClick={() => setSearch({ providerPackageExpiring: !search.providerPackageExpiring })}
+          >
+            Paquete por vencer (≤ {PARTNER_FEE_CONFIG.PAQUETE_POR_VENCER_DIAS} días) ({totals.expiring})
+          </Chip>
+          <Chip active={search.providerOwes} onClick={() => setSearch({ providerOwes: !search.providerOwes })}>
+            Con saldo por cobrar
+          </Chip>
+        </FilterGroup>
+        {activeFilters ? (
           <Button
             variant="ghost"
             size="sm"
             onClick={() =>
-              setSearch({ ...CLEARED_PROPOSAL_FILTERS, proposalPlans: [], proposalZones: [], proposalRubros: [] })
+              setSearch({
+                q: undefined,
+                providerStatuses: [],
+                providerRubros: [],
+                providerZones: [],
+                providerSourcer: undefined,
+                providerWithPackage: false,
+                providerPackageExpiring: false,
+                providerOwes: false,
+              })
             }
           >
-            Limpiar filtros
+            <X className="size-3.5" aria-hidden /> Limpiar filtros
           </Button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
-      <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-6">
-        <Stat label="Enviadas" value={totals.sent} />
-        <Stat label="Retiradas" value={totals.withdrawn} />
-        <Stat label="Elegidas" value={totals.selected} />
-        <Stat label="Proveedores con propuestas" value={totals.withProposals} />
-        <Stat
-          label={isHistory ? 'Llegaron al tope en un mes' : 'Llegaron al tope'}
-          value={totals.at}
-          tone={totals.at > 0 ? 'yellow' : undefined}
-        />
-        <Stat
-          label={isHistory ? 'Pasaron el tope en un mes' : 'Pasaron el tope'}
-          value={totals.over}
-          tone={totals.over > 0 ? 'red' : undefined}
-        />
+      <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label={`Propuestas enviadas · ${monthLabel(month)}`} value={formatInt(totals.sent)} />
+        <Stat label="Con paquete vigente" value={formatInt(totals.withPackage)} />
+        <Stat label="Paquetes por vencer" value={formatInt(totals.expiring)} />
+        <Stat label="Por cobrar" value={formatArs(totals.owed)} />
       </dl>
 
       <LoadStatus load={load} />
 
-      {load.unavailable ? (
-        <Empty>
-          Esta base no tiene las propuestas en la app (migraciones 0120–0122 del backend). No hay nada que
-          contar.
-        </Empty>
-      ) : rows.length === 0 && !load.loading ? (
-        <Empty>
-          {chips.length > 0
-            ? 'Ningún proveedor coincide con los filtros.'
-            : search.proposalOverCap
-              ? isHistory
-                ? 'Nadie pasó el tope en ningún mes.'
-                : 'Nadie pasó el tope este mes.'
-              : isHistory
-                ? 'No hay propuestas a proveedores del directorio desde el 27/10.'
-                : 'No hay propuestas a proveedores del directorio en este mes.'}
-        </Empty>
-      ) : isHistory ? (
-        <>
-          {allTimeMap === null ? (
-            <p className="mb-2 rounded-lg border border-status-yellow/30 bg-status-yellow-bg px-4 py-2 text-xs text-status-yellow">
-              «Desde siempre» no está disponible: falta aplicar la migración 025 de ops en esta base.
-            </p>
-          ) : null}
-          <HistoryTable rows={historyRows} factsFor={factsFor} />
-        </>
+      {requests === null ? (
+        <Empty>Esta base no tiene la tabla de pedidos (`quote_requests`): las propuestas salen en 0.</Empty>
+      ) : null}
+
+      {sorted.length === 0 ? (
+        <Empty>Ningún proveedor coincide con los filtros.</Empty>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[1480px]">
+          <Table className="min-w-[1500px]">
             <TableHeader>
               <TableRow>
-                <Th label="Proveedor" k="name" />
-                <Th label="Plan" k="plan" />
+                <Th label="Taller" k="name" />
                 <TableHead>Rubros</TableHead>
                 <Th label="Zona" k="zone" />
+                <Th label="Estado" k="status" />
+                <Th label="Alta por" k="sourcer" />
                 <Th label="Alta" k="createdAt" />
-                <Th label="Último contacto" k="lastContact" title="Del seguimiento comercial (Comercial › Contactos)." />
-                <Th label="Enviadas" k="sent" align="right" />
-                <Th label="Retiradas" k="withdrawn" align="right" />
-                <Th label="Elegidas" k="selected" align="right" />
-                <Th label="Usadas / tope" k="used" align="right" />
-                <Th label="Desde 27/10" k="historyUsed" align="right" title="Usadas desde el 27/10/26 (el histórico)." />
-                <TableHead className="text-right" title="Pendiente + avisado en Partners › Liquidaciones.">
-                  Fee pendiente
-                </TableHead>
+                <Th label="Propuestas del mes" k="monthSent" align="right" title="Enviadas (no retiradas) en el mes elegido." />
+                <Th label="Trabajos (total)" k="confirmedTotal" align="right" title="Confirmados por AutoLibre, sin disputas ni anulados." />
+                <Th label="Trabajos (mes)" k="confirmedMonth" align="right" title="Del mes en curso." />
+                <TableHead>Primer trabajo gratis</TableHead>
+                <Th label="Paquete vigente" k="package" />
+                <Th label="Por cobrar" k="owed" align="right" title="Pendiente + avisado en Partners › Liquidaciones." />
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {monthRows.map((r) => (
-                <UsageRow
-                  key={r.partnerId}
-                  row={r}
-                  facts={factsFor(r.partnerId)}
-                  sub={subMap.get(r.partnerId) ?? null}
-                  feeOwed={feeMap ? (feeMap.get(r.partnerId) ?? 0) : null}
-                />
+              {sorted.map((r) => (
+                <Fragment key={r.id}>
+                  <ProviderRow
+                    row={r}
+                    canAddPackage={facts.available && facts.packagesAvailable}
+                    onAddPackage={() => setComposerFor(composerFor === r.id ? null : r.id)}
+                  />
+                  {composerFor === r.id && facts.available ? (
+                    <TableRow>
+                      <TableCell colSpan={13} className="whitespace-normal bg-canvas">
+                        <PackageComposer
+                          partnerId={r.id}
+                          partnerName={r.name}
+                          today={facts.today}
+                          onDone={() => setComposerFor(null)}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </Fragment>
               ))}
             </TableBody>
           </Table>
         </div>
       )}
 
-      <ExternalSection rows={externals} history={isHistory} />
+      <ExternalSection rows={usage.externals} />
 
-      <Legend plansResult={plansResult} />
+      <p className="mt-4 text-xs text-muted-foreground">
+        Sin planes ni tope desde el 26/11/26: el primer trabajo confirmado de cada proveedor es gratis, después{' '}
+        {formatArs(PARTNER_FEE_CONFIG.FEE_POR_TRABAJO)} por trabajo, salvo que lo cubra un paquete vigente. Las propuestas
+        se cuentan desde el 27/10/2026, por mes de envío en hora de Buenos Aires.
+      </p>
     </>
   )
 }
 
-function UsageRow({
-  row,
-  facts,
-  sub,
-  feeOwed,
-}: {
-  row: PartnerUsageRow
-  facts: PartnerFacts
-  sub: PartnerSubscriptionInfo | null
-  feeOwed: number | null
-}) {
-  const left = row.plan !== null && row.cap !== null ? row.cap - row.used : null
+function ProviderRow({ row: r, canAddPackage, onAddPackage }: { row: Row; canAddPackage: boolean; onAddPackage: () => void }) {
+  const f = r.facts
+  const dash = <span className="text-muted-foreground">—</span>
   return (
-    <TableRow className={toneRowClass(row.tone)}>
+    <TableRow className={cn(r.status === 'archived' && 'opacity-60')}>
       <TableCell>
-        <ProviderName row={row} />
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Link to="/partners/$partnerId" params={{ partnerId: r.id }} className="font-medium hover:underline">
+            {r.name}
+          </Link>
+          {isFounding(r.tier) ? (
+            <Badge variant="outline" className="text-muted-foreground">
+              Aliado
+            </Badge>
+          ) : null}
+        </div>
       </TableCell>
-      <TableCell className="text-sm">
-        <PlanCell plan={row.plan} />
-        {sub ? (
-          <div className="text-xs text-muted-foreground">
-            {subscriptionStatusLabel(sub.status)}
-            {sub.status === 'trialing' && sub.trialEndsAt ? ` · prueba hasta ${shortDay(baDay(sub.trialEndsAt))}` : ''}
-          </div>
-        ) : null}
-      </TableCell>
-      <TableCell className="max-w-56 text-xs" title={facts.categories.map((c) => c.name).join(', ')}>
-        {facts.categories.length ? (
-          <span className="line-clamp-2">{facts.categories.map((c) => c.name).join(', ')}</span>
+      <TableCell className="max-w-56 text-xs" title={r.categories.map((c) => c.name).join(', ')}>
+        {r.categories.length ? (
+          <span className="line-clamp-2">{r.categories.map((c) => c.name).join(', ')}</span>
         ) : (
           <span className="text-muted-foreground">sin rubros</span>
         )}
       </TableCell>
-      <FactCells facts={facts} />
-      <TableCell className="text-right tabular-nums">{formatInt(row.sent)}</TableCell>
-      <TableCell className="text-right tabular-nums">
-        {row.withdrawn > 0 ? formatInt(row.withdrawn) : <span className="text-muted-foreground">0</span>}
+      <TableCell className="max-w-48 truncate text-sm" title={r.zone ?? undefined}>
+        {r.zone ?? dash}
       </TableCell>
-      <TableCell className="text-right tabular-nums">{formatInt(row.selected)}</TableCell>
-      <TableCell className={cn('text-right tabular-nums', toneTextClass(row.tone))}>
-        {formatInt(row.used)} / {row.plan === null ? '—' : row.cap === null ? 'sin límite' : formatInt(row.cap)}
-        <ToneNote tone={row.tone} used={row.used} cap={row.cap} />
-        {left !== null && left > 0 && !isFounding(row.tier) ? (
-          <div className="text-xs font-normal text-muted-foreground">quedan {formatInt(left)}</div>
-        ) : null}
+      <TableCell className="text-sm">{PROVIDER_STATUS_LABELS[r.status] ?? r.status}</TableCell>
+      <TableCell className="text-sm">{f?.sourcer?.name ?? dash}</TableCell>
+      <TableCell className="text-sm tabular-nums">{shortDay(baDay(r.createdAt))}</TableCell>
+      <TableCell className="text-right tabular-nums">{formatInt(r.monthSent)}</TableCell>
+      <TableCell className="text-right tabular-nums">{f ? formatInt(f.confirmedTotal) : dash}</TableCell>
+      <TableCell className="text-right tabular-nums">{f ? formatInt(f.confirmedMonth) : dash}</TableCell>
+      <TableCell className="text-sm">
+        {!f ? dash : f.firstJobUsed ? <span className="text-muted-foreground">usado</span> : 'disponible'}
       </TableCell>
-      <TableCell className="text-right tabular-nums">{formatInt(facts.historyUsed)}</TableCell>
+      <TableCell className="text-sm tabular-nums">
+        {!f?.package ? (
+          dash
+        ) : (
+          <span className={cn(f.package.expiringSoon && 'font-medium text-status-yellow')}>
+            saldo {f.package.balance} · vence {feeDay(f.package.expiresOn)}
+            {f.package.expiringSoon ? ` (${f.package.daysLeft} d)` : ''}
+          </span>
+        )}
+      </TableCell>
       <TableCell className="text-right tabular-nums">
-        {feeOwed === null ? (
-          <span className="text-muted-foreground">—</span>
-        ) : feeOwed > 0 ? (
-          <Link to="/partners/liquidaciones" search={{ feePartner: row.partnerId }} className="hover:underline">
-            {formatArs(feeOwed)}
+        {!f ? (
+          dash
+        ) : f.owed > 0 ? (
+          <Link to="/partners/liquidaciones" search={{ feePartner: r.id }} className="hover:underline">
+            {formatArs(f.owed)}
           </Link>
         ) : (
           <span className="text-muted-foreground">$ 0</span>
         )}
       </TableCell>
+      <TableCell>
+        {canAddPackage ? (
+          <Button size="sm" variant="ghost" className="h-7 whitespace-nowrap" onClick={onAddPackage}>
+            Cargar paquete
+          </Button>
+        ) : null}
+      </TableCell>
     </TableRow>
   )
 }
 
-// ── Vista histórica ──────────────────────────────────────────────────────────
+const SORT_SEARCH_KEYS = { sort: 'providerSort', dir: 'providerDir' }
 
-/**
- * Sin columna de tope: el tope es mensual. El color va sobre el PICO mensual,
- * con las mismas reglas que el mes (`capTone`).
- */
-function HistoryTable({
-  rows,
-  factsFor,
-}: {
-  rows: ReadonlyArray<PartnerHistoryRow>
-  factsFor: (id: string) => PartnerFacts
-}) {
-  return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <Table className="min-w-[1600px]">
-        <TableHeader>
-          <TableRow>
-            <Th label="Proveedor" k="name" />
-            <Th label="Plan" k="plan" />
-            <Th label="Zona" k="zone" />
-            <Th label="Alta" k="createdAt" />
-            <Th label="Último contacto" k="lastContact" title="Del seguimiento comercial (Comercial › Contactos)." />
-            <Th
-              label="Pedidos desde siempre"
-              k="allTime"
-              align="right"
-              title="Pedidos distintos en los que cotizó, también antes del 27/10 (tabla vieja de ops). No entra al pico ni al color."
-            />
-            <Th label="Cotiza desde" k="allTimeFirst" title="La primera vez que cotizó, en cualquiera de las dos tablas." />
-            <Th label="Enviadas" k="sent" align="right" />
-            <Th label="Retiradas" k="withdrawn" align="right" />
-            <Th label="Elegidas" k="selected" align="right" />
-            <Th label="Total usadas" k="used" align="right" />
-            <Th label="% elegidas" k="pctSelected" align="right" />
-            <Th label="Primera" k="firstAt" />
-            <Th label="Última" k="lastAt" />
-            <Th label="Meses" k="activeMonths" align="right" />
-            <Th label="Pico mensual" k="peak" align="right" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.partnerId} className={toneRowClass(r.tone)}>
-              <TableCell>
-                <ProviderName row={r} />
-              </TableCell>
-              <TableCell className="text-sm">
-                <PlanCell plan={r.plan} />
-              </TableCell>
-              <FactCells facts={factsFor(r.partnerId)} />
-              <TableCell className="text-right font-medium tabular-nums">
-                {r.allTime === null ? (
-                  <span className="text-muted-foreground">—</span>
-                ) : (
-                  formatInt(r.allTime.requests)
-                )}
-              </TableCell>
-              <TableCell className="text-sm tabular-nums">
-                {r.allTime?.firstOn ? shortDay(r.allTime.firstOn) : <span className="text-muted-foreground">—</span>}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">{formatInt(r.sent)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {r.withdrawn > 0 ? formatInt(r.withdrawn) : <span className="text-muted-foreground">0</span>}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">{formatInt(r.selected)}</TableCell>
-              <TableCell className="text-right font-medium tabular-nums">{formatInt(r.used)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {r.pctSelected === null ? <span className="text-muted-foreground">—</span> : formatPct(r.pctSelected)}
-              </TableCell>
-              <TableCell className="text-sm tabular-nums">{r.firstAt ? shortDay(baDay(r.firstAt)) : '—'}</TableCell>
-              <TableCell className="text-sm tabular-nums">{r.lastAt ? shortDay(baDay(r.lastAt)) : '—'}</TableCell>
-              <TableCell className="text-right tabular-nums">{formatInt(r.activeMonths)}</TableCell>
-              <TableCell className={cn('text-right tabular-nums', toneTextClass(r.tone))}>
-                {r.peak ? (
-                  <>
-                    {formatInt(r.peak.used)}
-                    <span className="ml-1 text-xs font-normal">en {monthLabel(r.peak.month)}</span>
-                    <ToneNote tone={r.tone} used={r.peak.used} cap={r.plan ? r.plan.cap : null} />
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-// ── Orden ────────────────────────────────────────────────────────────────────
-
-const SORT_SEARCH_KEYS = { sort: 'proposalSort', dir: 'proposalDir' }
-
-/** Encabezado ordenable: texto A→Z al primer click; números y fechas, de mayor a menor. */
-function Th({ label, k, align, title }: { label: string; k: ProposalSortKey; align?: 'right'; title?: string }) {
+function Th({ label, k, align, title }: { label: string; k: ProviderSortKey; align?: 'right'; title?: string }) {
   const search = Route.useSearch()
   return (
     <SortHeader
       label={label}
       sortKey={k}
-      active={search.proposalSort === k}
-      dir={search.proposalDir}
+      active={search.providerSort === k}
+      dir={search.providerDir}
       to="/partners/propuestas"
       align={align}
-      firstClick={TEXT_SORT_KEYS.has(k) ? 'asc' : 'desc'}
+      firstClick={PROVIDER_TEXT_SORT_KEYS.has(k) ? 'asc' : 'desc'}
       searchKeys={SORT_SEARCH_KEYS}
       title={title}
     />
   )
 }
 
-type SortValue = number | string | null
-
-/** `undefined` = esa columna no es común a las dos tablas. */
-function commonSortValue(
-  r: PartnerUsageRow | PartnerHistoryRow,
-  k: ProposalSortKey,
-  f: PartnerFacts,
-): SortValue | undefined {
-  switch (k) {
-    case 'name':
-      return r.name
-    case 'plan':
-      return r.plan?.name ?? null
-    case 'zone':
-      return f.zone
-    case 'createdAt':
-      return f.createdAt
-    case 'lastContact':
-      return f.lastContactOn
-    case 'sent':
-      return r.sent
-    case 'withdrawn':
-      return r.withdrawn
-    case 'selected':
-      return r.selected
-    case 'used':
-      return r.used
-    case 'monthUsed':
-      return f.monthUsed
-    case 'historyUsed':
-      return f.historyUsed
-    default:
-      return undefined
-  }
-}
-
-function monthSortValue(r: PartnerUsageRow, k: ProposalSortKey, f: PartnerFacts): SortValue {
-  return commonSortValue(r, k, f) ?? null
-}
-
-function historySortValue(r: PartnerHistoryRow, k: ProposalSortKey, f: PartnerFacts): SortValue {
-  const common = commonSortValue(r, k, f)
-  if (common !== undefined) return common
-  switch (k) {
-    case 'allTime':
-      return r.allTime?.requests ?? null
-    case 'allTimeFirst':
-      return r.allTime?.firstOn || null
-    case 'pctSelected':
-      return r.pctSelected
-    case 'firstAt':
-      return r.firstAt
-    case 'lastAt':
-      return r.lastAt
-    case 'activeMonths':
-      return r.activeMonths
-    case 'peak':
-      return r.peak?.used ?? null
-    default:
-      return null
-  }
-}
-
-/** `''` del rango es "sin tope", nunca 0. */
-function toCount(v: string | undefined): number | undefined {
-  if (v === undefined) return undefined
-  const n = Number(v)
-  return Number.isInteger(n) && n >= 0 ? n : undefined
-}
-
-/** Zona, alta y último contacto: lo que Tobías mira antes de llamar. */
-function FactCells({ facts }: { facts: PartnerFacts }) {
-  return (
-    <>
-      <TableCell className="max-w-48 truncate text-sm" title={facts.zone ?? undefined}>
-        {facts.zone ?? <span className="text-muted-foreground">—</span>}
-      </TableCell>
-      <TableCell className="text-sm tabular-nums">
-        {facts.createdAt ? shortDay(baDay(facts.createdAt)) : <span className="text-muted-foreground">—</span>}
-      </TableCell>
-      <TableCell className="text-sm tabular-nums">
-        {facts.lastContactOn ? (
-          shortDay(facts.lastContactOn)
-        ) : (
-          <span className="text-muted-foreground">sin contacto</span>
-        )}
-      </TableCell>
-    </>
-  )
-}
-
-const pct = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1 })
-const formatPct = (n: number) => `${pct.format(n)} %`
-
-// ── Piezas compartidas por las filas ─────────────────────────────────────────
-
-function ProviderName({ row }: { row: { partnerId: string; name: string; tier: string | null; status: string | null } }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <Link
-        to="/partners/$partnerId"
-        params={{ partnerId: row.partnerId }}
-        className="font-medium text-foreground hover:underline"
-      >
-        {row.name}
-      </Link>
-      {isFounding(row.tier) ? (
-        <Badge variant="outline" className="border-border text-muted-foreground">
-          Aliado · sin límite por ahora
-        </Badge>
-      ) : null}
-      {row.status && row.status !== 'active' ? (
-        <Badge variant="outline" className="text-muted-foreground">
-          {row.status === 'paused' ? 'pausado' : 'archivado'}
-        </Badge>
-      ) : null}
-    </div>
-  )
-}
-
-/** El plan efectivo, de sólo lectura: lo contrata el taller por Mercado Pago. */
-function PlanCell({ plan }: { plan: PlanInfo | null }) {
-  return plan ? <span>{plan.name}</span> : <span className="text-muted-foreground">sin plan</span>
-}
-
-function toneRowClass(tone: CapTone) {
-  return cn(
-    tone === 'over' && 'bg-status-red-bg hover:bg-status-red-bg',
-    tone === 'at' && 'bg-status-yellow-bg hover:bg-status-yellow-bg',
-  )
-}
-
-function toneTextClass(tone: CapTone) {
-  return cn(
-    tone === 'over' && 'font-semibold text-status-red',
-    tone === 'at' && 'font-semibold text-status-yellow',
-    (tone === 'founding' || tone === 'no_plan') && 'text-muted-foreground',
-  )
-}
-
-function ToneNote({ tone, used, cap }: { tone: CapTone; used: number; cap: number | null }) {
-  if (tone === 'over' && cap !== null) {
-    return <span className="ml-1 text-xs font-normal">(+{formatInt(used - cap)})</span>
-  }
-  if (tone === 'at') return <span className="ml-1 text-xs font-normal">(llegó)</span>
-  if (tone === 'founding' && cap !== null) return <span className="ml-1 text-xs font-normal">(referencia)</span>
-  return null
-}
-
-// ── Talleres de afuera ───────────────────────────────────────────────────────
-
-/**
- * Caso excepcional (decidido el 02/11/26): un taller que no está en el
- * directorio. No tiene plan, no suma a ningún tope y no se cobra. Va aparte
- * para que no se confunda con un proveedor, y para ver quién conviene dar de
- * alta.
- */
-function ExternalSection({ rows, history }: { rows: ReadonlyArray<ExternalUsageRow>; history: boolean }) {
+/** Talleres de afuera del directorio: no tienen ficha ni se les cobra. */
+function ExternalSection({ rows }: { rows: ReadonlyArray<ExternalUsageRow> }) {
+  if (rows.length === 0) return null
   return (
     <section className="mt-6">
       <h2 className="mb-1 font-heading text-sm font-semibold">Propuestas a talleres de afuera (excepción)</h2>
       <p className="mb-2 text-xs text-muted-foreground">
-        No están en el directorio: no suman a ningún tope ni plan. Si uno sigue recibiendo propuestas,
-        conviene registrarlo como proveedor.
+        No están en el directorio. Si uno sigue recibiendo propuestas, conviene registrarlo como proveedor.
       </p>
-      {rows.length === 0 ? (
-        <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-          Ninguna en este período.
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-border bg-card">
-          <Table className="min-w-[560px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Taller</TableHead>
-                <TableHead className="text-right">Enviadas</TableHead>
-                <TableHead className="text-right">Retiradas</TableHead>
-                <TableHead className="text-right">Elegidas</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                {history ? <TableHead>Primera</TableHead> : null}
-                {history ? <TableHead>Última</TableHead> : null}
+      <div className="overflow-x-auto rounded-lg border border-border bg-card">
+        <Table className="min-w-[480px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Taller</TableHead>
+              <TableHead className="text-right">Enviadas</TableHead>
+              <TableHead className="text-right">Retiradas</TableHead>
+              <TableHead className="text-right">Elegidas</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.name}>
+                <TableCell className="font-medium">{r.name}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatInt(r.sent)}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatInt(r.withdrawn)}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatInt(r.selected)}</TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.name}>
-                  <TableCell className="font-medium">{r.name}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatInt(r.sent)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatInt(r.withdrawn)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatInt(r.selected)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatInt(r.used)}</TableCell>
-                  {history ? (
-                    <TableCell className="text-sm tabular-nums">{r.firstAt ? shortDay(baDay(r.firstAt)) : '—'}</TableCell>
-                  ) : null}
-                  {history ? (
-                    <TableCell className="text-sm tabular-nums">{r.lastAt ? shortDay(baDay(r.lastAt)) : '—'}</TableCell>
-                  ) : null}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </section>
   )
 }
 
-function Legend({ plansResult }: { plansResult: PartnerPlansResult }) {
-  const catalog = plansResult.available ? plansResult.catalog.filter((p) => p.active) : []
-  return (
-    <div className="mt-4 space-y-1 text-xs text-muted-foreground">
-      {catalog.length > 0 ? (
-        <p>
-          Topes por mes calendario: {catalog.map((p) => `${p.name} ${capLabel(p)}`).join(' · ')}. El plan es el
-          efectivo de la suscripción de Mercado Pago (en prueba o activa); sin suscripción, pendiente o pausada
-          es Gratis. Se ve, no se cambia desde el panel.
-        </p>
-      ) : null}
-      <p>
-        Usadas = enviadas + retiradas: una propuesta retirada no devuelve el lugar. Elegidas = la propuesta que
-        la persona tiene elegida hoy en la app; si la eligió y después la des-eligió, no cuenta. El mes es el de
-        envío, en hora de Buenos Aires. En el histórico, el pico mensual es el máximo de usadas en un mes
-        calendario, y el color va sobre ese pico.
-      </p>
-      <p>
-        «Pedidos desde siempre» (sólo en el histórico) cuenta pedidos distintos en los que el proveedor cotizó,
-        también antes del 27/10, cuando lo que contestaba cada taller se cargaba en otra tabla. No entra al pico
-        ni al color: eso no se publicó en la app y no había tope. Sin pedidos de prueba.
-      </p>
-      <p>
-        Rojo: pasó el tope. Amarillo: llegó al tope. Aliado: sin límite por ahora, su tope es sólo referencia y
-        nunca se pinta. El tope no frena ningún envío: sólo se marca.
-      </p>
-    </div>
-  )
-}
-
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'red' | 'yellow' }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-card px-3 py-2">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd
-        className={cn(
-          'font-heading text-lg font-semibold tabular-nums',
-          tone === 'red' && 'text-status-red',
-          tone === 'yellow' && 'text-status-yellow',
-        )}
-      >
-        {formatInt(value)}
-      </dd>
+      <dd className="font-heading text-lg font-semibold tabular-nums">{value}</dd>
     </div>
   )
 }
 
 function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-border bg-card py-16 text-center text-sm text-muted-foreground">
+    <div className="mb-4 rounded-lg border border-border bg-card py-12 text-center text-sm text-muted-foreground">
       {children}
     </div>
   )

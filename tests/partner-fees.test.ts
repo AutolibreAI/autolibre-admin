@@ -39,16 +39,18 @@ function job(n: number, over: Partial<Facts> = {}): Facts {
     attribution: null,
     proposals: [],
     charge: null,
-    paidPlanAtJob: false,
     ...over,
   }
 }
 
 const attr = (partnerId: string) => ({ partnerId, partnerName: 'X', note: null, byName: 'Nico', at: '2026-11-25T00:00:00Z' })
 
+/** Sin el primer trabajo gratis, para los tests que miran el monto suelto. */
+const NO_FREE = { ...PARTNER_FEE_CONFIG, PRIMER_TRABAJO_GRATIS: false }
+
 const partners = new Map<string, Partner>([
-  [P1, { id: P1, name: 'Taller Uno', whatsapp: '1122223333', tier: null, planCode: 'free', planName: 'Gratis', sourcer: { memberId: 'm-tobi', name: 'Tobías', active: true } }],
-  [P2, { id: P2, name: 'Taller Dos', whatsapp: null, tier: null, planCode: 'plus', planName: 'Plus', sourcer: null }],
+  [P1, { id: P1, name: 'Taller Uno', whatsapp: '1122223333', tier: null, sourcer: { memberId: 'm-tobi', name: 'Tobías', active: true } }],
+  [P2, { id: P2, name: 'Taller Dos', whatsapp: null, tier: null, sourcer: null }],
 ])
 
 test('disputa: un lado hired y el otro not_hired', () => {
@@ -82,6 +84,7 @@ test('liquidable pendiente cobra el fee de la config; lo avisado conserva su mon
       }),
     ],
     partners,
+    NO_FREE,
   )
   assert.equal(a!.amount, PARTNER_FEE_CONFIG.FEE_POR_TRABAJO)
   assert.equal(a!.status, 'pendiente')
@@ -89,7 +92,7 @@ test('liquidable pendiente cobra el fee de la config; lo avisado conserva su mon
   assert.equal(b!.status, 'avisado')
 })
 
-test('fee del comercial: sólo el primer trabajo del taller, en plan gratis, con «Alta por»', () => {
+test('premio del comercial: el primer trabajo confirmado del taller con «Alta por», aunque sea gratis', () => {
   const jobs = F.classifyFeeJobs(
     [
       job(3, { attribution: attr(P1), jobDay: '2026-11-10' }),
@@ -100,25 +103,96 @@ test('fee del comercial: sólo el primer trabajo del taller, en plan gratis, con
   )
   const byN = new Map(jobs.map((j) => [j.publicNumber, j]))
   assert.equal(byN.get(1)!.commercialFee?.name, 'Tobías')
+  assert.equal(byN.get(1)!.exclusion, 'primer_trabajo')
   assert.equal(byN.get(3)!.commercialFee, null)
   assert.equal(byN.get(2)!.commercialFee, null) // sin «Alta por»
-  const paid = F.classifyFeeJobs([job(1, { attribution: attr(P1), paidPlanAtJob: true })], partners)
-  assert.equal(paid[0]!.commercialFee, null) // con plan pago el comercial cobró la primera cuota
 })
 
-test('las exclusiones de la config están apagadas por default y funcionan al prenderlas', () => {
+test('primer trabajo gratis encendido por default; fecha de inicio a definir', () => {
   const facts = [
-    job(1, { attribution: attr(P1), jobDay: '2026-10-01', paidPlanAtJob: true }),
-    job(2, { attribution: attr(P2), jobDay: '2026-11-02', services: ['Grúa'] }),
+    job(1, { attribution: attr(P1), jobDay: '2026-10-01' }),
+    job(2, { attribution: attr(P1), jobDay: '2026-11-02', services: ['Grúa'] }),
   ]
-  assert.deepEqual(F.classifyFeeJobs(facts, partners).map((j) => j.exclusion), [null, null])
-  const on = { ...PARTNER_FEE_CONFIG, FECHA_INICIO: '2026-10-15', PRIMER_CLIENTE_GRATIS: true, EXCLUIR_PLAN_PAGO: true }
-  const [a, b] = F.classifyFeeJobs(facts, partners, on)
-  assert.equal(a!.exclusion, 'antes_de_inicio')
+  const [a, b] = F.classifyFeeJobs(facts, partners)
+  assert.equal(a!.exclusion, 'primer_trabajo')
   assert.equal(a!.amount, 0)
-  assert.equal(b!.exclusion, null) // primer trabajo, pero en grúa: se cobra
-  const [c] = F.classifyFeeJobs([job(3, { attribution: attr(P2) })], partners, on)
-  assert.equal(c!.exclusion, 'primer_cliente')
+  assert.equal(b!.exclusion, null) // el segundo se cobra (ya no hay excepción de grúa)
+  assert.equal(b!.amount, PARTNER_FEE_CONFIG.FEE_POR_TRABAJO)
+  const [c] = F.classifyFeeJobs(facts, partners, { ...PARTNER_FEE_CONFIG, FECHA_INICIO: '2026-10-15' })
+  assert.equal(c!.exclusion, 'antes_de_inicio')
+})
+
+const pkg = (over: Partial<import('../src/lib/partner-packages.ts').PartnerPackage> = {}) => ({
+  id: 'k-1',
+  partnerId: P1,
+  jobs: 2,
+  validityDays: 90,
+  purchasedOn: '2026-11-01',
+  expiresOn: '2026-11-30',
+  pricePaid: 50000,
+  paymentMethod: 'transferencia',
+  note: null,
+  createdByName: null,
+  createdAt: 'x',
+  voidedAt: null,
+  voidReason: null,
+  voidedByName: null,
+  ...over,
+})
+
+test('paquetes: gratis primero, después el paquete que vence primero, después fee', () => {
+  const facts = [1, 2, 3, 4].map((n) => job(n, { attribution: attr(P1), jobDay: `2026-11-0${n}` }))
+  const data = { packages: [pkg({ id: 'k-late', expiresOn: '2026-12-31' }), pkg({ id: 'k-early' })], allocations: [] }
+  const jobs = F.classifyFeeJobs(facts, partners, PARTNER_FEE_CONFIG, data)
+  assert.deepEqual(
+    jobs.map((j) => [j.exclusion, j.packageAllocation?.packageId ?? null]),
+    [
+      ['primer_trabajo', null],
+      ['paquete', 'k-early'],
+      ['paquete', 'k-early'],
+      ['paquete', 'k-late'],
+    ],
+  )
+  assert.equal(jobs[1]!.amount, 0)
+  assert.equal(jobs[1]!.packageAllocation?.persisted, false)
+})
+
+test('paquetes: fuera de vigencia o anulado no cubre; saldo no se traslada', () => {
+  const facts = [
+    job(1, { attribution: attr(P1), jobDay: '2026-10-01' }),
+    job(2, { attribution: attr(P1), jobDay: '2026-12-15' }),
+  ]
+  const jobs = F.classifyFeeJobs(facts, partners, PARTNER_FEE_CONFIG, { packages: [pkg()], allocations: [] })
+  assert.equal(jobs[1]!.exclusion, null) // vencido el 30/11
+  const voided = F.classifyFeeJobs(
+    [job(1, { attribution: attr(P1), jobDay: '2026-11-01' }), job(2, { attribution: attr(P1), jobDay: '2026-11-02' })],
+    partners,
+    PARTNER_FEE_CONFIG,
+    { packages: [pkg({ voidedAt: 'x', voidReason: 'error' })], allocations: [] },
+  )
+  assert.equal(voided[1]!.exclusion, null)
+})
+
+test('paquetes: una guardada manda, una deshecha saca al trabajo de la regla', () => {
+  const facts = [1, 2, 3].map((n) => job(n, { attribution: attr(P1), jobDay: `2026-11-0${n}` }))
+  const alloc = (q: string, undone: boolean) => ({
+    id: `a-${q}`,
+    quoteRequestId: q,
+    packageId: 'k-1',
+    createdAt: 'x',
+    createdByName: null,
+    undoneAt: undone ? '2026-11-20T00:00:00Z' : null,
+    undoReason: undone ? 'se atribuyó mal' : null,
+    undoneByName: null,
+    reopenedAt: null,
+  })
+  const jobs = F.classifyFeeJobs(facts, partners, PARTNER_FEE_CONFIG, {
+    packages: [pkg()],
+    allocations: [alloc('q-2', true), alloc('q-3', false)],
+  })
+  assert.equal(jobs[1]!.exclusion, null)
+  assert.equal(jobs[1]!.allocationUndone?.undoReason, 'se atribuyó mal')
+  assert.equal(jobs[2]!.packageAllocation?.persisted, true)
 })
 
 test('agrupado, resumen y CSV cuadran', () => {
@@ -136,6 +210,7 @@ test('agrupado, resumen y CSV cuadran', () => {
       job(6, { userOutcome: 'not_hired' }),
     ],
     partners,
+    NO_FREE,
   )
   const [g] = F.groupOpenByPartner(jobs, partners)
   assert.equal(g!.pendingTotal, 20000)

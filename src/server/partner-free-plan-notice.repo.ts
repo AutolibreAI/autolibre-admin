@@ -1,7 +1,5 @@
 import '@tanstack/react-start/server-only'
 import { sql, sqlOne } from './db'
-import { listPartnerPlans } from './partner-plans.repo'
-import { FREE_PLAN_CODE, effectivePlans } from '~/lib/partner-plans'
 import {
   FREE_PLAN_NOTICE_UNAVAILABLE,
   type FreePlanNotice,
@@ -10,10 +8,8 @@ import {
 } from '~/lib/partner-free-plan-notice'
 
 /**
- * Aviso del cambio del plan gratis (migración 042). La lista cruza los
- * partners activos y pausados con su plan EFECTIVO (`effectivePlans`, la misma
- * regla que `/partners/propuestas`: no se reimplementa) y deja sólo los de plan
- * gratis. La escritura es `ops.set_partner_free_plan_notice`; nada de este
+ * Aviso del cambio de cobro (migración 042). Desde el 2026-11-26 no hay
+ * planes: la lista son TODOS los partners activos y pausados. La escritura es `ops.set_partner_free_plan_notice`; nada de este
  * archivo escribe `public`. → `.claude/rules/partner-free-plan-notice.md`
  */
 
@@ -72,14 +68,13 @@ interface PartnerRow {
 }
 
 /**
- * Los proveedores con plan gratis HOY, activos y pausados (los archivados no
- * reciben pedidos ni vuelven: no tiene sentido avisarles). El universo del
- * contador lo acota la pantalla (activos, más pausados si se piden).
+ * TODOS los proveedores activos y pausados (los archivados no reciben pedidos
+ * ni vuelven). Desde el 2026-11-26 no hay planes: el cambio de cobro es para
+ * todos, así que ya no se filtra por plan gratis. El universo del contador lo
+ * acota la pantalla (activos, más pausados si se piden).
  */
 export async function listFreePlanNotices(): Promise<FreePlanNoticeList> {
   if (!(await freePlanNoticeAvailable())) return { available: false, reason: 'migration' }
-  const plans = await listPartnerPlans()
-  if (!plans.available) return { available: false, reason: 'billing' }
 
   const partners = await sql<PartnerRow>(
     `select p.id, p.name, nullif(btrim(coalesce(p.coverage_zone, '')), '') as zone,
@@ -89,8 +84,7 @@ export async function listFreePlanNotices(): Promise<FreePlanNoticeList> {
       where p.status in ('active', 'paused')
       order by lower(p.name)`,
   )
-  const effective = effectivePlans(plans, partners.map((p) => p.id))
-  const free = partners.filter((p) => effective.get(p.id)?.code === FREE_PLAN_CODE)
+  const free = partners
   const notices = await noticesByPartner(null)
   return {
     available: true,

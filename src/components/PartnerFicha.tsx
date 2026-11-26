@@ -44,7 +44,7 @@ import {
   type PartnerTier,
   type SingleLinkKind,
 } from '~/lib/catalog'
-import { PartnerPlanCard } from '~/components/PartnerPlanCard'
+import { SubscriptionHistoryCard } from '~/components/SubscriptionHistoryCard'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '~/components/ui/dialog'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
@@ -52,7 +52,7 @@ import { Input } from '~/components/ui/input'
 import { Textarea } from '~/components/ui/textarea'
 import { cn } from '~/lib/utils'
 import { formatDate } from '~/lib/format'
-import type { PartnerPlansResult } from '~/lib/partner-plans'
+import type { SubscriptionHistoryEntry } from '~/lib/partner-plans'
 
 type Partner = PartnerServicesView['partner']
 
@@ -88,13 +88,19 @@ type Partner = PartnerServicesView['partner']
  * De mayor a menor consecuencia: Estado saca al taller de la app; Perfil y
  * Ubicación deciden si lo encuentran; Contacto y Links, si lo pueden alcanzar.
  */
-export function PartnerFicha({ partner, plans }: { partner: Partner; plans: PartnerPlansResult }) {
+export function PartnerFicha({
+  partner,
+  subscriptions,
+}: {
+  partner: Partner
+  subscriptions: Array<SubscriptionHistoryEntry> | null
+}) {
   return (
     <div className="mb-4 grid gap-4 lg:grid-cols-3">
       <StatusCard partner={partner} />
       <ProfileCard partner={partner} />
-      {/* El plan va al lado del perfil, de sólo lectura: lo contrata el taller por Mercado Pago. */}
-      <PartnerPlanCard partnerId={partner.id} tier={partner.tier} result={plans} />
+      {/* Ya no se venden suscripciones: queda el histórico, de sólo lectura. */}
+      <SubscriptionHistoryCard entries={subscriptions} />
       <LogoCard partner={partner} />
       <LocationCard partner={partner} />
       <ModalityCard partner={partner} />

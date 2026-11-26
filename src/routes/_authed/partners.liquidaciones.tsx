@@ -2,7 +2,15 @@ import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, createFileRoute, useRouter } from '@tanstack/react-router'
 import { Copy, Download, MessageCircle } from 'lucide-react'
-import { attributePartnerFeeFn, getPartnerFeesFn, setPartnerFeeStatusFn } from '~/fn/partner-fees'
+import {
+  attributePartnerFeeFn,
+  getPartnerFeesFn,
+  persistPackageAllocationsFn,
+  reopenPackageAllocationFn,
+  setPartnerFeeStatusFn,
+  undoPackageAllocationFn,
+} from '~/fn/partner-fees'
+import { readablePackageError } from '~/lib/partner-packages'
 import { PageHeader, SsrTag } from '~/components/PageHeader'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
@@ -55,6 +63,11 @@ import { toWhatsAppAR } from '~/lib/whatsapp-ar'
  * Los filtros podan en el CLIENTE: son decenas de trabajos y la regla del
  * primer trabajo de cada taller necesita verlos todos.
  *
+ * Desde el 2026-11-26 (sin suscripciones): el primer trabajo de cada
+ * proveedor es gratis y un paquete vigente cubre los siguientes (044). Un
+ * trabajo «Cubierto por paquete» que propone la regla se GUARDA con un click
+ * (o se rechaza con motivo); el que ya está guardado se deshace con motivo.
+ *
  * SSR completo: es una tabla y "hoy" lo calcula el servidor (Buenos Aires).
  */
 export const Route = createFileRoute('/_authed/partners/liquidaciones')({
@@ -104,7 +117,10 @@ function Loaded({
   setSearch: (patch: Partial<PartnerFeesSearch>) => void
 }) {
   const partners = useMemo(() => new Map(data.partners.map((p) => [p.id, p])), [data.partners])
-  const allJobs = useMemo(() => classifyFeeJobs(data.jobs, partners), [data.jobs, partners])
+  const allJobs = useMemo(
+    () => classifyFeeJobs(data.jobs, partners, PARTNER_FEE_CONFIG, data.packages),
+    [data.jobs, partners, data.packages],
+  )
   const jobs = allJobs.filter((j) => matchesFeeFilters(j, partners, search))
   const summary = feeSummary(jobs, data.today.slice(0, 7))
   const counts: Record<FeeView, number> = {
@@ -136,7 +152,7 @@ function Loaded({
 
       <Filters data={data} partners={partners} search={search} setSearch={setSearch} />
 
-      <ConfigNote />
+      <ConfigNote jobs={allJobs} packagesAvailable={data.packages !== null} />
 
       <nav aria-label="Vistas" className="mb-4 flex flex-wrap gap-1 border-b border-border">
         {FEE_VIEWS.map((v) => (
@@ -177,19 +193,27 @@ function Tile({ label, value, hint, warn }: { label: string; value: string; hint
   )
 }
 
-function ConfigNote() {
+function ConfigNote({ jobs, packagesAvailable }: { jobs: ReadonlyArray<FeeJob>; packagesAvailable: boolean }) {
   const c = PARTNER_FEE_CONFIG
-  const off: Array<string> = []
-  if (!c.EXCLUIR_PLAN_PAGO) off.push('no cobrar a quien tiene plan pago')
-  if (!c.PRIMER_CLIENTE_GRATIS) off.push('primer cliente gratis')
-  if (!c.FECHA_INICIO) off.push('fecha de inicio')
+  const liq = jobs.filter((j) => j.kind === 'liquidable' && j.status === 'pendiente')
+  const free = liq.filter((j) => j.exclusion === 'primer_trabajo').length
+  const covered = liq.filter((j) => j.exclusion === 'paquete').length
+  const fee = liq.filter((j) => j.exclusion === null).length
   return (
-    <p className="mb-4 text-xs text-muted-foreground">
-      Regla vigente: se cobra cada trabajo confirmado por AutoLibre (equipo o cliente dijo «fue»), sin duplicados, pruebas
-      ni cuentas internas.{' '}
-      {off.length ? `Preparado y apagado hasta confirmarlo: ${off.join(', ')}.` : ''}{' '}
-      {c.FECHA_INICIO ? `Se cobra desde el ${feeDay(c.FECHA_INICIO)}.` : ''}
-    </p>
+    <div className="mb-4 space-y-1 text-xs text-muted-foreground">
+      <p>
+        Regla vigente (sin suscripciones): por cada trabajo confirmado por AutoLibre (equipo o cliente dijo «fue»), sin
+        duplicados, pruebas ni cuentas internas — 1) el primero de cada proveedor es gratis
+        {c.PRIMER_TRABAJO_GRATIS ? '' : ' (APAGADO en la config)'}; 2) si tiene un paquete vigente a la fecha del
+        trabajo con saldo, lo cubre el que vence primero; 3) si no, {ars(c.FEE_POR_TRABAJO)}.{' '}
+        {c.FECHA_INICIO ? `Se cobra desde el ${feeDay(c.FECHA_INICIO)}.` : 'Fecha de inicio del cobro: a definir.'}
+      </p>
+      <p>
+        Pendientes hoy: {formatInt(free)} gratis (primer trabajo) · {formatInt(covered)} cubiertos por paquete ·{' '}
+        {formatInt(fee)} con fee.
+        {!packagesAvailable ? ' Falta la migración 044: ningún trabajo se cubre con paquete.' : ''}
+      </p>
+    </div>
   )
 }
 
@@ -207,11 +231,9 @@ function Filters({
   setSearch: (patch: Partial<PartnerFeesSearch>) => void
 }) {
   const list = [...partners.values()].sort((a, b) => a.name.localeCompare(b.name))
-  const plans = new Map<string, string>()
-  for (const p of list) if (p.planCode) plans.set(p.planCode, p.planName ?? p.planCode)
   const sourcers = new Map<string, string>()
   for (const p of list) if (p.sourcer) sourcers.set(p.sourcer.memberId, p.sourcer.name)
-  const active = search.feeFrom || search.feeTo || search.feePartner || search.feePlan || search.feeSourcer
+  const active = search.feeFrom || search.feeTo || search.feePartner || search.feeSourcer
   void data
 
   return (
@@ -242,17 +264,6 @@ function Filters({
           ))}
         </NativeSelect>
       </Field>
-      <Field label="Plan (hoy)">
-        <NativeSelect value={search.feePlan ?? ''} onChange={(v) => setSearch({ feePlan: v || undefined })}>
-          <option value="">Todos</option>
-          {[...plans].map(([code, name]) => (
-            <option key={code} value={code}>
-              {name}
-            </option>
-          ))}
-          <option value="none">Sin plan en la base</option>
-        </NativeSelect>
-      </Field>
       <Field label="Alta por">
         <NativeSelect value={search.feeSourcer ?? ''} onChange={(v) => setSearch({ feeSourcer: v || undefined })}>
           <option value="">Todos</option>
@@ -269,7 +280,7 @@ function Filters({
           size="sm"
           variant="ghost"
           className="h-9"
-          onClick={() => setSearch({ feeFrom: undefined, feeTo: undefined, feePartner: undefined, feePlan: undefined, feeSourcer: undefined })}
+          onClick={() => setSearch({ feeFrom: undefined, feeTo: undefined, feePartner: undefined, feeSourcer: undefined })}
         >
           Limpiar filtros
         </Button>
@@ -534,6 +545,125 @@ function DisputeView({ jobs, partners }: { jobs: ReadonlyArray<FeeJob>; partners
   )
 }
 
+// ── Paquetes: imputación de un trabajo ────────────────────────────────────
+
+function usePackageWrite() {
+  const router = useRouter()
+  const inFlight = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (fn: () => Promise<unknown>): Promise<boolean> => {
+    if (inFlight.current) return false
+    inFlight.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      return true
+    } catch (e) {
+      setError(readablePackageError(e instanceof Error ? e.message : String(e)))
+      return false
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+      await router.invalidate()
+    }
+  }
+  return { busy, error, run }
+}
+
+function PersistAllocationsButton({ ids }: { ids: Array<string> }) {
+  const { busy, error, run } = usePackageWrite()
+  return (
+    <span className="flex flex-col gap-1">
+      <Button
+        size="sm"
+        variant="outline"
+        className="shadow-none"
+        disabled={busy}
+        onClick={() => void run(() => persistPackageAllocationsFn({ data: { quoteRequestIds: ids } }))}
+        title="Guarda en el panel las imputaciones que propone la regla, para que no cambien solas."
+      >
+        Guardar imputaciones a paquete ({ids.length})
+      </Button>
+      <ErrorLine error={error} />
+    </span>
+  )
+}
+
+/** Cubierto por paquete (guardado o propuesto) o imputación deshecha. */
+function PackageAllocationLine({ job }: { job: FeeJob }) {
+  const [undoing, setUndoing] = useState(false)
+  const [reason, setReason] = useState('')
+  const { busy, error, run } = usePackageWrite()
+  const a = job.packageAllocation
+  return (
+    <span className="flex basis-full flex-col gap-1">
+      {a ? (
+        <span className="flex flex-wrap items-center gap-2">
+          <span className={a.persisted ? 'text-status-green' : 'text-status-yellow'}>
+            {a.persisted ? 'Imputado a un paquete (guardado)' : 'La regla lo imputa a un paquete (sin guardar)'}
+          </span>
+          <Link to="/partners/paquetes" search={{ packagePartner: job.partnerId ?? undefined }} className="text-brand hover:underline">
+            ver paquete
+          </Link>
+          {!a.persisted && (
+            <button
+              type="button"
+              disabled={busy}
+              className="text-brand hover:underline"
+              onClick={() => void run(() => persistPackageAllocationsFn({ data: { quoteRequestIds: [job.quoteRequestId] } }))}
+            >
+              Guardar
+            </button>
+          )}
+          <button type="button" className="text-brand hover:underline" onClick={() => setUndoing((v) => !v)}>
+            {a.persisted ? 'Deshacer imputación' : 'No imputar'}
+          </button>
+        </span>
+      ) : job.allocationUndone ? (
+        <span className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          Imputación a paquete deshecha
+          {job.allocationUndone.undoneByName ? ` por ${job.allocationUndone.undoneByName}` : ''}: «
+          {job.allocationUndone.undoReason}»
+          <button
+            type="button"
+            disabled={busy}
+            className="text-brand hover:underline"
+            onClick={() => void run(() => reopenPackageAllocationFn({ data: { quoteRequestId: job.quoteRequestId } }))}
+          >
+            Volver a imputar automático
+          </button>
+        </span>
+      ) : null}
+      {undoing && a && (
+        <span className="flex flex-wrap items-end gap-2">
+          <input
+            value={reason}
+            maxLength={1000}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Motivo (obligatorio): p. ej. «se atribuyó mal»"
+            className="h-8 min-w-72 rounded-md border border-input bg-surface px-2 text-sm"
+          />
+          <Button
+            size="sm"
+            className="h-8"
+            disabled={busy || !reason.trim()}
+            onClick={() =>
+              void run(() => undoPackageAllocationFn({ data: { quoteRequestId: job.quoteRequestId, reason } })).then(
+                (ok) => ok && setUndoing(false),
+              )
+            }
+          >
+            Confirmar
+          </Button>
+        </span>
+      )}
+      <ErrorLine error={error} />
+    </span>
+  )
+}
+
 // ── Vista: por cobrar ─────────────────────────────────────────────────────
 
 function ChargeView({
@@ -578,6 +708,7 @@ function PartnerGroupCard({
   const { busy, error, run } = useWrite()
 
   const sel = chargeable.filter((j) => selected.has(j.quoteRequestId))
+  const provisional = group.jobs.filter((j) => j.packageAllocation && !j.packageAllocation.persisted)
   const selPending = sel.filter((j) => j.status === 'pendiente')
   const selNotified = sel.filter((j) => j.status === 'avisado')
 
@@ -604,8 +735,7 @@ function PartnerGroupCard({
               {partner.name}
             </Link>{' '}
             <span className="text-xs font-normal text-muted-foreground">
-              · plan {partner.planName ?? 'sin dato'}
-              {partner.tier === 'founding' ? ' · Aliado' : ''} · Alta por {partner.sourcer?.name ?? 'sin asignar'}
+              {partner.tier === 'founding' ? '· Aliado ' : ''}· Alta por {partner.sourcer?.name ?? 'sin asignar'}
             </span>
           </span>
           <span className="tabular-nums">
@@ -646,10 +776,11 @@ function PartnerGroupCard({
                 <div className="flex flex-wrap gap-2 pl-6 text-xs">
                   {j.commercialFee && (
                     <Badge variant="outline" className="border-status-violet bg-status-violet-bg text-status-violet">
-                      Fee para {j.commercialFee.name}
+                      Premio para {j.commercialFee.name}
                     </Badge>
                   )}
                   {j.exclusion && <span className="text-muted-foreground">No se cobra: {FEE_EXCLUSION_LABELS[j.exclusion]}</span>}
+                  {(j.packageAllocation || j.allocationUndone) && <PackageAllocationLine job={j} />}
                   {j.partnerSource === 'attribution' && (
                     <span className="text-muted-foreground">
                       Atribuido a mano{j.attribution?.byName ? ` por ${j.attribution.byName}` : ''}
@@ -680,6 +811,7 @@ function PartnerGroupCard({
         </ul>
 
         <div className="flex flex-wrap gap-2">
+          {provisional.length > 0 && <PersistAllocationsButton ids={provisional.map((j) => j.quoteRequestId)} />}
           <Button size="sm" variant="outline" className="shadow-none" onClick={() => setShowMessage((v) => !v)}>
             <MessageCircle className="size-4" aria-hidden /> Mensaje de cobro
           </Button>

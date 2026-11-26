@@ -1,35 +1,28 @@
 /**
  * La regla de cobro a proveedores, en UN solo lugar. → `~/lib/partner-fees`,
- * `.claude/rules/partner-fees.md`.
+ * `~/lib/partner-packages`, `.claude/rules/partner-fees.md`.
  *
- * Decidido por Nicolás el 2026-11-25. Cambiar un número acá cambia lo que la
- * pantalla calcula como PENDIENTE; lo ya avisado o cobrado guarda su monto en
- * `ops.partner_fee_charge` y no se mueve.
+ * Modelo vigente (Nicolás, 2026-11-26): SIN suscripciones ni tope de
+ * respuestas. Se cobra por trabajo confirmado; el primero de cada proveedor es
+ * gratis; un proveedor puede pagar por adelantado un paquete de trabajos.
+ *
+ * Cambiar un número acá cambia lo que la pantalla calcula como PENDIENTE; lo ya
+ * avisado o cobrado guarda su monto en `ops.partner_fee_charge` y no se mueve.
  *
  * Sin imports: lo prueba `node --test` directo.
  */
 export const PARTNER_FEE_CONFIG = {
-  /** ARS por trabajo confirmado. Se cobra cada trabajo, cliente nuevo o no. */
+  /** ARS por trabajo confirmado. */
   FEE_POR_TRABAJO: 20000,
 
   /**
-   * No cobrar a proveedores con plan pago (suscripción `trialing`/`active`) a la
-   * fecha del trabajo. PREPARADO, APAGADO hasta que Nicolás lo confirme.
-   * Ojo: el backend no guarda el historial de estados de la suscripción; "a la
-   * fecha del trabajo" se aproxima con `authorized_at`/`ended_at`/`access_until`.
+   * El PRIMER trabajo confirmado de cada proveedor no se cobra. Encendido para
+   * todos desde el 2026-11-26 (antes estaba preparado y apagado, con excepción
+   * de grúa: ya no hay excepción).
    */
-  EXCLUIR_PLAN_PAGO: false,
+  PRIMER_TRABAJO_GRATIS: true,
 
-  /**
-   * El primer trabajo de cada taller no se cobra, salvo que haya sido un auto
-   * en grúa. PREPARADO, APAGADO hasta que Nicolás lo confirme.
-   * Ojo: "cliente nuevo" no se puede saber (no sabemos si la persona ya iba a
-   * ese taller), así que se aplica al PRIMER trabajo del taller; "grúa" se
-   * detecta por el servicio del pedido.
-   */
-  PRIMER_CLIENTE_GRATIS: false,
-
-  /** `YYYY-MM-DD` (día del trabajo, hora de Buenos Aires) desde el que se cobra. `null` = desde siempre. */
+  /** `YYYY-MM-DD` (día del trabajo, hora de Buenos Aires) desde el que se cobra. `null` = desde siempre. A definir. */
   FECHA_INICIO: null as string | null,
 
   /**
@@ -37,12 +30,36 @@ export const PARTNER_FEE_CONFIG = {
    * alias/CBU de AutoLibre no se escribe en el código; lo completa quien manda.
    */
   FORMA_DE_PAGO: '[completar: alias de Mercado Pago o CBU de AutoLibre]',
+
+  // ── Paquetes de trabajos (044) ────────────────────────────────────────────
+
+  /** Trabajos que trae un paquete, por defecto en el formulario de carga. */
+  PAQUETE_TRABAJOS: 5,
+  /** Vigencia en días desde la compra (vence = compra + vigencia), por defecto. */
+  PAQUETE_VIGENCIA_DIAS: 90,
+  /** Precio de referencia en ARS. `null` = a definir (el formulario lo pide a mano). */
+  PAQUETE_PRECIO_REFERENCIA: null as number | null,
+  /** Días antes del vencimiento en que un paquete figura «por vencer». */
+  PAQUETE_POR_VENCER_DIAS: 15,
+
+  // ── Premio a los comerciales (045) ────────────────────────────────────────
+
+  /**
+   * ARS por alta de un comercial, cuando ese taller tiene su primer trabajo
+   * confirmado. `null` = a definir: la pantalla muestra las altas pero no
+   * deja marcar pagado.
+   */
+  PREMIO_POR_ALTA: null as number | null,
 } as const
 
 export type PartnerFeeConfig = {
   FEE_POR_TRABAJO: number
-  EXCLUIR_PLAN_PAGO: boolean
-  PRIMER_CLIENTE_GRATIS: boolean
+  PRIMER_TRABAJO_GRATIS: boolean
   FECHA_INICIO: string | null
   FORMA_DE_PAGO: string
+  PAQUETE_TRABAJOS: number
+  PAQUETE_VIGENCIA_DIAS: number
+  PAQUETE_PRECIO_REFERENCIA: number | null
+  PAQUETE_POR_VENCER_DIAS: number
+  PREMIO_POR_ALTA: number | null
 }
