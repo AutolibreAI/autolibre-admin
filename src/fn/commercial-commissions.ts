@@ -1,64 +1,93 @@
 import { createServerFn } from '@tanstack/react-start'
+import { z } from 'zod'
 import {
   COMMISSIONS_UNAVAILABLE,
-  commissionRow,
-  setCommissionPaymentSchema,
-  type CommissionPartnerFacts,
+  awardRow,
+  setAwardSchema,
+  type AwardPartnerFacts,
 } from '~/lib/commercial-commissions'
+import { PARTNER_FEE_CONFIG } from '~/lib/partner-fees-config'
 import { sqlOne } from '~/server/db'
-import { listCommissionFacts, setCommissionPayment } from '~/server/commercial-commissions.repo'
+import { listAwardFacts, setCommercialAward, setTeamMemberEarnsAward } from '~/server/commercial-commissions.repo'
 import { adminMiddleware } from './middleware'
 
 /**
- * Comisiones de los comerciales — el borde RPC. `adminMiddleware`: es plata.
- * El monto y el comercial los pone el SERVIDOR re-calculando la regla, nunca
- * el payload.
+ * Liquidaciones a comerciales — el borde RPC. `adminMiddleware`: es plata.
+ * El monto, el comercial y la referencia los pone el SERVIDOR re-calculando la
+ * regla, nunca el payload.
  */
 
 export type CommissionsData =
   | { available: false }
-  | { available: true; facts: Array<CommissionPartnerFacts>; today: string }
+  | { available: true; facts: Array<AwardPartnerFacts>; today: string; premioPorAlta: number | null }
 
 export const getCommissionsFn = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
   .handler(async (): Promise<CommissionsData> => {
     const [facts, today] = await Promise.all([
-      listCommissionFacts(),
+      listAwardFacts(),
       sqlOne<{ d: string }>(`select to_char(now() at time zone 'America/Argentina/Buenos_Aires', 'YYYY-MM-DD') as d`),
     ])
     if (!facts) return { available: false }
-    return { available: true, facts, today: today?.d ?? '' }
+    return { available: true, facts, today: today?.d ?? '', premioPorAlta: PARTNER_FEE_CONFIG.PREMIO_POR_ALTA }
   })
 
-export const setCommissionPaymentFn = createServerFn({ method: 'POST' })
+export const setCommercialAwardFn = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
-  .validator(setCommissionPaymentSchema)
+  .validator(setAwardSchema)
   .handler(async ({ data, context }) => {
-    const facts = await listCommissionFacts()
+    const facts = await listAwardFacts()
     if (!facts) throw new Error(COMMISSIONS_UNAVAILABLE)
     const f = facts.find((x) => x.partnerId === data.partnerId)
-    if (!f) throw new Error(`COMMISSION_NOT_DUE: ${data.partnerId}`)
-    if (!data.paid) {
-      await setCommissionPayment(
-        { partnerId: f.partnerId, paid: false, memberId: null, kind: null, amount: null, reference: null, paidOn: null, note: data.note ?? null },
+    if (!f) throw new Error(`AWARD_NOT_DUE: ${data.partnerId}`)
+    const row = awardRow({ ...f, award: null }, PARTNER_FEE_CONFIG.PREMIO_POR_ALTA)
+
+    if (data.status === 'pendiente') {
+      await setCommercialAward(
+        { partnerId: f.partnerId, status: 'pendiente', memberId: null, amount: null, reference: null, paidOn: null, note: data.note ?? null, voidReason: null },
         context.user.id,
       )
       return { ok: true as const }
     }
-    const row = commissionRow({ ...f, payment: null })
-    if (!row.kind || row.amount <= 0) throw new Error(`COMMISSION_NOT_DUE: ${data.partnerId}`)
-    await setCommissionPayment(
+    if (data.status === 'pagado') {
+      if (row.status !== 'pendiente' || !f.member.earnsAward) throw new Error(`AWARD_NOT_DUE: ${data.partnerId}`)
+      if (row.amount === null) throw new Error('AWARD_AMOUNT_UNDEFINED')
+      await setCommercialAward(
+        {
+          partnerId: f.partnerId,
+          status: 'pagado',
+          memberId: f.member.id,
+          amount: row.amount,
+          reference: row.reference,
+          paidOn: data.paidOn,
+          note: data.note || null,
+          voidReason: null,
+        },
+        context.user.id,
+      )
+      return { ok: true as const }
+    }
+    // Anular se puede esperando o pendiente (p. ej. el alta no fue del comercial).
+    await setCommercialAward(
       {
         partnerId: f.partnerId,
-        paid: true,
+        status: 'anulado',
         memberId: f.member.id,
-        kind: row.kind,
         amount: row.amount,
         reference: row.reference,
-        paidOn: data.paidOn,
-        note: data.note || null,
+        paidOn: null,
+        note: null,
+        voidReason: data.voidReason,
       },
       context.user.id,
     )
+    return { ok: true as const }
+  })
+
+export const setTeamMemberEarnsAwardFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(z.object({ memberId: z.uuid(), value: z.boolean() }))
+  .handler(async ({ data, context }) => {
+    await setTeamMemberEarnsAward(data.memberId, data.value, context.user.id)
     return { ok: true as const }
   })

@@ -36,6 +36,8 @@ export interface TeamMember {
   userLabel: string | null
   /** Solicitudes asignadas hoy a esta persona. */
   applicationCount: number
+  /** «Cobra premio» por sus altas (045). `null` = la base no tiene la 045. */
+  earnsAward: boolean | null
 }
 
 /** Lo mínimo para mostrar a quien trajo una solicitud. */

@@ -2,6 +2,7 @@ import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
 import { UserPlus } from 'lucide-react'
 import { listTeamMembersFn, updateTeamMemberFn } from '~/fn/team'
+import { setTeamMemberEarnsAwardFn } from '~/fn/commercial-commissions'
 import {
   TEAM_ROLES,
   TEAM_ROLE_LABELS,
@@ -81,6 +82,9 @@ function TeamView() {
               <th className="px-3 py-2 font-medium">Usuario del panel</th>
               <th className="px-3 py-2 text-right font-medium">Solicitudes</th>
               <th className="px-3 py-2 font-medium">Estado</th>
+              <th className="px-3 py-2 font-medium" title="Premio por cada alta cuando el taller tiene su primer trabajo confirmado (Comercial › Liquidaciones). El equipo fundador no cobra.">
+                Cobra premio
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -117,6 +121,20 @@ function MemberRow({ member: m, users }: { member: TeamMember; users: ReadonlyAr
       await router.invalidate()
     } catch (cause) {
       setError(readableTeamError(cause instanceof Error ? cause.message : String(cause)))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function toggleAward(value: boolean) {
+    if (saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await setTeamMemberEarnsAwardFn({ data: { memberId: m.id, value } })
+      await router.invalidate()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setSaving(false)
     }
@@ -189,6 +207,24 @@ function MemberRow({ member: m, users }: { member: TeamMember; users: ReadonlyAr
             {m.active ? 'Desactivar' : 'Reactivar'}
           </Button>
         </div>
+      </td>
+      <td className="px-3 py-2">
+        {m.earnsAward === null ? (
+          <span className="text-xs text-muted-foreground" title="Falta la migración 045">
+            —
+          </span>
+        ) : (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={m.earnsAward}
+              disabled={saving}
+              onChange={() => void toggleAward(!m.earnsAward)}
+              aria-label={`Cobra premio: ${m.name}`}
+            />
+            {m.earnsAward ? 'Sí' : 'No'}
+          </label>
+        )}
       </td>
     </tr>
   )

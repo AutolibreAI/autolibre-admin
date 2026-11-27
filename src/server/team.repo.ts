@@ -53,13 +53,18 @@ interface MemberRow {
   user_id: string | null
   user_label: string | null
   application_count: number
+  earns_award: boolean | null
 }
 
 /** Activas primero, después por nombre. */
 export async function listTeamMembers(): Promise<Array<TeamMember>> {
   if (!(await teamAvailable())) return []
+  const earns = await sqlOne<{ ok: boolean }>(
+    `select exists (select 1 from information_schema.columns
+                     where table_schema = 'ops' and table_name = 'team_member' and column_name = 'earns_award') as ok`,
+  )
   const rows = await sql<MemberRow>(
-    `select m.id, m.name, m.role, m.active,
+    `select m.id, m.name, m.role, m.active, ${earns?.ok ? 'm.earns_award' : 'null::boolean'} as earns_award,
             to_char(m.active_since, 'YYYY-MM-DD') as active_since,
             to_char(m.inactive_since, 'YYYY-MM-DD') as inactive_since,
             m.user_id, ${USER_LABEL('u')} as user_label,
@@ -78,6 +83,7 @@ export async function listTeamMembers(): Promise<Array<TeamMember>> {
     userId: r.user_id,
     userLabel: r.user_label,
     applicationCount: Number(r.application_count),
+    earnsAward: r.earns_award,
   }))
 }
 

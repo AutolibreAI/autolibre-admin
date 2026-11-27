@@ -52,7 +52,7 @@ Para cada liquidable pendiente, en este orden (`classifyFeeJobs`):
 - Se carga desde la ficha del proveedor, desde Partners › Proveedores y desde Partners › Paquetes
   (con el CSV para la caja y los que vencen en 15 días o menos arriba).
 - Los SP validan representabilidad (existe, no anulado, saldo, trabajo libre); las fechas las decide
-  el panel antes de llamar. **Suite de la 044: NO escrita ni corrida.** No aplicada en ninguna base.
+  el panel antes de llamar. Suite `044_….test.sql`: 16/16 en PGlite. No aplicada en ninguna base.
 
 ## Suscripciones y tope: fuera del panel
 
@@ -105,18 +105,25 @@ La pantalla dice qué falta y no escribe nada (`PARTNER_FEES_UNAVAILABLE`).
 - Cuadre contra producción: ver el commit del bloque.
 - **No aplicada en ninguna base**: la aplica el `vercel-build` del próximo deploy de `main`.
 
-## Comisiones de los comerciales (`/comercial/liquidaciones`, migración 039)
+## Liquidaciones a comerciales (`/comercial/liquidaciones`, migración 045) — desde el 2026-11-26
 
-`~/lib/commercial-commissions`, `commercial-commissions.repo.ts`. Una comisión por proveedor con
-«Alta por»:
+`~/lib/commercial-commissions`, `commercial-commissions.repo.ts`. Un premio por alta:
 
-- **Fee del primer trabajo**: si su primer trabajo confirmado (el `commercialFee` de arriba) es
-  anterior a su primera suscripción paga, o no tiene suscripción → el fee completo, sin vencimiento.
-- **Primera cuota**: si no, y tiene una suscripción autorizada con precio → `price_amount` del plan de
-  su PRIMERA suscripción autorizada, desde `authorized_at`. No hay tabla de cobros del backend: es el
-  precio de lista, no lo que pagó.
-- `ops.commercial_commission_payment` guarda sólo que se pagó (sin fila = pendiente), con monto,
-  comercial y referencia CONGELADOS. El servidor recalcula la regla antes de escribir.
+- **Quién cobra**: sólo quien tiene «Cobra premio» (`ops.team_member.earns_award`, 045) en Comercial ›
+  Equipo. La 045 lo apaga para el rol `fundador` y para Nicolás Leunda, Ramiro Sarasola, Mateo
+  Ghidini, Matías Vidal y Matías García Guevara; una persona nueva arranca encendida. Las altas de
+  quien no cobra no aparecen.
+- **Cuándo**: el taller («Alta por», 035) tiene su PRIMER trabajo confirmado (`isFirstOfPartner` de
+  `classifyFeeJobs`, la misma regla que Liquidaciones), aunque ese trabajo sea gratis para el taller.
+- **Cuánto**: `PREMIO_POR_ALTA` en la config, vacío por defecto: los premios se ven y no se pueden
+  marcar pagados hasta definirlo (`AWARD_AMOUNT_UNDEFINED`).
+- **Estados**: esperando (sin primer trabajo) → pendiente → pagado / anulado (motivo obligatorio),
+  en `ops.commercial_award`; «Volver a pendiente» borra la fila. Monto, comercial y referencia los
+  pone el servidor re-calculando la regla; lo pagado queda congelado. CSV de pagados para la caja.
+- **Se sacó la «primera cuota»** (alta con plan pago) de la 039: ya no se venden suscripciones. Las
+  altas que tuvieron suscripción paga van a la sección «Con suscripción (histórico)», para resolverlas
+  a mano. `ops.commercial_commission_payment` (039) queda sin uso (0 filas en producción).
+- Suite `045_….test.sql` (cubre también la 043): 14/14 en PGlite. No aplicada en ninguna base.
 
 ## Pedidos al backend
 

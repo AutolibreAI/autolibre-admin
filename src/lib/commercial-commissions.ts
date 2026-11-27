@@ -1,152 +1,189 @@
 import { z } from 'zod'
 
 /**
- * Liquidaciones por comercial (`/comercial/liquidaciones`) — lo que AutoLibre
- * le debe a cada comercial por los proveedores que trajo («Alta por», 035).
- * → `.claude/rules/partner-fees.md`, sección «Comisiones de los comerciales».
+ * Liquidaciones a comerciales (`/comercial/liquidaciones`) — el premio que
+ * AutoLibre le paga a cada comercial por los proveedores que dio de alta
+ * («Alta por», 035). → `.claude/rules/partner-fees.md`, «Premios».
  *
- * Regla vigente (Nicolás, 2026-11-25), una comisión por proveedor:
+ * Regla vigente (Nicolás, 2026-11-26):
  *
- * - **Primera cuota**: el proveedor se dio de alta con suscripción paga → la
- *   primera cuota completa (el precio del plan de su PRIMERA suscripción
- *   autorizada), de inmediato.
- * - **Fee del primer trabajo**: se dio de alta en el plan gratis (pago por
- *   auto) → el fee completo de su primer trabajo confirmado
- *   (`commercialFee` de `~/lib/partner-fees`), sin vencimiento.
+ * - Cobra premio sólo quien tiene «Cobra premio» encendido en Comercial ›
+ *   Equipo (`ops.team_member.earns_award`, 045). El equipo fundador no.
+ *   Las altas de quien no cobra no aparecen.
+ * - El premio corresponde cuando el taller tiene su PRIMER trabajo confirmado
+ *   (`commercialFee` de `~/lib/partner-fees`, misma definición que
+ *   Liquidaciones; cuenta aunque ese trabajo sea gratis para el taller).
+ * - Monto por alta: `PREMIO_POR_ALTA` en `partner-fees-config.ts` (vacío = a
+ *   definir: se ve, no se puede marcar pagado).
+ * - Ya no se venden suscripciones: no hay más «primera cuota». Las altas que
+ *   tuvieron suscripción van a una sección aparte, «Con suscripción
+ *   (histórico)», para resolverlas a mano.
  *
- * Si el primer trabajo es anterior a la suscripción paga, el alta fue en el
- * plan gratis: manda el fee. Si se suscribió antes de su primer trabajo,
- * manda la cuota.
+ * Estados: esperando (sin primer trabajo) → pendiente → pagado / anulado
+ * (con motivo). Lo guardado vive en `ops.commercial_award` (045).
  *
  * Sin imports de `~/`: lo prueba `node --test`.
  */
 
-export const COMMISSION_KINDS = ['primera_cuota', 'fee_primer_trabajo'] as const
-export type CommissionKind = (typeof COMMISSION_KINDS)[number]
+export const AWARD_STATUSES = ['esperando', 'pendiente', 'pagado', 'anulado'] as const
+export type AwardStatus = (typeof AWARD_STATUSES)[number]
 
-export const COMMISSION_KIND_LABELS: Record<CommissionKind, string> = {
-  primera_cuota: 'Primera cuota',
-  fee_primer_trabajo: 'Fee del primer trabajo',
+export const AWARD_STATUS_LABELS: Record<AwardStatus, string> = {
+  esperando: 'Espera el primer trabajo',
+  pendiente: 'Pendiente',
+  pagado: 'Pagado',
+  anulado: 'Anulado',
 }
 
 export const COMMISSIONS_UNAVAILABLE = 'COMMISSIONS_UNAVAILABLE'
 
 /** Lo que trae el repo por proveedor con «Alta por». */
-export interface CommissionPartnerFacts {
+export interface AwardPartnerFacts {
   partnerId: string
   partnerName: string
-  member: { id: string; name: string; active: boolean }
-  /** Primera suscripción autorizada (plan pago). */
-  firstPaid: { planName: string; planCode: string; price: number; day: string } | null
-  /** El primer trabajo confirmado si le corresponde el fee al comercial (`commercialFee` de la 038). */
-  firstJob: { publicNumber: number; day: string; amount: number; feeStatus: string } | null
-  /** Si ya se le pagó al comercial. */
-  payment: {
+  /** `YYYY-MM-DD` del alta del partner (Buenos Aires). */
+  partnerCreatedOn: string
+  member: { id: string; name: string; active: boolean; earnsAward: boolean }
+  /** El primer trabajo confirmado del taller (la regla de Liquidaciones). */
+  firstJob: { publicNumber: number; day: string } | null
+  /** Tuvo alguna suscripción paga autorizada (régimen anterior). */
+  subscription: { planName: string; day: string } | null
+  /** Lo guardado en `ops.commercial_award`. */
+  award: {
     memberId: string
     memberName: string
-    kind: string
-    amount: number
+    status: 'pagado' | 'anulado'
+    amount: number | null
     reference: string | null
-    paidOn: string
+    paidOn: string | null
     note: string | null
-    paidByName: string | null
+    voidReason: string | null
+    updatedByName: string | null
   } | null
 }
 
-export interface CommissionRow extends CommissionPartnerFacts {
-  /** `null` = todavía no le corresponde nada (sin plan pago ni trabajo confirmado). */
-  kind: CommissionKind | null
-  amount: number
+export interface AwardRow extends AwardPartnerFacts {
+  status: AwardStatus
+  /** El congelado si se pagó; si no, el de la config (`null` = a definir). */
+  amount: number | null
   reference: string | null
-  /** Desde cuándo se le debe. */
-  dueDay: string | null
-  status: 'pagado' | 'pendiente' | 'sin_devengar'
+  /** Va a la sección «Con suscripción (histórico)». */
+  legacySubscription: boolean
 }
 
-export function commissionRow(f: CommissionPartnerFacts): CommissionRow {
-  let kind: CommissionKind | null = null
-  if (f.firstJob && (!f.firstPaid || f.firstJob.day <= f.firstPaid.day)) kind = 'fee_primer_trabajo'
-  else if (f.firstPaid && f.firstPaid.price > 0) kind = 'primera_cuota'
-
-  const computed =
-    kind === 'fee_primer_trabajo'
-      ? { amount: f.firstJob!.amount, reference: `AL-${f.firstJob!.publicNumber}`, dueDay: f.firstJob!.day }
-      : kind === 'primera_cuota'
-        ? { amount: f.firstPaid!.price, reference: f.firstPaid!.planName, dueDay: f.firstPaid!.day }
-        : { amount: 0, reference: null, dueDay: null }
-
-  // Lo pagado manda: monto y referencia congelados.
-  if (f.payment) {
+export function awardRow(f: AwardPartnerFacts, premioPorAlta: number | null): AwardRow {
+  const reference = f.firstJob ? `AL-${f.firstJob.publicNumber}` : null
+  const base = { ...f, legacySubscription: f.subscription !== null }
+  if (f.award) {
     return {
-      ...f,
-      kind: (COMMISSION_KINDS as ReadonlyArray<string>).includes(f.payment.kind) ? (f.payment.kind as CommissionKind) : kind,
-      amount: f.payment.amount,
-      reference: f.payment.reference,
-      dueDay: computed.dueDay,
-      status: 'pagado',
+      ...base,
+      status: f.award.status,
+      amount: f.award.status === 'pagado' ? f.award.amount : (f.award.amount ?? premioPorAlta),
+      reference: f.award.reference ?? reference,
     }
   }
-  return { ...f, kind, ...computed, status: kind ? 'pendiente' : 'sin_devengar' }
+  return { ...base, status: f.firstJob ? 'pendiente' : 'esperando', amount: premioPorAlta, reference }
 }
 
-export interface CommissionGroup {
+/** Sólo las altas de quien cobra premio (o que ya tienen un premio guardado). */
+export const awardsVisible = (r: AwardRow) => r.member.earnsAward || r.award !== null
+
+export interface AwardGroup {
   member: { id: string; name: string; active: boolean }
-  rows: Array<CommissionRow>
-  pendingTotal: number
+  rows: Array<AwardRow>
+  altas: number
+  waiting: number
   pendingCount: number
-  paidTotal: number
+  /** Suma de los pendientes con monto definido. */
+  pendingTotal: number
   paidCount: number
+  paidTotal: number
 }
 
 /** Por comercial; pendiente más grande primero. Agrupa por quién COBRÓ si ya se pagó. */
-export function groupCommissions(rows: ReadonlyArray<CommissionRow>): Array<CommissionGroup> {
-  const groups = new Map<string, CommissionGroup>()
+export function groupAwards(rows: ReadonlyArray<AwardRow>): Array<AwardGroup> {
+  const groups = new Map<string, AwardGroup>()
   for (const r of rows) {
     const member =
-      r.payment && r.payment.memberId !== r.member.id
-        ? { id: r.payment.memberId, name: r.payment.memberName, active: true }
-        : r.member
-    const g = groups.get(member.id) ?? { member, rows: [], pendingTotal: 0, pendingCount: 0, paidTotal: 0, paidCount: 0 }
+      r.award && r.award.memberId !== r.member.id
+        ? { id: r.award.memberId, name: r.award.memberName, active: true }
+        : { id: r.member.id, name: r.member.name, active: r.member.active }
+    const g =
+      groups.get(member.id) ??
+      ({ member, rows: [], altas: 0, waiting: 0, pendingCount: 0, pendingTotal: 0, paidCount: 0, paidTotal: 0 } as AwardGroup)
     g.rows.push(r)
+    g.altas += 1
+    if (r.status === 'esperando') g.waiting += 1
     if (r.status === 'pendiente') {
-      g.pendingTotal += r.amount
       g.pendingCount += 1
-    } else if (r.status === 'pagado') {
-      g.paidTotal += r.amount
+      g.pendingTotal += r.amount ?? 0
+    }
+    if (r.status === 'pagado') {
       g.paidCount += 1
+      g.paidTotal += r.amount ?? 0
     }
     groups.set(member.id, g)
   }
-  const order = { pendiente: 0, pagado: 1, sin_devengar: 2 } as const
+  const order: Record<AwardStatus, number> = { pendiente: 0, esperando: 1, pagado: 2, anulado: 3 }
   for (const g of groups.values())
     g.rows.sort((a, b) => order[a.status] - order[b.status] || a.partnerName.localeCompare(b.partnerName))
-  return [...groups.values()].sort((a, b) => b.pendingTotal - a.pendingTotal || a.member.name.localeCompare(b.member.name))
+  return [...groups.values()].sort(
+    (a, b) => b.pendingCount - a.pendingCount || b.pendingTotal - a.pendingTotal || a.member.name.localeCompare(b.member.name),
+  )
 }
 
-export const setCommissionPaymentSchema = z.discriminatedUnion('paid', [
+// ── CSV para la caja ─────────────────────────────────────────────────────────
+
+export const AWARD_CSV_HEADER = ['Fecha de pago', 'Comercial', 'Proveedor', 'Primer trabajo', 'Monto', 'Nota'] as const
+
+/** Una fila por premio pagado. */
+export function awardCsvRows(rows: ReadonlyArray<AwardRow>, dayLabel: (d: string) => string): Array<Array<string | number>> {
+  return rows
+    .filter((r) => r.status === 'pagado' && r.award?.paidOn)
+    .sort((a, b) => (a.award!.paidOn! < b.award!.paidOn! ? -1 : a.award!.paidOn! > b.award!.paidOn! ? 1 : 0))
+    .map((r) => [
+      dayLabel(r.award!.paidOn!),
+      r.award!.memberName,
+      r.partnerName,
+      r.reference ?? '',
+      r.amount ?? '',
+      r.award!.note ?? '',
+    ])
+}
+
+// ── Escrituras ───────────────────────────────────────────────────────────────
+
+const note = z.string().trim().max(1000, 'Hasta 1000 caracteres.').optional()
+
+export const setAwardSchema = z.discriminatedUnion('status', [
   z.object({
-    paid: z.literal(true),
-    partnerId: z.string().uuid(),
+    status: z.literal('pagado'),
+    partnerId: z.uuid(),
     paidOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida.'),
-    note: z.string().trim().max(1000).optional(),
+    note,
   }),
   z.object({
-    paid: z.literal(false),
-    partnerId: z.string().uuid(),
-    note: z.string().trim().max(1000).optional(),
+    status: z.literal('anulado'),
+    partnerId: z.uuid(),
+    voidReason: z.string().trim().min(1, 'El motivo es obligatorio.').max(1000, 'Hasta 1000 caracteres.'),
   }),
+  z.object({ status: z.literal('pendiente'), partnerId: z.uuid(), note }),
 ])
-export type SetCommissionPaymentInput = z.infer<typeof setCommissionPaymentSchema>
+export type SetAwardInput = z.infer<typeof setAwardSchema>
 
 export function readableCommissionError(raw: string): string {
   const code = raw.match(/[A-Z_]{6,}/)?.[0]
   switch (code) {
     case COMMISSIONS_UNAVAILABLE:
-      return 'Falta aplicar la migración 039 (comisiones) o la 035 («Alta por») en esta base.'
-    case 'COMMISSION_NOT_DUE':
-      return 'A ese proveedor todavía no le corresponde comisión (o cambió el «Alta por»). Recargá.'
-    case 'COMMISSION_PAID_ON_IN_FUTURE':
+      return 'Falta aplicar la migración 045 (premios a comerciales), la 038 o la 035 («Alta por») en esta base.'
+    case 'AWARD_NOT_DUE':
+      return 'A esa alta todavía no le corresponde premio (sin primer trabajo, o cambió el «Alta por»). Recargá.'
+    case 'AWARD_AMOUNT_UNDEFINED':
+      return 'El monto del premio por alta todavía no está definido (PREMIO_POR_ALTA en partner-fees-config).'
+    case 'AWARD_PAID_ON_IN_FUTURE':
       return 'La fecha del pago no puede ser futura.'
+    case 'AWARD_VOID_REASON_REQUIRED':
+      return 'El motivo es obligatorio para anular.'
     default:
       return `No se pudo guardar: ${raw}`
   }
