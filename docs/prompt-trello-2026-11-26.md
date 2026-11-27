@@ -3,7 +3,7 @@ Antes de tocar nada, mostrame el listado completo de cambios (tarjeta por tarjet
 crear) y esperá mi OK. Hablame en español rioplatense.
 
 Todo lo nuevo está en la rama `updates-front-26-11` del repo `autolibre-admin` (commits 19fc8d1,
-dcd4637 y 31dd530), sin mergear a `main`. Las migraciones de `ops` 043, 044 y 045 NO están aplicadas
+dcd4637, 31dd530 y 14dce18), sin mergear a `main`. Las migraciones de `ops` 043, 044 y 045 NO están aplicadas
 en ninguna base (las aplica el deploy de producción al mergear); las suites de 044 y 045 (+043)
 dieron verde en una réplica de prueba. No se probó en el navegador (pide login de Clerk).
 
@@ -31,6 +31,13 @@ como descripción.
    precio de referencia del paquete y la fecha de inicio del cobro, y el pedido al back
    (`docs/pedido-backend-plan-gratis-sin-tope.md`): sin tope para todos y dejar de vender
    suscripciones en la app y la web.»
+   Sumar un segundo comentario: «Precio y monto a mano (commit 14dce18). Cada paquete guarda el
+   precio al que se le vendió a ESE proveedor (el de referencia sólo precarga el formulario) y se
+   puede corregir después con «Corregir precio» (motivo opcional, queda en el historial). En
+   Liquidaciones, el fee de cada trabajo se cambia a mano para un descuento pactado o si pagó de
+   más: en un pendiente se aplica al avisar o cobrar (y en el mensaje de WhatsApp), en un avisado se
+   guarda en el momento, y en «Cobrados y anulados» se corrige el monto cobrado conservando fecha,
+   medio y nota. Todo monto distinto de ARS 20.000 se marca «a mano».»
 3. «Admin › Comercial: liquidaciones a comerciales» — Comentario: «Hecho (commit 31dd530). Premio
    por alta cuando el taller tiene su primer trabajo confirmado (aunque sea gratis). Sólo quien tiene
    «Cobra premio» en Comercial › Equipo (apagado para los fundadores). Estados pendiente → pagado /
