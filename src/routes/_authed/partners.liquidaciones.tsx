@@ -705,16 +705,37 @@ function PartnerGroupCard({
   const [action, setAction] = useState<Action>(null)
   const [showMessage, setShowMessage] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
+  // Montos puestos a mano para los PENDIENTES (descuento pactado, pagó de más…):
+  // viajan al avisar o cobrar. Los avisados se corrigen en el momento.
+  const [overrides, setOverrides] = useState<Record<string, number>>({})
   const { busy, error, run } = useWrite()
+  const withOverride = (j: FeeJob): FeeJob =>
+    overrides[j.quoteRequestId] !== undefined ? { ...j, amount: overrides[j.quoteRequestId]! } : j
+  const amountsFor = (jobs: ReadonlyArray<FeeJob>) => {
+    const out: Record<string, number> = {}
+    for (const j of jobs) if (overrides[j.quoteRequestId] !== undefined) out[j.quoteRequestId] = overrides[j.quoteRequestId]!
+    return Object.keys(out).length ? out : undefined
+  }
 
-  const sel = chargeable.filter((j) => selected.has(j.quoteRequestId))
+  const sel = chargeable.filter((j) => selected.has(j.quoteRequestId)).map(withOverride)
   const provisional = group.jobs.filter((j) => j.packageAllocation && !j.packageAllocation.persisted)
   const selPending = sel.filter((j) => j.status === 'pendiente')
   const selNotified = sel.filter((j) => j.status === 'avisado')
 
-  const move = (ids: Array<string>, status: FeeStatus, extra: { paidOn?: string; paymentMethod?: PaymentMethod; note?: string; voidReason?: string } = {}) =>
+  const move = (
+    ids: Array<string>,
+    status: FeeStatus,
+    extra: { paidOn?: string; paymentMethod?: PaymentMethod; note?: string; voidReason?: string; amounts?: Record<string, number> } = {},
+  ) =>
     run(() => setPartnerFeeStatusFn({ data: { quoteRequestIds: ids, partnerId: partner.id, status, ...extra } })).then((ok) => {
-      if (ok) setAction(null)
+      if (ok) {
+        setAction(null)
+        setOverrides((o) => {
+          const n = { ...o }
+          for (const id of ids) delete n[id]
+          return n
+        })
+      }
       return ok
     })
 
@@ -769,7 +790,31 @@ function PartnerGroupCard({
                     <span className="text-xs text-muted-foreground">propuesta {proposalAmountLabel(j.proposalAmount)}</span>
                   )}
                   <span className="ml-auto flex items-center gap-2">
-                    <span className="tabular-nums">{j.exclusion ? '—' : ars(j.amount)}</span>
+                    {j.exclusion ? (
+                      <span className="tabular-nums">—</span>
+                    ) : (
+                      <AmountEditor
+                        amount={overrides[j.quoteRequestId] ?? j.amount}
+                        manual={overrides[j.quoteRequestId] !== undefined || j.amount !== PARTNER_FEE_CONFIG.FEE_POR_TRABAJO}
+                        busy={busy}
+                        hint={j.status === 'avisado' ? 'Se guarda ahora (sigue avisado).' : 'Se aplica al avisar o cobrar.'}
+                        onSave={(n) =>
+                          j.status === 'avisado'
+                            ? move([j.quoteRequestId], 'avisado', { note: j.charge?.note ?? undefined, amounts: { [j.quoteRequestId]: n } })
+                            : setOverrides((o) => ({ ...o, [j.quoteRequestId]: n }))
+                        }
+                        onReset={
+                          overrides[j.quoteRequestId] !== undefined
+                            ? () =>
+                                setOverrides((o) => {
+                                  const n = { ...o }
+                                  delete n[j.quoteRequestId]
+                                  return n
+                                })
+                            : undefined
+                        }
+                      />
+                    )}
                     <StatusBadge status={j.status} />
                   </span>
                 </div>
@@ -815,7 +860,7 @@ function PartnerGroupCard({
           <Button size="sm" variant="outline" className="shadow-none" onClick={() => setShowMessage((v) => !v)}>
             <MessageCircle className="size-4" aria-hidden /> Mensaje de cobro
           </Button>
-          <Button size="sm" disabled={busy || !selPending.length} onClick={() => move(selPending.map((j) => j.quoteRequestId), 'avisado')}>
+          <Button size="sm" disabled={busy || !selPending.length} onClick={() => move(selPending.map((j) => j.quoteRequestId), 'avisado', { amounts: amountsFor(selPending) })}>
             Marcar avisado ({selPending.length})
           </Button>
           <Button size="sm" variant="outline" className="shadow-none" disabled={busy || !sel.length} onClick={() => setAction('cobrado')}>
@@ -838,7 +883,7 @@ function PartnerGroupCard({
             today={today}
             busy={busy}
             onCancel={() => setAction(null)}
-            onSubmit={(v) => move(sel.map((j) => j.quoteRequestId), 'cobrado', v)}
+            onSubmit={(v) => move(sel.map((j) => j.quoteRequestId), 'cobrado', { ...v, amounts: amountsFor(sel) })}
           />
         )}
         {action === 'anulado' && (
@@ -851,9 +896,89 @@ function PartnerGroupCard({
         )}
         <ErrorLine error={error} />
 
-        {showMessage && <ChargeMessage partner={partner} jobs={sel.length ? sel : chargeable} />}
+        {showMessage && (
+          <ChargeMessage
+            key={JSON.stringify(overrides)}
+            partner={partner}
+            jobs={sel.length ? sel : chargeable.map(withOverride)}
+          />
+        )}
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * El monto de un trabajo, editable a mano (descuento pactado, pagó de más…).
+ * Acepta «18.000», «18000» o «18.000,50».
+ */
+function AmountEditor({
+  amount,
+  manual,
+  busy,
+  hint,
+  onSave,
+  onReset,
+}: {
+  amount: number
+  manual: boolean
+  busy: boolean
+  hint: string
+  onSave: (n: number) => unknown
+  onReset?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState(String(amount).replace('.', ','))
+  const parsed = Number(text.trim().replace(/\./g, '').replace(',', '.'))
+  const ok = Number.isFinite(parsed) && parsed > 0 && parsed < 10_000_000_000
+  if (!open) {
+    return (
+      <span className="flex items-center gap-1">
+        <span className="tabular-nums">{ars(amount)}</span>
+        {manual ? <span className="text-xs text-status-violet">a mano</span> : null}
+        <button
+          type="button"
+          className="text-xs text-brand hover:underline"
+          onClick={() => {
+            setText(String(amount).replace('.', ','))
+            setOpen(true)
+          }}
+        >
+          cambiar
+        </button>
+        {onReset ? (
+          <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={onReset}>
+            deshacer
+          </button>
+        ) : null}
+      </span>
+    )
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-1" title={hint}>
+      <span className="text-xs text-muted-foreground">$</span>
+      <input
+        inputMode="decimal"
+        value={text}
+        autoFocus
+        onChange={(e) => setText(e.target.value)}
+        className="h-7 w-28 rounded-md border border-input bg-surface px-2 text-sm tabular-nums"
+      />
+      <Button
+        size="sm"
+        className="h-7"
+        disabled={busy || !ok}
+        onClick={() => {
+          void onSave(parsed)
+          setOpen(false)
+        }}
+      >
+        Listo
+      </Button>
+      <Button size="sm" variant="ghost" className="h-7" onClick={() => setOpen(false)}>
+        Cancelar
+      </Button>
+    </span>
   )
 }
 
@@ -1018,8 +1143,31 @@ function LedgerView({ jobs, partners }: { jobs: ReadonlyArray<FeeJob>; partners:
               <span className="text-muted-foreground">trabajo {feeDay(j.jobDay)}</span>
               <StatusBadge status={j.status} />
               {j.status === 'cobrado' && (
-                <span>
-                  {ars(j.amount)} · {c.paidOn ? feeDay(c.paidOn) : '—'} · {paymentMethodLabel(c.paymentMethod)}
+                <span className="flex flex-wrap items-center gap-1">
+                  <AmountEditor
+                    amount={j.amount}
+                    manual={j.amount !== PARTNER_FEE_CONFIG.FEE_POR_TRABAJO}
+                    busy={busy}
+                    hint="Corrige el monto cobrado (queda en el registro y en el CSV)."
+                    onSave={(n) =>
+                      run(() =>
+                        setPartnerFeeStatusFn({
+                          data: {
+                            quoteRequestIds: [j.quoteRequestId],
+                            partnerId: c.partnerId,
+                            status: 'cobrado',
+                            paidOn: c.paidOn ?? undefined,
+                            paymentMethod: (c.paymentMethod ?? undefined) as PaymentMethod | undefined,
+                            note: c.note ?? undefined,
+                            amounts: { [j.quoteRequestId]: n },
+                          },
+                        }),
+                      )
+                    }
+                  />
+                  <span>
+                    · {c.paidOn ? feeDay(c.paidOn) : '—'} · {paymentMethodLabel(c.paymentMethod)}
+                  </span>
                 </span>
               )}
               {j.status === 'anulado' && <span className="text-muted-foreground">Motivo: {c.voidReason}</span>}

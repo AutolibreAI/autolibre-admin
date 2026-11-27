@@ -17,6 +17,7 @@ import {
   listPackagesData,
   reopenJobPackageAllocation,
   setPartnerFeeStatus,
+  setPartnerPackagePrice,
   undoJobPackageAllocation,
   voidPartnerPackage,
 } from '~/server/partner-fees.repo'
@@ -26,6 +27,7 @@ import {
   createPackageSchema,
   persistAllocationsSchema,
   reopenAllocationSchema,
+  setPackagePriceSchema,
   undoAllocationSchema,
   voidPackageSchema,
   packageRows,
@@ -112,25 +114,33 @@ export const setPartnerFeeStatusFn = createServerFn({ method: 'POST' })
     const jobs = await classifiedNow()
     const byId = new Map(jobs.map((j) => [j.quoteRequestId, j]))
 
-    let amount: number | null = null
+    // Monto por trabajo: el que se puso a mano, si no el congelado o el de la
+    // config. Se agrupa por monto: el SP lleva uno por llamada.
+    const byAmount = new Map<number | null, Array<string>>()
     for (const id of data.quoteRequestIds) {
       const j = byId.get(id)
       // Volver a pendiente sólo pide que haya un cobro de ese proveedor.
       if (data.status === 'pendiente') {
         if (!j?.charge || j.charge.partnerId !== data.partnerId) throw new Error(`FEE_NOT_LIQUIDABLE: ${id}`)
+        byAmount.set(null, [...(byAmount.get(null) ?? []), id])
         continue
       }
       if (!j || j.kind !== 'liquidable' || j.partnerId !== data.partnerId) throw new Error(`FEE_NOT_LIQUIDABLE: ${id}`)
+      let amount: number | null = null
       if (data.status !== 'anulado') {
+        const manual = data.amounts?.[id]
+        // Un trabajo gratis o cubierto por paquete no se avisa ni se cobra
+        // (amount 0), salvo que ya tuviera un cobro guardado.
         if (j.amount <= 0) throw new Error(`FEE_NOT_LIQUIDABLE: ${id}`)
-        // Un lote lleva UN monto: si hay montos congelados distintos, que se
-        // muevan por separado.
-        if (amount !== null && amount !== j.amount) throw new Error(`FEE_MIXED_AMOUNTS: ${id}`)
-        amount = j.amount
+        amount = manual ?? j.amount
       }
+      byAmount.set(amount, [...(byAmount.get(amount) ?? []), id])
     }
 
-    const changed = await setPartnerFeeStatus({ ...data, amount }, context.user.id)
+    let changed = 0
+    for (const [amount, ids] of byAmount) {
+      changed += await setPartnerFeeStatus({ ...data, quoteRequestIds: ids, amount }, context.user.id)
+    }
     return { changed }
   })
 
@@ -296,4 +306,13 @@ export const getProvidersFactsFn = createServerFn({ method: 'GET' })
       byPartner,
       sourcers: [...uniq.values()].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     }
+  })
+
+/** Corregir el precio pagado de un paquete (cada uno se vende al precio que se pacte). */
+export const setPartnerPackagePriceFn = createServerFn({ method: 'POST' })
+  .middleware([adminMiddleware])
+  .validator(setPackagePriceSchema)
+  .handler(async ({ data, context }) => {
+    await setPartnerPackagePrice(data.packageId, data.pricePaid, data.reason || null, context.user.id)
+    return { ok: true as const }
   })

@@ -454,6 +454,12 @@ export const setPartnerFeeStatusSchema = z
     paymentMethod: z.enum(PAYMENT_METHODS).optional(),
     note,
     voidReason: note,
+    /**
+     * Monto a mano por trabajo (descuento pactado, pagó de más…), en ARS. Sólo
+     * para avisado/cobrado. Sin entrada, el servidor usa el congelado o el de
+     * la config.
+     */
+    amounts: z.record(z.string().uuid(), z.number().positive('El monto tiene que ser mayor a 0.').max(9_999_999_999)).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.status === 'cobrado' && !v.paidOn)
@@ -477,6 +483,8 @@ export function readablePartnerFeeError(raw: string): string {
       return 'Ese trabajo ya no es liquidable (cambió el resultado o el proveedor). Recargá.'
     case 'FEE_MIXED_AMOUNTS':
       return 'Los trabajos elegidos tienen montos distintos ya congelados: movelos por separado.'
+    case 'FEE_AMOUNT_REQUIRED':
+      return 'El monto tiene que ser mayor a 0. Para no cobrar un trabajo, anulalo.'
     case 'FEE_PAID_ON_IN_FUTURE':
       return 'La fecha del cobro no puede ser futura.'
     case 'FEE_PAID_ON_REQUIRED':

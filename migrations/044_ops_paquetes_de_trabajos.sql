@@ -315,3 +315,42 @@ BEGIN
   RETURN v_n;
 END;
 $$;
+
+-- ── Corregir el precio pagado de un paquete ────────────────────────────────
+--
+-- Cada paquete se vende al precio que se pacte con ese proveedor: el de
+-- referencia de la config es sólo el default del formulario. Corregirlo
+-- después (se cargó mal, hubo un ajuste) queda en el log con el antes y el
+-- motivo. Un anulado no se corrige.
+
+CREATE OR REPLACE FUNCTION ops.set_partner_job_package_price(
+  p_package_id uuid,
+  p_price_paid numeric,
+  p_reason     text,
+  p_actor_id   uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public, ops
+AS $$
+DECLARE
+  v_before jsonb;
+  v_after  jsonb;
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+BEGIN
+  PERFORM ops.assert_actor(p_actor_id);
+  SELECT to_jsonb(k) INTO v_before FROM ops.partner_job_package k WHERE k.id = p_package_id FOR UPDATE;
+  IF v_before IS NULL THEN RAISE EXCEPTION 'PACKAGE_NOT_FOUND: %', p_package_id; END IF;
+  IF v_before->>'voided_at' IS NOT NULL THEN RAISE EXCEPTION 'PACKAGE_VOIDED: %', p_package_id; END IF;
+  IF p_price_paid IS NULL OR p_price_paid < 0 THEN RAISE EXCEPTION 'INVALID_PACKAGE_PRICE'; END IF;
+  IF p_price_paid >= 10000000000 THEN RAISE EXCEPTION 'PACKAGE_PRICE_TOO_LARGE'; END IF;
+  IF v_reason IS NOT NULL AND length(v_reason) > 1000 THEN RAISE EXCEPTION 'PACKAGE_NOTE_TOO_LONG'; END IF;
+  IF (v_before->>'price_paid')::numeric = p_price_paid THEN RETURN v_before; END IF;
+
+  UPDATE ops.partner_job_package SET price_paid = p_price_paid WHERE id = p_package_id;
+  SELECT to_jsonb(k) INTO v_after FROM ops.partner_job_package k WHERE k.id = p_package_id;
+  PERFORM ops.log_action(p_actor_id, 'partner_job_package.set_price', 'public.partners',
+                         (v_before->>'partner_id')::uuid, v_before, v_after, v_reason);
+  RETURN v_after;
+END;
+$$;

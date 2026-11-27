@@ -52,6 +52,12 @@ BEGIN
   v_e := pg_temp.err(format('select ops.create_partner_job_package(%L, 5, 90, %L::date, 1, %L, null, %L)', f.p1, v_today, 'cheque', f.actor_id));
   PERFORM pg_temp.check('05 medio inválido', v_e LIKE 'INVALID_PAYMENT_METHOD%', v_e);
 
+  -- 06–07 precio pactado, corregible
+  v_pkg := ops.set_partner_job_package_price(v_id, 42000, 'descuento pactado', f.actor_id);
+  PERFORM pg_temp.check('06 corregir precio', (v_pkg->>'price_paid')::numeric = 42000, v_pkg::text);
+  v_e := pg_temp.err(format('select ops.set_partner_job_package_price(%L, -1, null, %L)', v_id, f.actor_id));
+  PERFORM pg_temp.check('07 precio negativo', v_e LIKE 'INVALID_PACKAGE_PRICE%', v_e);
+
   -- 10–14 imputación y saldo
   PERFORM ops.allocate_job_to_package(f.q1, v_id, f.actor_id);
   PERFORM ops.allocate_job_to_package(f.q1, v_id, f.actor_id); -- mismo: no-op
@@ -85,6 +91,8 @@ BEGIN
   PERFORM pg_temp.check('31 anulado, no borrado', v_pkg->>'voided_at' IS NOT NULL, v_pkg::text);
   v_e := pg_temp.err(format('select ops.allocate_job_to_package(%L, %L, %L)', f.q2, v_id, f.actor_id));
   PERFORM pg_temp.check('32 no se imputa a un anulado', v_e LIKE 'PACKAGE_VOIDED%', v_e);
+  v_e := pg_temp.err(format('select ops.set_partner_job_package_price(%L, 1, null, %L)', v_id, f.actor_id));
+  PERFORM pg_temp.check('34 un anulado no se corrige', v_e LIKE 'PACKAGE_VOIDED%', v_e);
   SELECT count(*) INTO v_n FROM ops.action_log WHERE action LIKE 'partner_job_package.%';
   PERFORM pg_temp.check('33 todo pasa por action_log', v_n >= 8, v_n::text);
 END $$;

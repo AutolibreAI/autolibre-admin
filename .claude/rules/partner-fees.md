@@ -52,7 +52,21 @@ Para cada liquidable pendiente, en este orden (`classifyFeeJobs`):
 - Se carga desde la ficha del proveedor, desde Partners › Proveedores y desde Partners › Paquetes
   (con el CSV para la caja y los que vencen en 15 días o menos arriba).
 - Los SP validan representabilidad (existe, no anulado, saldo, trabajo libre); las fechas las decide
-  el panel antes de llamar. Suite `044_….test.sql`: 16/16 en PGlite. No aplicada en ninguna base.
+  el panel antes de llamar. Suite `044_….test.sql`: 19/19 en PGlite. No aplicada en ninguna base.
+- **Precio pactado por venta**: cada paquete guarda el precio al que se le vendió a ESE proveedor
+  (`PAQUETE_PRECIO_REFERENCIA` es sólo el default del formulario). «Corregir precio»
+  (`ops.set_partner_job_package_price`) lo cambia después, con motivo opcional en el log; un anulado
+  no se corrige.
+
+## Monto a mano por trabajo — desde el 2026-11-26
+
+El fee de cada trabajo se puede poner a mano (descuento pactado, pagó de más): `amounts` en
+`setPartnerFeeStatusSchema` (por `quoteRequestId`, > 0). En «Por cobrar», «cambiar» en un pendiente
+lo guarda en la pantalla y viaja al avisar o cobrar (el mensaje de cobro lo usa); en un avisado se
+guarda en el momento (sigue avisado). En «Cobrados y anulados», «cambiar» corrige el monto cobrado
+conservando fecha, medio y nota. El servidor agrupa por monto y llama al SP una vez por grupo (el SP
+lleva un monto por llamada). Un trabajo gratis o cubierto por paquete no se cobra (para cobrarlo hay
+que deshacer la imputación). Se marca «a mano» todo monto distinto de `FEE_POR_TRABAJO`.
 
 ## Suscripciones y tope: fuera del panel
 
@@ -76,9 +90,9 @@ y la tabla se retira. **No escribir `selected_proposal_id` por SQL.**
 `pendiente → avisado → cobrado`, o `anulado` con motivo obligatorio; volver a pendiente borra la fila.
 
 - **El monto se congela** al avisar o cobrar. Cambiar `FEE_POR_TRABAJO` mueve sólo lo pendiente.
-- **El monto lo pone el servidor**: `setPartnerFeeStatusFn` re-clasifica con los datos de ahora y
-  exige que cada trabajo siga siendo liquidable y de ESE proveedor (`FEE_NOT_LIQUIDABLE`). Un lote
-  lleva un solo monto (`FEE_MIXED_AMOUNTS`).
+- **El monto lo pone el servidor** (o el que se puso a mano, ver abajo): `setPartnerFeeStatusFn`
+  re-clasifica con los datos de ahora y exige que cada trabajo siga siendo liquidable y de ESE
+  proveedor (`FEE_NOT_LIQUIDABLE`). Montos distintos en un lote se guardan en llamadas separadas.
 - Un trabajo avisado o cobrado no se reatribuye ni se cobra a otro proveedor sin volverlo antes a
   pendiente (`FEE_ALREADY_CHARGED`, en el SP).
 - Los SP no deciden qué es liquidable: validan representabilidad. Guardrails de siempre, con log por

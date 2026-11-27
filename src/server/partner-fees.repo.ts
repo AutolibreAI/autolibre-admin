@@ -436,3 +436,16 @@ export async function reopenJobPackageAllocation(quoteRequestId: string, actorId
     actorId,
   ])
 }
+
+export async function setPartnerPackagePrice(
+  packageId: string,
+  pricePaid: number,
+  reason: string | null,
+  actorId: string,
+): Promise<void> {
+  if (!(await partnerPackagesAvailable())) throw new Error(PARTNER_PACKAGES_UNAVAILABLE)
+  await sql(
+    `select ops.set_partner_job_package_price(p_package_id => $1, p_price_paid => $2, p_reason => $3, p_actor_id => $4)`,
+    [packageId, pricePaid, reason, actorId],
+  )
+}

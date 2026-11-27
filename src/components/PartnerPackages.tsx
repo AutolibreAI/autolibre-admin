@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import { createPartnerPackageFn, voidPartnerPackageFn } from '~/fn/partner-fees'
+import { createPartnerPackageFn, setPartnerPackagePriceFn, voidPartnerPackageFn } from '~/fn/partner-fees'
 import { Badge } from '~/components/ui/badge'
 import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
@@ -109,7 +109,7 @@ export function PackageComposer({
           <input type="date" max={today} value={purchasedOn} onChange={(e) => setPurchasedOn(e.target.value)} className={input} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Precio pagado (ARS)</span>
+          <span className="text-xs text-muted-foreground">Precio pactado (ARS)</span>
           <input
             inputMode="decimal"
             value={price}
@@ -135,7 +135,9 @@ export function PackageComposer({
       </div>
       <p className="text-xs text-muted-foreground">
         {expires ? `Vence el ${feeDay(expires)} (compra + vigencia, inclusive). ` : ''}
-        {c.PAQUETE_PRECIO_REFERENCIA === null ? 'Precio de referencia: a definir. ' : ''}
+        El precio es el que pactaste con este proveedor
+        {c.PAQUETE_PRECIO_REFERENCIA === null ? '' : ` (referencia: ${formatArs(c.PAQUETE_PRECIO_REFERENCIA)})`}; se
+        puede corregir después. 
         Cubre los trabajos confirmados de este proveedor entre la compra y el vencimiento, después del primero (gratis).
       </p>
       {!parsed.success && price.trim() !== '' ? (
@@ -162,6 +164,28 @@ export function PackageLine({ row, showPartner }: { row: PackageRow; showPartner
   const inFlight = useRef(false)
   const [voiding, setVoiding] = useState(false)
   const [reason, setReason] = useState('')
+  const [pricing, setPricing] = useState(false)
+  const [priceText, setPriceText] = useState('')
+  const [priceReason, setPriceReason] = useState('')
+  const price = Number(priceText.trim().replace(/\./g, '').replace(',', '.'))
+  const priceOk = priceText.trim() !== '' && Number.isFinite(price) && price >= 0
+
+  const savePrice = async () => {
+    if (inFlight.current || !priceOk) return
+    inFlight.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      await setPartnerPackagePriceFn({ data: { packageId: row.id, pricePaid: price, reason: priceReason || undefined } })
+      setPricing(false)
+      await router.invalidate()
+    } catch (e) {
+      setError(readablePackageError(e instanceof Error ? e.message : String(e)))
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+    }
+  }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -199,9 +223,22 @@ export function PackageLine({ row, showPartner }: { row: PackageRow; showPartner
         <span className="ml-auto flex items-center gap-2">
           <PackageStatusBadge status={row.status} text={packageStatusText(row)} />
           {row.status !== 'anulado' ? (
-            <Button size="sm" variant="ghost" className="h-7" onClick={() => setVoiding((v) => !v)}>
-              Anular
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7"
+                onClick={() => {
+                  setPriceText(String(row.pricePaid).replace('.', ','))
+                  setPricing((v) => !v)
+                }}
+              >
+                Corregir precio
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7" onClick={() => setVoiding((v) => !v)}>
+                Anular
+              </Button>
+            </>
           ) : null}
         </span>
       </div>
@@ -212,6 +249,31 @@ export function PackageLine({ row, showPartner }: { row: PackageRow; showPartner
         {row.note ? ` · «${row.note}»` : ''}
         {row.status === 'anulado' ? ` · anulado${row.voidedByName ? ` por ${row.voidedByName}` : ''}: «${row.voidReason}»` : ''}
       </div>
+      {pricing ? (
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Precio pagado (ARS)</span>
+            <input
+              inputMode="decimal"
+              value={priceText}
+              onChange={(e) => setPriceText(e.target.value)}
+              className="h-8 w-32 rounded-md border border-input bg-surface px-2 text-sm tabular-nums"
+            />
+          </label>
+          <label className="flex min-w-56 flex-1 flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Motivo (opcional): descuento pactado, se cargó mal…</span>
+            <input
+              value={priceReason}
+              maxLength={1000}
+              onChange={(e) => setPriceReason(e.target.value)}
+              className="h-8 rounded-md border border-input bg-surface px-2 text-sm"
+            />
+          </label>
+          <Button size="sm" className="h-8" disabled={busy || !priceOk} onClick={() => void savePrice()}>
+            Guardar precio
+          </Button>
+        </div>
+      ) : null}
       {voiding ? (
         <div className="flex flex-wrap items-end gap-2">
           <input

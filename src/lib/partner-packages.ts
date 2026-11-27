@@ -288,6 +288,12 @@ export const createPackageSchema = z.object({
 })
 export type CreatePackageInput = z.infer<typeof createPackageSchema>
 
+export const setPackagePriceSchema = z.object({
+  packageId: z.uuid(),
+  pricePaid: z.coerce.number().min(0, 'No puede ser negativo.').max(9_999_999_999, 'Demasiado grande.'),
+  reason: z.string().trim().max(1000, 'Hasta 1000 caracteres.').optional(),
+})
+
 export const voidPackageSchema = z.object({
   packageId: z.uuid(),
   reason: z.string().trim().min(1, 'El motivo es obligatorio.').max(1000, 'Hasta 1000 caracteres.'),
